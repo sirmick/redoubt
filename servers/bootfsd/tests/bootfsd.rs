@@ -34,11 +34,11 @@ fn launch(pid: usize, block: Vec<u8>, main: fn(&Startup) -> u32) -> std::thread:
 }
 
 /// The block `init` writes for `bootfsd`: the endpoint it receives on, its budget (the image's
-/// entry: 4 096 pages with a heap cap of 2 304), its bucket count, and the `public` list, each
+/// entry: 4 096 pages with a heap cap of 2 510), its bucket count, and the `public` list, each
 /// entry `LENGTH:NAME`.
 fn block(receive: Handle, public: &[(&str, usize)]) -> Vec<u8> {
     let mut builder = StartupBuilder::new(receive.index());
-    builder.handle("bootfsd", receive).budget_pages(4096).heap_pages(2304).arg("buckets=4");
+    builder.handle("bootfsd", receive).budget_pages(4096).heap_pages(2510).arg("buckets=4");
     let sized: Vec<String> = public.iter().map(|(name, len)| format!("{len}:{name}")).collect();
     for entry in &sized {
         builder.arg(entry);

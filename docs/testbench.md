@@ -1848,7 +1848,10 @@ twice its peak apart from its socket tables, 2 × 37 = 74 pages, and every socke
 charge, its buffers, its slot and its table entries, 108 × 4.25 = 459 pages, since a socket the
 heap could not hold would fail an allocation in a shared server ([ipd](servers/ipd.md#sizing)).
 Its peak of 61 pages holds those tables, sized at start for its 108 sockets, 24 pages beside the 37
-of everything else. `consoled`'s row is from the runs once it serves each
+of everything else. `bootfsd`'s cap is twice its boot peak, where the published entries live, and
+once beside it the most its buckets at their caps make the 9P skeleton hold on the heap, the
+records admission costs in the budget, 206 pages for six ([bootfsd](servers/bootfsd.md#serving-boot)):
+its peak of 1,141 pages on rv32 is the same alone and beside eight other cases. `consoled`'s row is from the runs once it serves each
 session's console as a multiplexed session. The two `walfsd` rows are one server's, from six runs of
 `walfsd-quota`, three on each width, which writes through it, as the image's memory cases do not
 (their boots peak at 16,040 bytes of stack and 9 heap pages); its heap cap is also above what a
@@ -1860,7 +1863,7 @@ additional client from the merged manifest.
 | --- | ---: | ---: | ---: | ---: |
 | `keyd` | 7,368 | 4 | 4 | 8 |
 | `consoled` | 10,384 | 6 | 11 | 22 |
-| `bootfsd` | 7,320 | 4 | 1,089 | 2,304 (the image publishes `beamlet`, `piped`, `consrelay` and `crossing`, and the cap follows each manifest's own published total) |
+| `bootfsd` | 7,416 | 4 | 1,141 | 2,510 (twice 1,152, the boot peak its base is set from, and what its six buckets let clients make the skeleton hold, 206, [bootfsd](servers/bootfsd.md#serving-boot); the image publishes `beamlet`, `piped`, `consrelay` and `crossing`, and the cap follows each manifest's own published total) |
 | `blkd` | 4,520 | 3 | 19 | 38 |
 | `netd` | 4,296 | 3 | 2 | 4 |
 | `ipd` | 13,768 | 7 | 61 | 533 (twice its peak apart from its socket tables, 74, and its buckets' 108 sockets' buffers, which the cap must hold, [ipd](servers/ipd.md#sizing)) |

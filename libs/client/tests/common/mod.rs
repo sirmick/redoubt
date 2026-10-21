@@ -40,8 +40,8 @@ impl Boot {
         let init = f.process(0, &[]);
         let founding = f.grant(server, receive, init, 1);
         let mut block = StartupBuilder::new(receive.index());
-        // The image's entry, as `init` writes it: 4 096 pages with a heap cap of 2 304.
-        block.handle("bootfsd", receive).budget_pages(4096).heap_pages(2304).arg("buckets=4");
+        // The image's entry, as `init` writes it: 4 096 pages with a heap cap of 2 510.
+        block.handle("bootfsd", receive).budget_pages(4096).heap_pages(2510).arg("buckets=4");
         for (name, data) in BOOT {
             block.arg(&format!("{}:{name}", data.len()));
         }

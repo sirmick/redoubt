@@ -63,10 +63,42 @@ endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
   173,568 bytes; the image needs
   five (`init`, the steward, and alice's `{}` and `{alice-secrets}` and bob's `{}` domains) and
   asks six, a case's extra client the sixth, 1,041,408 bytes or 255 pages, which with the heap cap's
-  2,304 (the published entries live there) and the stack's 128 round to 2,816 of the image's
-  4,096; the entry leaves 1,664 pages of budget, thirty-nine such buckets, so each more principal's
-  domain costs one more; a block with no `buckets=N` or no budget, or a count the budget cannot
-  hold, and `bootfsd` does not start ([init](init.md#the-boot-manifest)).
+  2,510 (below) and the stack's 128 round to 3,072 of the image's 4,096; the entry leaves 1,458
+  pages of budget, thirty-four such buckets, so each more principal's domain costs one more; a
+  block with no `buckets=N` or no budget, or a count the budget cannot hold, and `bootfsd` does not
+  start ([init](init.md#the-boot-manifest)).
+- **Heap** ([Heaps](init.md#the-boot-manifest)): the cap is twice the heap's peak at boot, where
+  the published entries live, and once beside it the most that admission lets clients make the
+  skeleton hold on the heap. Those records are the heap's, though their units are costed in the
+  budget ([serving](serving.md#admit)), so a peak measured at boot leaves them out, and a cap of
+  twice that peak alone holds them only while clients happen to hold few. At a bucket's caps the
+  skeleton holds, in rv64's sizes, which rv32's do not exceed:
+
+  | Held | Records | Bytes each | Bytes |
+  | --- | ---: | ---: | ---: |
+  | requests | 64 | 216 | 13,824 |
+  | completion calls, a session each | 2 | 784 | 1,568 |
+  | minted connections | 23 | 384 | 8,832 |
+  | fid holders, one a fid at most | 47 | 192 | 9,024 |
+  | the bucket and its shares, one a connection | 1 + 24 | 192, 200 | 4,992 |
+
+  38,240 bytes in tables that grow by doubling, so at most twice that, 76,480; each fid's own
+  blocks, its slot in its holder's list (256, the most per fid, a list of one in the 256-byte
+  class) and its steps (128), 18,048; a transfer's record (64) for each of its 2 pages, 128; and
+  the old block of a table while it moves, at most the requests', 13,824: 108,480 bytes a bucket.
+  Once: the read buffer, a 64 KiB reply's (`MSIZE`) and its move, 32 pages; a page of rounding for
+  each of the six tables and the moving block, 7; and a part page in each of the allocator's 8
+  small classes ([the native runtime](../userland/native.md#redoubt-rt-the-native-runtime)): 47
+  pages. For `buckets=N` that is ⌈108,480 × N / 4,096⌉ + 47 pages: the image's six 159 + 47 = 206,
+  and its cap 2 × 1,152 + 206 = 2,510, where 1,152 is the boot peak its base is set from. Its
+  measured peak is 1,141 pages on rv32 and 935 on rv64, the same alone and beside eight other
+  cases, so the cap rests on the derived bound, not on a measured load. Every manifest's `bootfsd`
+  entry adds the same to twice its boot peak: four buckets 153, five 180, ten 312. One allocation is
+  outside it: a send's T-messages are listed before admission takes their pages, and a transfer of
+  `MAX_LEND_PAGES` of 7-byte messages lists 9,362 of 40 bytes, 240 pages with its move, from any
+  session, though a send of more than 256 ends its session. The second copy of the boot peak holds
+  it, so nothing fails, but a case that sent it would fail the bench's check of twice the peak; none
+  does.
 
 ### Filling it
 
