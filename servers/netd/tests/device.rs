@@ -11,9 +11,10 @@
 //!    frame of a length `netd` does not carry is dropped and counted, and the queue goes on working.
 
 use redoubt_netd::fake::{FAKE_MAC, FakeNic, Policy, Scribble, exercise};
-use redoubt_netd::receiver::{Stopped, receive};
+use redoubt_netd::receiver::{Sink, Stopped, receive};
 use redoubt_netd::ring::{QUEUE_SIZE, SLOT_LEN};
 use redoubt_netd::rxq::{Frame, RxQueue};
+use redoubt_netd::transport::Transport;
 use redoubt_netd::txq::Sent;
 use redoubt_netd::virtio::{DeviceError, MAX_FRAME, NET_HDR_LEN, TX_TIMEOUT_US, bit, feature, status};
 use redoubt_netd::{Fault, Up, bring_up};
@@ -350,7 +351,7 @@ fn the_ring_counters_wrap() {
 fn receive_until_stopped(nic: &FakeNic, rx: &mut RxQueue) -> (Stopped, Vec<Vec<u8>>, u32) {
     let mut scratch: Frame = [0; SLOT_LEN];
     let (mut got, mut reports) = (Vec::new(), 0);
-    let stopped = receive(&nic.rx_view(), rx, &mut scratch, |f| got.push(f.to_vec()), || reports += 1);
+    let stopped = receive(&nic.rx_view(), rx, &mut scratch, |f: &[u8]| got.push(f.to_vec()), || reports += 1);
     (stopped, got, reports)
 }
 
@@ -399,18 +400,20 @@ fn a_frame_completed_before_the_first_wait_without_an_interrupt_is_delivered() {
 fn a_frame_completed_silently_during_a_drain_is_delivered_before_the_next_wait() {
     let nic = FakeNic::new();
     let Up { mut rx, .. } = up(&nic);
-    let (first, second) = (frame(64, 1), frame(66, 2));
+    let (first, middle, second) = (frame(64, 1), frame(65, 3), frame(66, 2));
     let mut scratch: Frame = [0; SLOT_LEN];
     let (mut got, mut reports) = (Vec::new(), 0);
-    // The first frame arrives with its interrupt; one wait answers, the next fails.
+    // Two frames arrive with their interrupt; one wait answers, the next fails. The first goes
+    // on once the second is found, while the drain goes on, and the silent one completes then.
     nic.arrive(&first);
+    nic.arrive(&middle);
     nic.fail_irq_after(1);
     let mut injected = false;
     let stopped = receive(
         &nic.rx_view(),
         &mut rx,
         &mut scratch,
-        |f| {
+        |f: &[u8]| {
             got.push(f.to_vec());
             if !injected {
                 injected = true;
@@ -421,8 +424,43 @@ fn a_frame_completed_silently_during_a_drain_is_delivered_before_the_next_wait()
         || reports += 1,
     );
     assert_eq!(stopped, Stopped::Interrupt(Fault::Kernel));
-    assert_eq!(got, vec![first, second], "the silent completion was left behind");
+    assert_eq!(got, vec![first, middle, second], "the silent completion was left behind");
     assert_eq!(reports, 1);
+    clean(&nic);
+}
+
+/// What a [`Sink`] was given: each frame, and whether the wait went with it.
+#[derive(Default)]
+struct Steps(Vec<(Vec<u8>, bool)>);
+
+impl<T: Transport> Sink<T> for &mut Steps {
+    fn forward(&mut self, frame: &[u8]) { self.0.push((frame.to_vec(), false)) }
+
+    fn forward_then_wait(&mut self, t: &T, frame: &[u8], timeout_us: u64) -> Result<(), Fault> {
+        self.0.push((frame.to_vec(), true));
+        t.wait_irq(timeout_us)
+    }
+}
+
+/// The last frame a drain finds goes on with the wait that follows it, one step (on the machine one
+/// call, so `ipd` runs where `netd` waits: kernel/ipc.md, "A server's turn"); the frames before it
+/// go on as the drain finds the next. A drain that finds nothing waits alone.
+#[test]
+fn the_last_frame_of_a_drain_goes_on_with_the_wait() {
+    let nic = FakeNic::new();
+    let Up { mut rx, .. } = up(&nic);
+    let sent: Vec<Vec<u8>> = (0..3).map(|n| frame(70 + n, n as u8)).collect();
+    for f in &sent {
+        nic.arrive(f);
+    }
+    // One wait is let through; the next drain finds nothing, and the wait after it fails.
+    nic.fail_irq_after(1);
+    let mut steps = Steps::default();
+    let mut scratch: Frame = [0; SLOT_LEN];
+    let stopped = receive(&nic.rx_view(), &mut rx, &mut scratch, &mut steps, || {});
+    assert_eq!(stopped, Stopped::Interrupt(Fault::Kernel));
+    let want: Vec<(Vec<u8>, bool)> = sent.into_iter().enumerate().map(|(i, f)| (f, i == 2)).collect();
+    assert_eq!(steps.0, want);
     clean(&nic);
 }
 

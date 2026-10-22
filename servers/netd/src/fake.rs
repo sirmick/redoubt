@@ -782,7 +782,7 @@ pub fn exercise(bytes: &mut impl FnMut() -> u8) -> FakeNic {
                 &rx_view,
                 &mut rx,
                 &mut scratch,
-                |f| {
+                |f: &[u8]| {
                     assert!(
                         (virtio::MIN_FRAME..=virtio::MAX_FRAME).contains(&f.len()),
                         "a bad frame delivered"

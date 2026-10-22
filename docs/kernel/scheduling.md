@@ -1962,9 +1962,10 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   holding the lock about 31 µs (p50; 50 µs at p90): at most three are ahead of a wake, about
   0.15 ms of a p99 of 4 to 12 ms. So it is not routed for latency. At rest it costs more than
   its claims: the network card's answer to one of `ipd`'s keep-alive probes is taken on 1.75 to
-  1.85 harts, and about 5 of the probe's 10 to 11 lock hand-offs follow it and the idle wake its
-  hart sends ([what a probe costs](../servers/ipd.md#the-net-tree)). Sending each source to one
-  idle hart (a busy hart's threshold above the sources' priority while one idles) is the remedy.
+  1.85 harts, and none of the probe's 4 lock hand-offs follows it in the instrumented windows
+  ([what a probe costs](../servers/ipd.md#the-net-tree)). Sending each
+  source to one idle hart (a busy hart's threshold above the sources' priority while one idles)
+  is the remedy for the claims that find nothing.
 - **Some cases keep one hart.** A case that does not keep its hart count runs at the count the
   bench is given (`--smp`); these keep theirs (`keep_smp`), each for one of four reasons: a proof
   that reads one hart's slices; where a checked build's audits fall; a count with no trace, which

@@ -81,7 +81,7 @@ max_lines = 1142
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 4182
+max_lines = 4305
 
 [[crate]]
 name = "libs/wire"
@@ -168,7 +168,7 @@ max_lines = 1729
 # in every default build.
 name = "servers/netd"
 paths = ["servers/netd/src"]
-max_lines = 1590
+max_lines = 1653
 
 [[crate]]
 # Includes the test-only feature keep-alive-probes (src/stack.rs, its constant), off in every

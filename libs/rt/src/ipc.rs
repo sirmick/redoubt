@@ -1,5 +1,6 @@
 //! IPC (kernel/ipc.md, "Messages"): pages to lend and transfer, `call`, `send`, `receive`,
-//! `reply` and `serve`.
+//! `reply`, `serve`, and a server's turns, a reply held for the receive that follows it
+//! ([`Held`]) and a send that receives ([`Endpoint::send_then_wait`]).
 //!
 //! Words are `u64` here, as in `redoubt-wire`, so one layout serves both widths; a word that does
 //! not fit the machine's word is `InvalidArgument` before anything is sent.
@@ -8,9 +9,9 @@ use core::num::NonZeroU64;
 use core::ops::{Deref, DerefMut};
 
 use redoubt_sys::{
-    BODY_SLOTS, Body, BodyOf, Call, Error, ExitNotice, Handle, Handles, Labels, LendDisposition, MemFlags,
-    MessageKind, MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles,
-    ReplyOutcome, Return, Slot, WORDS,
+    BODY_SLOTS, Body, BodyOf, Call, Error, ExitNotice, FIRST_SLOTS, FirstDone, FirstHalf, Handle, Handles,
+    Labels, LendDisposition, MemFlags, MessageKind, MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received,
+    ReceivedBody, ReceivedHandles, ReplyOutcome, Return, Slot, WORDS,
 };
 
 use crate::handle::{Budget, Endpoint, handle, nothing};
@@ -251,6 +252,120 @@ impl Endpoint {
     pub fn receive(&self, timeout: u64, max_transfer: usize) -> Result<Event, Error> {
         receive_raw(Some(self.handle()), timeout, max_transfer)
     }
+
+    /// [`Endpoint::receive`], making `held`'s reply first in the same call (`reply_receive`,
+    /// kernel/ipc.md, "A server's turn"): the caller it answers is this hart's pick when the
+    /// receive blocks. A turn the kernel refuses before anything is done (`a1` = 0) leaves the
+    /// call open, so its reply is made alone as [`crate::server::typed::finish`] makes one, and the
+    /// receive after it.
+    pub fn receive_after(
+        &self,
+        held: Option<Held>,
+        timeout: u64,
+        max_transfer: usize,
+    ) -> Result<Event, Error> {
+        let Some(Held { mut request, words }) = held else { return self.receive(timeout, max_transfer) };
+        // The reply alone, as `finish` makes it, then the receive alone: for a reply that cannot
+        // be a turn's, and a turn refused before anything is done.
+        let alone = |request: Request| {
+            let none = Handles::new();
+            let _ = crate::server::typed::finish(
+                request,
+                &crate::server::typed::Outcome { words, send: none, close: none },
+            );
+            self.receive(timeout, max_transfer)
+        };
+        let Ok(reply) = body(&words, &[]) else { return alone(request) };
+        let first = Record::<FIRST_SLOTS>(FirstHalf::Reply { msg_id: request.id, body: reply }.encode());
+        let mut rec = Record([0; RECEIVED_SLOTS]);
+        let lend = request.lend.take().map(|mapping| mapping.pages);
+        let call = Call::ReplyReceive {
+            from: Some(self.handle()),
+            timeout,
+            max_transfer,
+            received_rec: rec.addr_mut(),
+            first_rec: first.addr(),
+        };
+        let Ok(Return::Turn(turn)) = syscall(&call) else { panic!("invalid turn outcome") };
+        match turn.first {
+            FirstDone::Replied(_) => core::mem::forget(request),
+            FirstDone::Nothing => {
+                // Nothing was done: the call is still open, its lend the server's.
+                request.lend = lend.map(Mapping::adopt);
+                return alone(request);
+            }
+            FirstDone::Sent => panic!("invalid turn outcome: a reply's turn sent"),
+        }
+        turn.status?;
+        received(&rec)
+    }
+
+    /// Sends one-way as [`Endpoint::send`], then waits for `irq`'s interrupt as [`Irq::wait`], in
+    /// one call (`send_receive`, kernel/ipc.md, "A server's turn"): a receiver it readies runs on
+    /// this hart when the wait blocks, and one that takes the message later does not wake this
+    /// thread to do it. `Sent::Not` is the send's failure, with its pages back, and nothing
+    /// waited for; [`Sent::Taken`] the wait's result.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_then_wait(
+        &self,
+        words: &Words,
+        handles: &[Handle],
+        transfer: Option<Buffer>,
+        send_timeout: u64,
+        irq: &crate::handle::Irq,
+        timeout: u64,
+    ) -> Sent {
+        let body = match body(words, handles) {
+            Ok(body) => body,
+            Err(e) => return Sent::Not(e, transfer),
+        };
+        let pages = transfer.map(Buffer::into_pages);
+        let first = FirstHalf::Send { endpoint: self.handle(), timeout: send_timeout, transfer: pages, body };
+        let first = Record::<FIRST_SLOTS>(first.encode());
+        let mut rec = Record([0; RECEIVED_SLOTS]);
+        let call = Call::SendReceive {
+            from: Some(irq.handle()),
+            timeout,
+            max_transfer: 0,
+            received_rec: rec.addr_mut(),
+            first_rec: first.addr(),
+        };
+        let Ok(Return::Turn(turn)) = syscall(&call) else { panic!("invalid turn outcome") };
+        match turn.first {
+            // A failed send moved nothing (R4), so the pages are ours again.
+            FirstDone::Nothing => {
+                Sent::Not(turn.status.err().expect("nothing done is an error"), pages.map(Buffer::adopt))
+            }
+            FirstDone::Sent => Sent::Taken(turn.status.and_then(|()| match received(&rec)? {
+                // Only the IRQ handle named can fire in this `receive`.
+                Event::Interrupt => Ok(()),
+                _ => Err(Error::InvalidArgument),
+            })),
+            FirstDone::Replied(_) => panic!("invalid turn outcome: a send's turn replied"),
+        }
+    }
+}
+
+/// What [`Endpoint::send_then_wait`] did.
+#[derive(Debug)]
+#[must_use = "a send that failed gives its pages back"]
+pub enum Sent {
+    /// The send failed, nothing waited for: the error, and the pages, which are ours again.
+    Not(Error, Option<Buffer>),
+    /// A receiver took the message; then the wait's result.
+    Taken(Result<(), Error>),
+}
+
+/// A reply held for the receive that follows it, a server's turn (kernel/ipc.md, "A server's
+/// turn"): [`Endpoint::receive_after`] makes it with that receive as one call, so the caller it
+/// answers runs where this thread blocks. Only a reply carrying no handles is held, since nothing
+/// reads its outcome (servers/serving.md, "Replies and rollback"); [`crate::server::typed::finish_held`]
+/// makes one.
+#[derive(Debug)]
+#[must_use = "a held reply is made by the receive that takes it"]
+pub struct Held {
+    request: Request,
+    words: Words,
 }
 
 /// `mint` from the open call `id` of this thread, with the default stamp (for a server that
@@ -291,6 +406,11 @@ pub enum Event {
 pub(crate) fn receive_raw(from: Option<Handle>, timeout: u64, max_transfer: usize) -> Result<Event, Error> {
     let mut rec = Record([0; RECEIVED_SLOTS]);
     nothing(syscall(&Call::Receive { from, timeout, max_transfer, received_rec: rec.addr_mut() }))?;
+    received(&rec)
+}
+
+/// What a `receive` wrote to `rec`, adopted: a lend or transfer becomes this process's to use.
+fn received(rec: &Record<RECEIVED_SLOTS>) -> Result<Event, Error> {
     Ok(match Received::decode(&rec.0)? {
         Received::Message(m) => {
             let caller = Caller { badge: m.badge, account: m.account, labels: m.labels };
@@ -344,6 +464,10 @@ impl Request {
     pub fn mint(&self, badge: NonZeroU64, budget: Option<&Budget>) -> Result<Endpoint, Error> {
         mint(MintSource::Message(self.id), badge, budget)
     }
+
+    /// Holds a reply of `words` and no handles for this thread's next receive
+    /// ([`Endpoint::receive_after`]).
+    pub(crate) fn hold(self, words: Words) -> Held { Held { request: self, words } }
 
     /// Makes this the thread's current call (`serve`): the one a fault of this thread blames,
     /// until it replies to it or takes another. `receive` sets it already; an event-driven server

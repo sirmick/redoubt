@@ -24,11 +24,13 @@ use core::num::NonZeroU64;
 
 use redoubt_netd::kernel::{self, Device, Regs};
 use redoubt_netd::rxq::Frame;
+use redoubt_netd::transport::{Fault, Transport};
 use redoubt_netd::{BROKEN, FIRST_MINTED_BADGE, NetServer, RxPart, bring_up, parse_client, receiver};
 use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
 use redoubt_rt::ipc::{Buffer, Event};
 use redoubt_rt::server::close_delivery;
+use redoubt_rt::server::typed::Finished;
 use redoubt_rt::startup::Startup;
 use redoubt_rt::wire::proto::ipd::{Frame as FrameMsg, Message as IpdMessage};
 
@@ -74,21 +76,41 @@ fn receive_frames(part: RxPart) {
     let report = || {
         let _ = broken.send(&[BROKEN, 0, 0, 0], &[], None, FOREVER);
     };
-    let _ = receiver::receive(&device, &mut rx, &mut scratch, |frame| forward(&ipd, frame), report);
+    let _ = receiver::receive(&device, &mut rx, &mut scratch, ToIpd(&ipd), report);
 }
 
-/// Sends one frame to `ipd` as its `frame` message: a `send`, the frame in one transferred page.
-/// A frame `ipd` does not take within [`SEND_TIMEOUT_US`] is dropped.
-fn forward(ipd: &Endpoint, frame: &[u8]) {
+/// The receive thread's frames, to `ipd`: each as its `frame` message, a `send`, the frame in one
+/// transferred page. A frame `ipd` does not take within [`SEND_TIMEOUT_US`] is dropped.
+struct ToIpd<'a>(&'a Endpoint);
+
+impl receiver::Sink<Device> for ToIpd<'_> {
+    fn forward(&mut self, frame: &[u8]) {
+        let Some((words, page)) = frame_message(frame) else { return };
+        // On failure the page comes back with the error and is unmapped when dropped.
+        let _ = self.0.send(&words, &[], Some(page), SEND_TIMEOUT_US);
+    }
+
+    /// The send and the wait in one call (`send_receive`): `ipd`, readied by it, runs where this
+    /// thread waits, and an `ipd` that takes it later does not wake this thread to do it.
+    fn forward_then_wait(&mut self, t: &Device, frame: &[u8], timeout_us: u64) -> Result<(), Fault> {
+        match frame_message(frame) {
+            Some((words, page)) => t.send_then_wait(self.0, &words, page, SEND_TIMEOUT_US, timeout_us),
+            None => t.wait_irq(timeout_us),
+        }
+    }
+}
+
+/// `frame` as `ipd`'s `frame` message: its words, and the page that carries it. None when no page
+/// can be had, and the frame is dropped.
+fn frame_message(frame: &[u8]) -> Option<(redoubt_rt::ipc::Words, Buffer)> {
     // Test-only: the bench's poke faults this instance (servers/netd/src/restart_probe.rs).
     #[cfg(feature = "restart-probe")]
     if redoubt_netd::restart_probe::is_poke(frame) {
         kernel::fault();
     }
-    let Ok(mut page) = Buffer::new(1) else { return };
-    let Ok(words) = IpdMessage::Frame(FrameMsg { frame }).encode(&mut page) else { return };
-    // On failure the page comes back with the error and is unmapped when dropped.
-    let _ = ipd.send(&words, &[], Some(page), SEND_TIMEOUT_US);
+    let mut page = Buffer::new(1).ok()?;
+    let words = IpdMessage::Frame(FrameMsg { frame }).encode(&mut page).ok()?;
+    Some((words, page))
 }
 
 /// Serves until the endpoint is destroyed.
@@ -135,8 +157,10 @@ pub fn serve(startup: &Startup) -> u32 {
     let Ok(instance) = redoubt_rt::handle::random_u64().map(|r| r & u64::from(u32::MAX)) else {
         return NO_RESOURCES;
     };
+    // A reply with no handles is held for the next receive, and made with it as one call.
+    let mut held = None;
     let exit = loop {
-        match endpoint.receive(FOREVER, 0) {
+        match endpoint.receive_after(held.take(), FOREVER, 0) {
             #[cfg(feature = "restart-probe")]
             Ok(Event::Call(request)) if redoubt_netd::restart_probe::is_instance(&request.words) => {
                 let words = [instance, 0, 0, 0];
@@ -146,7 +170,9 @@ pub fn serve(startup: &Startup) -> u32 {
             }
             Ok(Event::Call(request)) => {
                 // A failed reply means the caller is gone; there is nobody to tell.
-                let _ = server.serve(request);
+                if let Finished::Held(reply) = server.serve(request) {
+                    held = Some(reply);
+                }
             }
             Ok(Event::Send(delivery)) => {
                 close_delivery(&delivery);

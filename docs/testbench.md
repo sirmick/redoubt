@@ -1636,15 +1636,15 @@ interrupts as answer frames, those within six traps of each other being one fram
 harts, and judges the window per frame (`[idle]`'s `min_frames`, `interrupts_per_frame`,
 `sbi_calls_per_frame`, `user_ecalls_per_frame`), the window's background included. So it is a
 per-frame guard, not the per-probe cost ([what a probe costs](servers/ipd.md#the-net-tree)), which
-is this window less `launch-idle`'s: about 23 to 26 interrupts and 29 to 33 SBI calls a probe on
-rv64. Its ceilings are idle ceilings, tighter than `launch-idle`'s twice the most: the most per
-frame measured alone, three rounds a width, plus the rounds' spread, rv32's, the wider, rounded
-up: 44 interrupts and 56 SBI calls a frame (the most 38.8 and 50.3, spreads 4.9 and 5.1), so a
-timer armed only when its target changes ([the hart timer](kernel/timer.md#the-hart-timer)) is
-guarded at rest; and user ecalls the most plus one, 33.1 a frame: 15 a probe plus about 17 a
-frame of background, which moves with real time. It is kept as the witness that a
-server's turn made one entry, or a device interrupt taken on one hart, must turn down for its own
-hops, and so that `launch-idle`'s ceilings are not the only reading of a frame's cost. It is a
+is this window less `launch-idle`'s: about 10 to 16 interrupts and 14 to 19 SBI calls a probe.
+Its ceilings are idle ceilings, tighter than `launch-idle`'s twice the most: the most per frame
+measured alone, three rounds a width, plus the rounds' spread, the wider width's, rounded up: 32
+interrupts and 40 SBI calls a frame (the most 25.9 and 34.5, spreads 5.6 and 5.0), so a timer armed
+only when its target changes ([the hart timer](kernel/timer.md#the-hart-timer)) is guarded at
+rest, and so is every hand-off across harts a probe's turns leave out; and 30.3 user ecalls (the
+most 30.1, spread 0.2: 11 a probe plus about 19 a frame of background, which moves with real
+time). A server's turn made two calls again adds two user ecalls a probe and fails that ceiling.
+It is kept so that `launch-idle`'s ceilings are not the only reading of a frame's cost. It is a
 host-clock case in the quiet class.
 
 ### Against Redoubt's sshd

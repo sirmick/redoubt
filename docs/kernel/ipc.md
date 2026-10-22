@@ -240,13 +240,17 @@ sequenceDiagram
 
 ### A server's turn
 
-<details><summary>Status: built · tested (7)</summary>
+<details><summary>Status: built · tested (11)</summary>
 
 - bench:turn-outcomes
 - bench:ipc-outcomes
 - host:redoubt-sys::turn_outcomes_round_trip_and_reject_impossible_combinations
 - host:redoubt-sys::first_half_layout
 - host:redoubt-model::ipc_completion_table_and_rollback
+- host:redoubt-rt::a_held_reply_is_made_with_the_next_receive
+- host:redoubt-rt::a_refused_turn_still_answers_the_call
+- host:redoubt-rt::a_send_taken_then_waits_for_the_interrupt
+- host:redoubt-rt::a_failed_send_gives_its_pages_back_and_waits_for_nothing
 - mutation:TurnReplyLost
 - mutation:TurnSendDispositionLies
 
@@ -306,7 +310,9 @@ goes on waiting.
 `redoubt_sys::decode_result` refuses any other combination: success with `a1` = 0; `a1` past 2
 on `reply_receive` or past 1 on `send_receive`; a mask bit unless `a1` = 2, or past the fourth
 handle; `a2` ≠ 0 on `send_receive`; and with `a1` ≠ 0, an error other than the receive half's
-three.
+three. The runtime's serving loops hold a handle-free reply for their next receive and make the
+two as one turn ([serving](../servers/serving.md#replies-and-rollback)), and `netd` forwards the
+last frame of a drain with its interrupt wait ([netd](../servers/netd.md)).
 
 ## Authority
 

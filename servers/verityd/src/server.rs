@@ -17,9 +17,9 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use redoubt_rt::abi::{Error, Handle, ReceivedHandles};
+use redoubt_rt::abi::{Handle, ReceivedHandles};
 use redoubt_rt::ipc::{Caller, Request, Words};
-use redoubt_rt::server::typed::{Answer, Outcome, Protocol, TypedServer, answer, finish};
+use redoubt_rt::server::typed::{Answer, Finished, Outcome, Protocol, TypedServer, answer, finish_held};
 use redoubt_rt::server::{Access, check};
 use redoubt_rt::wire::Error as WireError;
 /// The most sectors one `read` may ask for, as at `blkd` (servers/blkd.md, "Messages").
@@ -119,15 +119,16 @@ impl<R: Range> Verityd<R> {
     /// The line to say on the console, once.
     pub fn take_line(&mut self) -> Option<Said> { self.said.take() }
 
-    /// Answers one call and replies to it, handing `say` the line the answer leaves first: a
-    /// block's refusal is on the console before the client hears of it.
-    pub fn serve(&mut self, mut request: Request, say: impl FnOnce(Said)) -> Result<(), Error> {
+    /// Answers one call, handing `say` the line the answer leaves first: a block's refusal is on
+    /// the console before the client hears of it. It replies, or holds a reply with no handles for
+    /// the serving loop's next receive (`redoubt_rt::server::serve`).
+    pub fn serve(&mut self, mut request: Request, say: impl FnOnce(Said)) -> Finished {
         let (caller, words, handles) = (request.caller, request.words, request.handles);
         let outcome = answer_with(self, &caller, &words, &handles, request.lend());
         if let Some(line) = self.said.take() {
             say(line);
         }
-        finish(request, &outcome).map(|_| ())
+        finish_held(request, &outcome)
     }
 
     fn dispatch<'s>(
