@@ -105,8 +105,8 @@ after an entry since that arming: within one slice their number falls geometrica
 share of the slice its pauses take. At rest the thread blocks first. In `bench:launch-idle-probes`'
 60 s window on rv64, 290 re-arms follow the 962 system calls (those whose target changed: a wait's
 timeout, a new slice) and none the device and inter-hart interrupts taken in user mode, 568 in all
-(553 on rv32), and three rounds a width read 45.2 to 50.3 SBI calls an answer frame. Each
-arming is one `ecall` to the firmware, through the SBI TIME extension
+(553 on rv32), and three rounds a width read 45.2 to 50.3 SBI calls an answer frame, under the
+case's ceiling of 56. Each arming is one `ecall` to the firmware, through the SBI TIME extension
 (`kernel/src/arch/riscv/timer_sbi.rs`). With nothing due at all (the kernel idle, no timeouts, no
 deadlines) the timer is set to never.
 
