@@ -171,7 +171,8 @@ attack case passes only on a line the attacker cannot write:
   naming the caller by the badge the kernel delivers with the call, which the tester chose, and
   powers off. A case that names a `reporter` passes only if exactly one line starts
   `[server] done:` and it names the reporter's place; any other such line fails it, as does one
-  in a case with no `reporter`.
+  in a case with no `reporter`. Its `OFF` powers off without answering and prints nothing: it is
+  no verdict, but lets a program end a case whose last call must ready no thread (`ipc-turns`).
 - **`consoled`'s prefix, under `init`.** In a servers' case the real `init` holds the UART until
   `consoled` starts, and `consoled` starts every line written through a child's connection with
   that connection's `[con N]`, so only `init`'s lines are bare. The bench learns the reporter's N
@@ -290,7 +291,7 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 190 of the 361 run under `icount`: 183 so, six with a disk
+something in it waits on the host, and 191 of the 362 run under `icount`: 184 so, six with a disk
 at `icount = "shift=3"` (the rule for a disk is above), and `bench-qemu-early-exit`, whose `icount`
 is one QEMU refuses. What keeps the other 171 on the host's clock, a case counted under each it
 has: a disk or a userland disk (144 cases); host sockets, a `forward`, a `poke`, a peer or a dial
@@ -994,6 +995,14 @@ CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECK
 ```
 
 That run fails `bench-debug-assertions-off`, as it should; everything else must pass.
+
+At `system_reset` a checked kernel prints its counts, which a case may judge: whether every hart
+ran user code (`smp-boot`), the kernel lock's longest wait, each hart's device-interrupt claims,
+the halts skipped for an awaited interrupt, and its hand-offs across harts from the first message
+a receiver took (`hops since the first message: idle wakes N, lock halts N, shootdowns N`):
+reschedule interrupts sent to an idle hart, halts in the wait for the kernel lock and harts asked
+to shoot a space down. The boot's starts, before any message, are not counted. `ipc-turns` judges
+that line at 0 at two harts ([scheduling](kernel/scheduling.md#residual-risks)).
 
 `sched-trace` keeps the trace in a 64 MiB ring, and a trace that drops a record fails its case;
 `sched-trace-large` is the same ring at 256 MiB, and two cases build it. The containment gate

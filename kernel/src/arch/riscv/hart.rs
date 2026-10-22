@@ -171,6 +171,35 @@ pub fn report() {
     );
     super::irq::report();
     println!("halts: {} skipped, an awaited interrupt pending", super::SKIPPED.load(Ordering::Relaxed));
+    println!(
+        "hops since the first message: idle wakes {}, lock halts {}, shootdowns {}",
+        HOPS[0].load(Ordering::Relaxed),
+        HOPS[1].load(Ordering::Relaxed),
+        HOPS[2].load(Ordering::Relaxed)
+    );
+}
+
+/// A checked build's count of the kernel's hand-offs across harts from the first message a
+/// receiver took ([`ipc_began`]) to `system_reset` ([`report`]): reschedule interrupts sent to an
+/// idle hart ([`wake_idle`]), halts in the wait for the kernel lock ([`halt_for_lock`]) and harts
+/// asked to shoot a space down ([`shootdown`]). The boot's starts, before any message, are not
+/// counted: `ipc-turns` judges a server's turns by it (kernel/scheduling.md, "A server's turn
+/// crosses harts").
+#[cfg(debug_assertions)]
+static HOPS: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];
+#[cfg(debug_assertions)]
+static HOPS_COUNTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// A receiver took a message: [`HOPS`] counts from now.
+#[cfg(debug_assertions)]
+pub fn ipc_began() { HOPS_COUNTED.store(true, Ordering::Relaxed) }
+
+/// One more hand-off of kind `i` in [`HOPS`], once a message has been taken.
+#[cfg(debug_assertions)]
+fn hop(i: usize) {
+    if HOPS_COUNTED.load(Ordering::Relaxed) {
+        HOPS[i].fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// The thread this hart runs, 0 for none.
@@ -215,6 +244,8 @@ pub fn wake_idle() {
         if i != me && block.idle.swap(0, Ordering::Relaxed) != 0 {
             let id = block.id.load(Ordering::Relaxed);
             let _ = sbi_rt::send_ipi(sbi_rt::HartMask::from_mask_base(1, id));
+            #[cfg(debug_assertions)]
+            hop(0);
             return;
         }
     }
@@ -242,6 +273,8 @@ pub fn wake_halted(mask: usize) {
 /// turn, and a reschedule interrupt goes only to a hart marked idle, which picks once it holds the
 /// lock.
 pub fn halt_for_lock() {
+    #[cfg(debug_assertions)]
+    hop(1);
     super::halt_for_ipi();
     ack_ipi();
 }
@@ -292,6 +325,8 @@ pub fn shootdown(pid: Pid, shot: Shot) -> usize {
         {
             block.shoot.store(word, Ordering::Release);
             let _ = sbi_rt::send_ipi(sbi_rt::HartMask::from_mask_base(1, block.id.load(Ordering::Relaxed)));
+            #[cfg(debug_assertions)]
+            hop(2);
             asked |= 1 << i;
         }
     }

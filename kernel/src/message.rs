@@ -1716,6 +1716,9 @@ fn deliver(
         Err(error) => fail_wait(ss, mm, spid, stid, error),
         Ok(received) => {
             answer_record(ss, mm, rpid, rtid, &Received::Message(received).encode(), Ok(Return::Nothing));
+            // A checked build counts the hand-offs across harts from the first message taken.
+            #[cfg(debug_assertions)]
+            crate::arch::hart::ipc_began();
             match kind {
                 // A `send` is done with, and a turn's send goes on to its receive half; a `call`
                 // now waits for its reply, off the queue.

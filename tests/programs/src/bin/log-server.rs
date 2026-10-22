@@ -1,7 +1,7 @@
 //! The trusted tester in `init`'s place (docs/testbench.md, "Starting a case's programs" and
 //! rule F): the bundle's second entry, the one program the loader starts. It owns the console,
 //! echoes UART input, serves the log endpoint (`test_programs::logsrv`) and answers `DONE` (the
-//! attack checker: it names the reporter and powers off).
+//! attack checker: it names the reporter and powers off), and powers off unanswered on `OFF`.
 //!
 //! It starts the case's other programs itself. The builder lists them in the bundle's
 //! `programs` entry, one line each in the case's order: the program's entry name, then the
@@ -263,6 +263,11 @@ pub extern "C" fn _start(bundle: usize, len: usize) -> ! {
                 // another.
                 logsrv::say(Line::Done(logsrv::Sender(m.badge)));
                 rd::reply(m.msg_id.get(), &rd::body([0; rd::WORDS])).ok();
+                rd::system_reset(rd::RESET, ResetKind::PowerOff).ok();
+                test_programs::park()
+            }
+            // No answer: the caller stays blocked, and the machine stops.
+            op::OFF => {
                 rd::system_reset(rd::RESET, ResetKind::PowerOff).ok();
                 test_programs::park()
             }

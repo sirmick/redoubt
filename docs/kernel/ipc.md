@@ -240,9 +240,10 @@ sequenceDiagram
 
 ### A server's turn
 
-<details><summary>Status: built · tested (11)</summary>
+<details><summary>Status: built · tested (12)</summary>
 
 - bench:turn-outcomes
+- bench:ipc-turns
 - bench:ipc-outcomes
 - host:redoubt-sys::turn_outcomes_round_trip_and_reject_impossible_combinations
 - host:redoubt-sys::first_half_layout
