@@ -56,11 +56,14 @@ send = "{:draw, (up.(\"up-draw\"); screen(\"screen-stage\", [\"draw\"]))}\n"
 after = 'screen-stage-ready'
 send = "x"
 
-# Ctrl+\ after the start of a Ctrl+Up the key decoder is still waiting on: the A after it is no
-# one's when it comes in the same read. The console may hand the driver these bytes in two reads,
-# and a read arriving after the interrupt is new input, for the next line: the screen has ended.
-# The A is then this case's own leftover, so the line it types next begins with Ctrl+U (edlin's
-# backward-kill-line), clearing what reached the line before it.
+# Ctrl+\ after the start of a Ctrl+Up the key decoder is still waiting on. An interrupt discards
+# the input queued when it is taken, the rest of its read among it (docs/userland/shell.md,
+# "Interrupting and killing jobs"), so the A after it is no one's when it comes in the same read.
+# The console may hand the driver these bytes in two reads, and what it delivers after the
+# interrupt is new input, for the next line: the screen has ended. That is the rule's residual,
+# until bracketed paste makes a paste one event, and the A is then this case's own leftover, so
+# the line it types next begins with Ctrl+U (edlin's backward-kill-line), clearing what reached
+# the line before it.
 [[input]]
 after = 'key:x'
 send = "\u001b[1;5\u001cA"
@@ -74,9 +77,9 @@ after = '\{:after_draw, (true|false)'
 send = "{:flood, (up.(\"up-flood\"); screen(\"screen-stage\", [\"flood\"]))}\n"
 
 # A paste holding the session's key, to a program that reads nothing and floods the session with
-# frames: the host is busy decoding them, and the driver still ends it. The rest of the paste, when
-# it comes in a read after the interrupt's, is new input for the next line, as above, and the
-# case's next line clears it with Ctrl+U.
+# frames: the host is busy decoding them, and the driver still ends it. The rest of the paste goes
+# with the interrupt when it comes in the same read; when it comes in a later read it is new input
+# for the next line, the residual above, and the case's next line clears it with Ctrl+U.
 [[input]]
 after = 'screen-stage-flooding'
 send = "\u001b[200~dd\u001cdd\u001b[201~"

@@ -38,6 +38,14 @@ defmodule Redoubt.Shell.Driver do
   and killing jobs"). Under a feed the interrupt does the same, so a native program reading what
   is typed cannot keep it from the shell.
 
+  What is typed for `group` is given to it only while it has a read pending, which the driver
+  asks it, and only to a line's end: what comes after waits in the driver for group's next read,
+  at most 64 KiB of what is typed while a line runs. So the interrupt, outside the machine mode,
+  discards the input queued when it is taken, the rest of the read it came in and everything
+  typed and not yet given to a line, and what is read after it is the next line's
+  (docs/userland/shell.md, "Interrupting and killing jobs"): a paste holding it leaves no tail
+  for the next prompt.
+
   In the shell's **machine mode** (docs/userland/shell.md, "The machine mode"), opened by the shell
   itself (`{:redoubt_machine, :open, key}`) and closed by it, the bytes typed go to no `group`:
   the driver cuts them into lines at each newline, a carriage return before it dropped, and
@@ -87,6 +95,8 @@ defmodule Redoubt.Shell.Driver do
   # The most bytes a line may hold in the machine mode: a longer one is dropped whole.
   @machine_line 1_048_576
   @esc_timeout 50
+  # The most bytes typed that wait for group's next read.
+  @typeahead 65_536
 
   @doc """
   Runs the driver in the calling process until the shell ends, and returns `:ok`.
@@ -135,9 +145,20 @@ defmodule Redoubt.Shell.Driver do
       last: nil,
       # Whether group's drawing is the dropped line's (after an interrupt).
       dropping: false,
-      # A Ctrl+D waiting for group to catch up: its reference, the rest of its read, and the
-      # input that came after it, newest first.
-      eof_check: nil,
+      # Whether group may be given what is typed: `:open` while it reads; `{:sync, ref, what,
+      # interrupted}` once it has been given a line's end or a Ctrl+D (`what`), until it answers
+      # the asking `ref` (`ask/1`), with whether an interrupt was taken meanwhile; `:closed` from
+      # a read's end until group's next, and at the start, before its first.
+      gate: :closed,
+      # With the gate closed, the asking in flight, and whether to ask again once it is answered.
+      asked: nil,
+      ask_again: false,
+      # A process that has ended, where group's system replies to an asking go.
+      sink: spawn(fn -> :ok end),
+      # What was typed and not yet given to group, oldest first, and whether the console's end
+      # came after it.
+      typeahead: <<>>,
+      ended: false,
       # The screen in front, if any: its process, monitor, what group asked to draw meanwhile
       # (newest first), bytes that may begin a key, the timer that ends their wait, and the
       # bytes that interrupt it.
@@ -216,7 +237,7 @@ defmodule Redoubt.Shell.Driver do
         loop(evaluated(state, pid, token))
 
       {:DOWN, ref, :process, _pid, _reason} when state.evaluating != nil and state.evaluating.ref == ref ->
-        loop(%{state | evaluating: nil})
+        loop(wonder(%{state | evaluating: nil}))
 
       {:redoubt_machine, :key, pid} ->
         loop(machine_key(state, pid))
@@ -279,8 +300,8 @@ defmodule Redoubt.Shell.Driver do
       {:redoubt_screen, _what, _pid, _detail} ->
         loop(state)
 
-      {:io_reply, ref, _reply} when elem(state.eof_check, 0) == ref ->
-        loop(eof_checked(state))
+      {:redoubt_reading, ref, reading} ->
+        loop(answered(state, ref, reading))
 
       {:io_reply, _ref, _reply} ->
         loop(state)
@@ -363,7 +384,11 @@ defmodule Redoubt.Shell.Driver do
 
     first_prompt = state.first_prompt and not prompting
     if state.first_prompt and prompting, do: :ok = apply(:beamlet, :prompt_drawn, [])
-    %{state | term: term, first_prompt: first_prompt}
+    state = %{state | term: term, first_prompt: first_prompt}
+
+    # group asks for a list of requests only for a read, its prompt first (a program's output is
+    # `put_chars_sync`): with the gate closed, group is asked whether it reads.
+    if match?({:requests, _}, request), do: wonder(state), else: state
   end
 
   # A line has just ended, and group has kept it: its history is cut to the newest lines, by a
@@ -417,18 +442,24 @@ defmodule Redoubt.Shell.Driver do
 
   # ---- keys ----
 
-  # Input waits behind a Ctrl+D group has not caught up with, in order.
-  defp input(%{eof_check: {ref, rest, queued}} = state, input),
-    do: %{state | eof_check: {ref, rest, [input | queued]}}
-
   # In the machine mode the shell reads no line from group: the console's end goes to it as the
   # end of its input, and a last line without its newline ends no block.
   defp input(%{machine: machine} = state, :eof) when machine != nil, do: machine_item(state, :eof)
 
-  # A last line without its newline is still a line, as it is from a pipe.
-  defp input(state, :eof) do
-    state = if state.last in [?\n, ?\r, nil], do: state, else: to_group(state, "\n")
-    end_of_input(state)
+  # The console's end comes after what was typed before it, given to group first.
+  defp input(%{gate: :open} = state, :eof), do: end_of_console(state)
+  defp input(state, :eof), do: wonder(%{state | ended: true})
+
+  # Outside the machine mode the interrupt is found in the bytes as read, before they are
+  # decoded: no UTF-8 sequence holds its byte. What was read before it is typed, and the rest of
+  # the read, a sequence cut by the read's end with it, goes with the interrupt.
+  defp input(%{machine: nil} = state, bytes) when is_binary(bytes) do
+    bytes = state.held <> bytes
+
+    case :binary.match(bytes, [<<3>>, <<@session_key>>]) do
+      :nomatch -> typed(state, bytes)
+      {at, 1} -> state |> typed(binary_part(bytes, 0, at)) |> interrupt()
+    end
   end
 
   defp input(state, bytes) when is_binary(bytes), do: typed(state, state.held <> bytes)
@@ -466,49 +497,156 @@ defmodule Redoubt.Shell.Driver do
     end
   end
 
-  # Under a feed, the interrupt is found before the keys are fed: what was typed before it goes
-  # to the feed, and what came after goes with the line.
-  defp keys(%{feed: %{}} = state, text) do
-    case :binary.match(text, [<<3>>, <<@session_key>>]) do
-      :nomatch -> feed_keys(state, text)
-      {at, 1} -> state |> feed_keys(binary_part(text, 0, at)) |> interrupt_line()
-    end
-  end
+  # Under a feed the keys are fed: the interrupt was found before them (`input/2`), and what came
+  # after it went with the line.
+  defp keys(%{feed: %{}} = state, text), do: feed_keys(state, text)
+  defp keys(state, text), do: give(state, text)
 
-  defp keys(state, text) do
-    case :binary.match(text, [<<3>>, <<4>>, <<@session_key>>]) do
+  # What is typed goes to group only while it reads: to a line's end, or a Ctrl+D, and then the
+  # driver asks group whether it reads on (`ask/1`). What comes next waits here, where an
+  # interrupt can drop it (`interrupt/1`), until group reads again; given to group, it would be
+  # the next line's.
+  defp give(state, <<>>), do: state
+
+  defp give(%{gate: :open} = state, text) do
+    case :binary.match(text, ["\r", "\n", <<4>>]) do
       :nomatch ->
         to_group(state, text)
 
       {at, 1} ->
         <<ahead::binary-size(^at), key, rest::binary>> = text
-        key(to_group(state, ahead), key, rest)
+
+        if key == 4,
+          do: state |> to_group(ahead) |> sync(:ctrl_d, rest),
+          else: state |> to_group(ahead <> <<key>>) |> sync(:line, rest)
     end
   end
 
-  # The interrupt, Ctrl+C or Ctrl+\: the line being edited is dropped and the session stays.
-  # What was typed with it in the same read goes with the line, as user_drv drops it too. With
-  # no line open, a line is being evaluated, and the interrupt ends it.
-  defp key(state, interrupt, _rest) when interrupt in [3, @session_key] do
+  defp give(state, text), do: state |> queue(text) |> wonder()
+
+  # What is typed while a line runs waits for group at most 64 KiB: what a read would take past
+  # that is dropped, from a character's start, and the bell rung, so a paste while a line runs
+  # cannot grow the driver to its heap limit. A paste into a waiting prompt, a long module, is
+  # the prompt's whole, as group would have held it.
+  defp queue(state, text) do
+    room = @typeahead - byte_size(state.typeahead)
+
+    if state.evaluating == nil or byte_size(text) <= room do
+      %{state | typeahead: state.typeahead <> text}
+    else
+      kept = binary_part(text, 0, char_start(text, max(room, 0)))
+      echo(%{state | typeahead: state.typeahead <> kept}, :beep)
+    end
+  end
+
+  defp char_start(text, at) when at > 0 do
+    if :binary.at(text, at) in 0x80..0xBF, do: char_start(text, at - 1), else: at
+  end
+
+  defp char_start(_text, at), do: at
+
+  # The rest of a read group was given a line of waits behind it, whole: it was typed at a read.
+  defp sync(state, what, rest),
+    do: %{state | gate: {:sync, ask(state), what, false}, typeahead: state.typeahead <> rest}
+
+  # Whether group has a read pending, asked of group itself: a system message, which group
+  # answers in order after the input it was given and the drawing that input asked for. The one
+  # bit comes back from inside group; the system reply goes to a process that has ended. A read
+  # that draws nothing, with echo off, is found so too. The bit is read from group's state as
+  # the record this module extracts from kernel/src/group.erl (`group_state`): an OTP whose group
+  # keeps another state fails inside the fun, sys keeps group's state as it was, and no answer
+  # comes, so the gate stays as it is and what is typed waits; the interrupt still drops it.
+  defp ask(state) do
+    ref = make_ref()
+    driver = self()
+
+    tell = fn {_name, data} = group ->
+      send(driver, {:redoubt_reading, ref, group_state(data, :input) != :undefined})
+      group
+    end
+
+    send(state.group, {:system, {state.sink, ref}, {:replace_state, tell}})
+    ref
+  end
+
+  # With the gate closed, group is asked once whether it reads, when it draws for a read (its
+  # prompt) or when input comes; one asking at a time, and again if either came meanwhile.
+  defp wonder(%{gate: :closed, asked: nil} = state), do: %{state | asked: ask(state)}
+  defp wonder(%{gate: :closed} = state), do: %{state | ask_again: true}
+  defp wonder(state), do: state
+
+  defp answered(%{gate: {:sync, ref, what, _interrupted}} = state, ref, reading),
+    do: synced(state, what, reading)
+
+  defp answered(%{asked: ref} = state, ref, reading) do
+    state = %{state | asked: nil}
+
+    cond do
+      reading and state.gate == :closed -> release(%{state | gate: :open, ask_again: false})
+      state.ask_again -> wonder(%{state | ask_again: false})
+      true -> state
+    end
+  end
+
+  # An answer to an asking an interrupt made stale.
+  defp answered(state, _ref, _reading), do: state
+
+  # Ctrl+D: on an empty line the input ends, and the shell with it, and what was typed after it
+  # goes nowhere; with text on the line it is edlin's forward delete. Which it is depends on the
+  # keys before it, so it is judged once group has drawn them.
+  defp synced(state, :ctrl_d, _reading) do
+    if Term.line_empty?(state.term),
+      do: end_of_input(%{state | gate: :closed, typeahead: <<>>}),
+      else: state |> to_group(<<4>>) |> resume(true)
+  end
+
+  # A line's end: group reads on if the key ended no read (Enter taking a history search, a read
+  # of more than a line), and otherwise its next read is to come.
+  defp synced(state, :line, reading), do: resume(state, reading)
+
+  # An interrupt taken while group had not yet taken a line's end acts now, on the line as it is.
+  defp resume(%{gate: {:sync, _ref, _what, interrupted}} = state, reading) do
+    state = %{state | gate: if(reading, do: :open, else: :closed)}
+    state = if interrupted, do: interrupt_now(state), else: state
+    release(state)
+  end
+
+  # What waited for group's read is given to it, as typed, and then the console's end.
+  defp release(%{gate: :open, typeahead: text} = state) do
+    state = give(%{state | typeahead: <<>>}, text)
+    if state.ended and state.gate == :open, do: end_of_console(%{state | ended: false}), else: state
+  end
+
+  defp release(state), do: state
+
+  # The interrupt, Ctrl+C or Ctrl+\, outside the machine mode (docs/userland/shell.md,
+  # "Interrupting and killing jobs"): the input queued when it is taken goes, the rest of its
+  # read (`input/2`) and what was typed before it and not yet given to group, so nothing typed or
+  # pasted with it reaches the next prompt; what is read after it is the next line's. Then it
+  # acts: at once, or, if group has not yet taken a line's end given it, once it has.
+  defp interrupt(state) do
+    state = %{state | typeahead: <<>>, held: <<>>}
+
+    case state.gate do
+      {:sync, ref, what, _interrupted} when state.feed == nil -> %{state | gate: {:sync, ref, what, true}}
+      _gate -> interrupt_now(state)
+    end
+  end
+
+  # Under a feed, the line holding it ends. Otherwise the line being edited is dropped, as
+  # user_drv drops it, and the session stays; with no line open, a line is being evaluated, and
+  # the interrupt ends it.
+  defp interrupt_now(%{feed: %{}} = state), do: interrupt_line(state)
+
+  defp interrupt_now(state) do
     if Term.line_open?(state.term) do
       {out, term} = Term.interrupt(state.term)
       write(state, out)
       Process.exit(state.group, :interrupt)
-      %{state | term: term, dropping: true}
+      %{state | term: term, dropping: true, gate: :closed, asked: nil, ask_again: false}
     else
       interrupt_line(state)
     end
-  end
-
-  # Ctrl+D: on an empty line the input ends, and the shell with it; with text on the line it
-  # is edlin's forward delete. Which it is depends on the keys before it, which group may not
-  # have drawn yet, so it is judged once group has: group answers a no-op io request in order,
-  # after the drawing those keys asked for. Until then, the rest of the read and any input
-  # after it wait.
-  defp key(state, 4, rest) do
-    ref = make_ref()
-    send(state.group, {:io_request, self(), ref, {:setopts, []}})
-    %{state | eof_check: {ref, rest, []}}
   end
 
   # ---- the line being evaluated ----
@@ -520,9 +658,10 @@ defmodule Redoubt.Shell.Driver do
     %{state | evaluating: %{pid: pid, token: token, ref: Process.monitor(pid)}}
   end
 
+  # A line's end: group is asked again, for a read its next line may begin without drawing.
   defp evaluated(%{evaluating: %{pid: pid, token: token, ref: ref}} = state, pid, token) do
     Process.demonitor(ref, [:flush])
-    %{state | evaluating: nil}
+    wonder(%{state | evaluating: nil})
   end
 
   defp evaluated(state, _pid, _token), do: state
@@ -889,7 +1028,8 @@ defmodule Redoubt.Shell.Driver do
   # Keys for the screen; the input's end ends it before ending the input. An interrupt byte ends
   # it wherever it falls, found in the bytes before any decoding: no escape sequence or UTF-8
   # sequence holds one, so neither a key the decoder waits on nor a paste can carry it to the
-  # screen. The keys before it in the same read reach the screen; those after it go with it.
+  # screen. The keys before it in the same read reach the screen; those after it go with it, and
+  # so does what was typed for group before the screen opened and not yet given to it.
   defp screen_input(state, :eof), do: state |> interrupt_screen() |> input(:eof)
 
   defp screen_input(%{screen: screen} = state, bytes) do
@@ -898,7 +1038,8 @@ defmodule Redoubt.Shell.Driver do
         screen_keys(state, bytes)
 
       {at, 1} ->
-        state |> screen_keys(binary_part(bytes, 0, at)) |> interrupt_screen()
+        state = screen_keys(state, binary_part(bytes, 0, at))
+        interrupt_screen(%{state | typeahead: <<>>, held: <<>>})
     end
   end
 
@@ -951,17 +1092,10 @@ defmodule Redoubt.Shell.Driver do
 
   # ---- the end of the input ----
 
-  # group has drawn every key before the Ctrl+D. On an empty line the input ends, and what
-  # waited behind it goes; otherwise the Ctrl+D goes to group, and then what waited, in order.
-  defp eof_checked(%{eof_check: {_ref, rest, queued}} = state) do
-    state = %{state | eof_check: nil}
-
-    if Term.line_empty?(state.term) do
-      end_of_input(state)
-    else
-      state = state |> to_group(<<4>>) |> keys(rest)
-      queued |> Enum.reverse() |> Enum.reduce(state, &input(&2, &1))
-    end
+  # The console's end: a last line without its newline is still a line, as it is from a pipe.
+  defp end_of_console(state) do
+    state = if state.last in [?\n, ?\r, nil], do: state, else: to_group(state, "\n")
+    end_of_input(state)
   end
 
   # The end of the input, as group can carry it to the shell: not as `eof`, which edlin takes

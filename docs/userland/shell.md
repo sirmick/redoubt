@@ -366,7 +366,7 @@ harness's grant kinds ([agents](agents.md#the-agent-harness)): `read:`, `write:`
 
 ### Interrupting and killing jobs
 
-Status: built · partly tested: the bound on what a background job keeps of its output is the shell's ExUnit suite's (`test/redoubt/jobs_test.exs` keeps the job table's own rules), not attacked on the machine; the interrupt's path in the driver and the evaluator runs in that suite on both VMs too · tested: bench:job-interrupt-line, bench:job-interrupt-native, bench:job-kill, bench:job-interrupt-ssh
+Status: built · partly tested: the bound on what a background job keeps of its output is the shell's ExUnit suite's (`test/redoubt/jobs_test.exs` keeps the job table's own rules), not attacked on the machine; the interrupt's path in the driver and the evaluator, and what it leaves of the input, run in that suite on both VMs too · tested: bench:job-interrupt-line, bench:job-interrupt-native, bench:job-kill, bench:job-interrupt-ssh
 
 There are no signals and no per-process kill. A job is one pipeline, an `exec` or a `pipe/1`, and
 it is killed by destroying its stages' budgets
@@ -410,6 +410,24 @@ can take and the driver never forwards:
 - **Over SSH**, `sshd` turns the channel's `signal` request (INT) and `break` request into the
   session's own key, the 0x1C byte, so they interrupt whatever is in front. It is a protocol message, not a Unix signal; nothing inside Redoubt
   has signals ([sshd](../servers/sshd.md)).
+
+What the interrupt leaves of the input: **it discards the input queued when it is taken**, the
+rest of the read it came in and everything typed and not yet given to a line, a line typed ahead
+while another runs among it; what the console delivers after it is the next line's. It is the
+terminal's rule (an interrupt flushes queued input), and it goes by what has arrived, not by how
+the console split it into reads. The driver gives the line editor what is typed only while it
+has a read pending, which it asks the line editor itself, and only to a line's end, so what
+comes after waits where the interrupt finds it: a paste holding Ctrl+C or Ctrl+\\ enters no line
+past the one being read when the interrupt is taken, and leaves nothing for the next prompt.
+What is typed while a line runs waits so at most 64 KiB: what a read would add past that is
+dropped, and the terminal's bell rung; a paste into a waiting prompt, a long module, is kept
+whole. An interrupt typed after a line is entered and before it begins to run ends nothing, but
+still drops the input queued with it. The machine mode keeps its own rule, for a program that
+sends ahead: what follows the interrupt in the same read is the next block's, and the lines held
+go only with the block being typed ([the machine mode](#the-machine-mode)). The residual: a long
+paste whose later chunks the console delivers after the interrupt has been handled is new input,
+typed at the next prompt, until bracketed paste makes a paste one event ([saved history, secret
+reads and pasting](#saved-history-secret-reads-and-pasting)).
 
 What a job cannot do:
 - **Swallow the interrupt.** The session's driver reads `/dev/cons` all the time, not only while
@@ -919,7 +937,10 @@ reaches `group`; Ctrl+D on an empty line, like
 the console's end, ends the input and so the shell. `group` has no way to hand its reader an end
 of input (`edlin` takes `eof` for a line's end), so the driver answers the pending read with the
 error `eof`, which `group` keeps in order behind the keys before it, and the shell reads as its
-end. A byte that is not UTF-8 is read as the Latin-1 character it is.
+end. A byte that is not UTF-8 is read as the Latin-1 character it is. The driver hands `group`
+what is typed only while it has a read pending, and only to a line's end; what comes after waits
+in the driver for the next read, where the interrupt drops it
+([interrupting](#interrupting-and-killing-jobs)).
 - **History** is `group`'s, kept for the session; the driver cuts it to the newest 1000 lines at
   each prompt.
 
@@ -935,7 +956,9 @@ Status: planned · M2 (usable shell)
 - **A paste is one event**, so a pasted Tab does not complete and a pasted newline does not run
   a line before the person presses Enter.
 
-**Open:** how a paste becomes one event inside `edlin`, which has no bracketed paste.
+**Open:** how a paste becomes one event inside `edlin`, which has no bracketed paste. Until it
+does, a paste's chunks the console delivers after an interrupt has been handled are new input
+for the next prompt ([interrupting and killing jobs](#interrupting-and-killing-jobs)).
 
 ### Completion
 
