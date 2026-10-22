@@ -1,6 +1,6 @@
 # Environment and rules for every member launched 2026-10-20
 
-Main is 4c2c063e8 (train 95: K36 dead entries, B106 endpoint owners, B105 checked VM allocation). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
+Main is 2b60945b6 (train 96: SCHED5 range calls capped at 16 pages, map_anon places whole runs; INIT6 Tversion ends the mux session). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
 
 ## Shell
 

@@ -2170,3 +2170,93 @@ differential and its method as the named cost. Agreed, no overrule. Condition: t
 1 the bound is worst + spread, rounded up, said so on the case. B (subtracting the other case's
 background) and C (span counting in the judge) rejected: a second measurement inside a verdict,
 and a judge proving a negative.
+
+### K34: irq-boot-hart-only after the search is bounded; the contention family judged again (architect-oct21)
+
+Design approved by the orchestrator: .wash/local/K34-design.md option (a), the per-process free-run
+summary (+2 kernel frames a process, charged at space creation; a placement reads group records
+and at most 3 bitmap words, tens of µs). The question: what the negative must prove once no
+section is longer than about a slice.
+
+1. **What IRQ1 is worth, by construction.** With every hart taking device interrupts, an alarm is
+   claimed by the idle hart, which then waits one section for the lock (R78); with the boot hart
+   alone, the alarm waits out the boot hart's section and the woken driver's `receive` draws behind
+   the next: two sections. IRQ1 saves exactly one kernel section a wake, under any load. R12 after
+   K34 makes a section at most about a slice (the costliest bounded call, a 16-page `map_fixed`,
+   0.76 ms rv32), so the pair separates by under a millisecond, and the 15/50 ms targets cannot
+   see it. The one load that lengthens a section past 15 ms is R10's named exception (a full
+   lease's destruction, 30 ms), and it fails the positive too: every wake waits the lock. **So no
+   load separates the pair at the targets, by construction.** That is the "state why it can't"
+   branch of the negative-control rule, and it is K34's gain, not a loss.
+2. **The implementer's proposed verdict (the per-hart alarm count, the other hart taking 0) is
+   refused.** It asserts that the debug feature routes interrupts to the boot hart alone: a test of
+   test code, proving nothing about the system. A negative must fail for the reason its positive
+   passes.
+3. **Ruling, conditional on the measurement the implementer planned.** Measure the negative first
+   on K34's kernel, both widths, alone. If it still misses 15/50 net of audits, it stays, judged,
+   `record=` off, and the page says what it waits behind. If it meets them (expected): **retire
+   `bench:irq-boot-hart-only` and the `irq-boot-hart-only` kernel feature** (debug-only code
+   whose one case is gone is not carried; nothing unused is mentioned). IRQ1's test becomes what
+   already checks its mechanism exactly: `sched-lock-contention` and `-4` require a hart other
+   than the boot hart to take ten or more alarms, `-4-mttcg` that every hart does, and
+   `sched-irq-wake`'s proof reads each device interrupt against the runner's slice; boot.md's
+   IRQ1 status and Tested-by, scheduling.md R78's "self-check of the targets" paragraph and the
+   negative-control sentences, testbench.md's case list and SECURITY.md (C7: Tested-by equals the
+   section) follow. The page states item 1 as the reason there is no negative at the targets. A
+   section-relative negative (the wake in units of the section, the mttcg case's form) could see
+   one section, but it would measure what the alarm counts count exactly; not built.
+4. **The contention family: yes, as the node says.** `record=` comes off `sched-lock-contention`,
+   `-4` and `-4-mttcg`; all three are judged at 15/50 ms net of audits. `-4-mttcg` loses its
+   searches-ratio clauses (`driver_wake_p50_searches=3`, `p99=8`): a search of tens of µs is no
+   unit beside host noise; its 15/50 ms in host time stand. `-4` under icount is judged too: the
+   turn-order inflation was about five searches (113 ms), now about five of tens of µs. The hammer
+   changes of necessity: "refused after a search of the whole area" is no longer R12's costliest
+   call. It becomes the costliest bounded call R22's rewritten table names (expected the 16-page
+   `map_fixed` with every table present, or `unmap`), chosen as ruled on "the contention family's
+   hammer is chosen by its self-check": the program times one section alone, sizes its window from
+   it, checks every wake fell inside, and prints the section it hammers; the hammer's line on R78
+   and the tomls' descriptions follow. Figures re-recorded, no target moves. The lock-order clause
+   (every wait in ticket order, behind fewer sections than harts) is the family's constant and
+   stays on all three.
+
+### B103: the two-hart deadline notice is judged where the harts run at once (architect-oct21)
+
+Finding (.wash/local/B103-report.md): the term that grows is the steward's wake on the notice to
+its `lease_ended` send returning; under icount the other hart's verity/blkd reads are counted
+inside it (steward's hart 24.6 ms of "user" time at rv32 two harts against 0.5 at one; sections
+read about 5x longer), and with the harts at once the real two-hart cost is +1.7 ms of lock waits
+(R78's shape), whole notice p99 8.6-9.9 ms against 40. No kernel or steward term to fix.
+
+**Ruling: (a)**, by the settled precedent (K31's Ruling A, `sched-capped-mttcg`; LAT4): a cell
+QEMU's turns move is recorded under icount and judged where the harts run at once, the target
+unmoved. (b) is refused: a ratio to a same-boot yardstick needs a yardstick outside the measured
+path (R10 is inside the notice), and the target is a responsiveness figure in milliseconds, which
+is what a person feels; host time's speed is stated as the caveat, as sched-capped-mttcg's page
+states it. (c) leaves the cell judged by nobody.
+
+1. **Both widths, not rv32 alone.** rv64 at two harts reads 35.2 ms under icount by the same
+   mechanism (x2.2 in the same term); a pass with 5 ms of margin from a measurement artefact is
+   no judgement. The icount case records the deadline-notice p99 at two harts on both widths
+   (record=rv64:2:N=k and rv32:2:N=k, k = 1-3), judges it at one hart as today, and the twin
+   judges it at two harts on both.
+2. **The twin:** `steward-latency-mttcg`, no icount, host time, `--quiet` class, rounds N = 1-3,
+   both widths at [1, 2], the deadline notice's p99 at 40 ms net; every other cell stays in the
+   icount case (the twin's other figures recorded, not judged, so one case judges each cell).
+   Lease lengths come from the twin's own measured launches, as the case already derives them
+   (twice the round's worst launch), never from icount's. Before it lands: three runs a width at
+   [1, 2] alone, N = 1-3 clean, the figures on the page with their spread.
+3. **The twin must be shown able to fail.** A case that reads 9 ms against 40 and has never
+   missed proves little: the report states what regression the twin sees at 40 ms and shows one
+   run that misses it (a known-bad ordering, such as the notice sent after the per-exit cleanup
+   that STEWARD12 removed, if a test-only feature can restore it cheaply), or states why no cheap
+   negative exists and what the sensitivity is (the real two-hart cost is +1.7 ms; the twin sees a
+   term of about 30 ms, not that).
+4. **What B103 lands.** Title: the deadline-notice p99 at two harts is judged where the harts run
+   at once: under icount the other hart's turns are counted inside the steward's send (rv32 44.9,
+   rv64 35.2 ms against 40), and the real two-hart cost is +1.7 ms of lock waits. Acceptance: the
+   twin judged at 40 ms net on both widths at [1, 2], N = 1-3, three alone runs each; the icount
+   case's two-hart cells recorded on both widths with the turns reason in the toml; scheduling.md
+   "With the real steward" carrying both sets of figures, the SCHED5 finding bullet replaced by
+   the turns sentence, the residual "A hart waits for QEMU's turns" gaining the notice cell beside
+   the share case; testbench.md's host-clock list; steward.md's Leases if it repeats the figure.
+   No target moves. Not Tier A: a case and pages; the reviewer is the orchestrator's choice.
