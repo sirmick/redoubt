@@ -1,4 +1,4 @@
-description = "An interrupted line loses only itself (docs/plan/m2-usable-shell.md, attack suite; docs/userland/shell.md, \"Interrupting and killing jobs\"): the console session binds x, runs a line that loops forever in Elixir and is sent Ctrl+C, then another sent Ctrl+\\\\ (the session's own key). Each loop is ended, the session goes on, and each next line still sees x. Every verdict is the session's own output. The next line is typed while the loop runs, before the interrupt: typed with it, in one read, it would go with the interrupt"
+description = "An interrupted line loses only itself (docs/plan/m2-usable-shell.md, attack suite; docs/userland/shell.md, \"Interrupting and killing jobs\"): the console session binds x, runs a line that loops forever in Elixir and is sent Ctrl+C, then another sent Ctrl+\\\\ (the session's own key). Each loop is ended, the session goes on, and each next line still sees x. Every verdict is the session's own output. Each next line is typed once the interrupt has been handled: an interrupt discards the input queued when it is taken, so a line typed ahead of it, or with it, would go with it"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The image's bundle with pipe-stage public in /boot, as pipe-hostile-output's.
@@ -34,15 +34,29 @@ send = "IO.puts(\"loop one\"); Stream.cycle([1]) |> Stream.run()\n"
 
 [[input]]
 after = '(^|\] )loop one$'
-send = "{:after_one, x + 1}\n\u0003"
+send = "\u0003"
 
+# What the interrupt leaves of the input is what the console delivers after it
+# (docs/userland/shell.md, "Interrupting and killing jobs"): the next line waits for its ^C.
+[[input]]
+after = '(^|\] )\^C$'
+send = "{:after_one, x + 1}\n"
+
+# The second ^C is drawn as the first, which every input waits on alike: so the second loop is
+# watched by a process it spawns without a link, which the interrupt does not end, and which
+# says when the line has ended. Its words are joined at run time, so the line's echo never
+# shows them.
 [[input]]
 after = '(^|\] )\{:after_one, 2\}$'
-send = "IO.puts(\"loop two\"); Stream.cycle([1]) |> Stream.run()\n"
+send = "w = self(); spawn(fn -> r = Process.monitor(w); receive do {:DOWN, ^r, _, _, _} -> IO.puts(\"loop two\" <> \" ended\") end end); IO.puts(\"loop two\"); Stream.cycle([1]) |> Stream.run()\n"
 
 [[input]]
 after = '(^|\] )loop two$'
-send = "{:after_two, x + 2}\n\u001c"
+send = "\u001c"
+
+[[input]]
+after = '(^|\] )loop two ended$'
+send = "{:after_two, x + 2}\n"
 
 [userland]
 recipe = "image/userland.toml"

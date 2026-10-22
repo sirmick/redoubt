@@ -37,17 +37,27 @@ send = "exec(\"pipe-stage\", [\"spin\"])\n"
 after = '(^|\] )spinning$'
 send = "\u0003"
 
+# What the interrupt leaves of the input is what the console delivers after it
+# (docs/userland/shell.md, "Interrupting and killing jobs"): the next line waits for its ^C.
 [[input]]
 after = '(^|\] )\^C$'
 send = "{:after_exec, c.() == before, Redoubt.Pipes.usage()}\n"
 
+# The second ^C is drawn as the first, which every input waits on alike: so the pipeline's line
+# is watched by a process it spawns without a link, which the interrupt does not end, and which
+# says when the line has ended. Its words are joined at run time, so the line's echo never
+# shows them.
 [[input]]
 after = '(^|\] )\{:after_exec, (true|false)'
-send = "pipe(~w(pipe-stage spin p | pipe-stage spin p | pipe-stage spin p))\n"
+send = "w = self(); spawn(fn -> r = Process.monitor(w); receive do {:DOWN, ^r, _, _, _} -> IO.puts(\"pipe\" <> \" ended\") end end); pipe(~w(pipe-stage spin p | pipe-stage spin p | pipe-stage spin p))\n"
 
 [[input]]
 after = '(^|\] )spinning p$'
-send = "{:after_pipe, c.() == before, Redoubt.Pipes.usage()}\n\u001c"
+send = "\u001c"
+
+[[input]]
+after = '(^|\] )pipe ended$'
+send = "{:after_pipe, c.() == before, Redoubt.Pipes.usage()}\n"
 
 [userland]
 recipe = "image/userland.toml"

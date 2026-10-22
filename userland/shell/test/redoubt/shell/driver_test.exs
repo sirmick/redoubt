@@ -348,6 +348,113 @@ defmodule Redoubt.Shell.DriverTest do
     ends(driver)
   end
 
+  # The interrupt discards the input queued when it is taken (docs/userland/shell.md,
+  # "Interrupting and killing jobs"): a line typed ahead while a line runs, and the rest of the
+  # interrupt's own read, never reach a prompt, however the console split them; a later read does.
+  test "the interrupt while a line runs drops the lines typed ahead and the rest of its read, and a later read is the next line" do
+    {driver, terminal} = start()
+    type(driver, "Process.sleep(:infinity)\r")
+    Process.sleep(300)
+    type(driver, ":typed_ahead\r")
+    # A paste's tail after the interrupt: its end marker, and a byte that is not UTF-8 before more.
+    type(driver, <<":same_read\x1C:tail\e[201~\r", 0xFF, ":latin1_tail\r">>)
+    type(driver, ":next\r")
+    terminal = shows(terminal, ~r/^:next$/m)
+
+    text = Terminal.text(terminal)
+    assert text =~ ~r/^\^C$/m
+    assert text =~ ~r/^:next$/m
+    refute text =~ "typed_ahead"
+    refute text =~ "same_read"
+    refute text =~ "tail"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  # A paste of several lines arrives in one read: group is given its first line, and the rest
+  # waits for the next prompt, where the interrupt in the paste finds it and drops it.
+  test "a paste holding the interrupt leaves no line after the one being read, and no tail, for the next prompt" do
+    {driver, terminal} = start()
+    terminal = screen(terminal)
+    type(driver, ":first\r:queued\r:queued_too\x03:tail\r")
+    Process.sleep(300)
+    type(driver, ":next\r")
+    terminal = shows(terminal, ~r/^:next$/m)
+
+    text = Terminal.text(terminal)
+    assert text =~ ~r/^:next$/m
+    refute text =~ "queued"
+    refute text =~ "tail"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  # What waits for the next read is at most 64 KiB: past it a paste is dropped and the bell rung.
+  test "type-ahead past 64 KiB while a line runs is dropped with the bell, and the interrupt drops the rest" do
+    {driver, terminal} = start()
+    type(driver, "Process.sleep(:infinity)\r")
+    Process.sleep(300)
+    type(driver, String.duplicate(":paste\r", 10_000))
+    terminal = screen(terminal, &(&1.bells >= 1))
+    assert terminal.bells == 1
+    type(driver, "\x03")
+    type(driver, ":next\r")
+    terminal = shows(terminal, ~r/^:next$/m)
+    refute Terminal.text(terminal) =~ ":paste"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  # The bound is for type-ahead behind a running line: a paste into a waiting prompt, a long
+  # module, is the prompt's whole, however long.
+  test "a multi-line paste of more than 64 KiB into a waiting prompt arrives whole" do
+    {driver, terminal} = start()
+    terminal = screen(terminal)
+    item = ~s|"#{String.duplicate("a", 994)}",\r|
+
+    type(
+      driver,
+      "x = [\r" <> String.duplicate(item, 70) <> ~s|""]\r{:pasted, length(x), byte_size(Enum.join(x))}\r|
+    )
+
+    terminal = shows(terminal, ~r/^\{:pasted, /m)
+    assert Terminal.text(terminal) =~ ~r/^\{:pasted, 71, 69580\}$/m
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  # Input typed before a read that draws nothing begins, while its line runs, is given to it.
+  test "keys typed while a line runs, before its silent read begins, are given to that read" do
+    {driver, terminal} = start()
+
+    type(
+      driver,
+      "Process.sleep(500); :io.setopts(echo: false); r = IO.read(5); :io.setopts(echo: true); {:read, r}\r"
+    )
+
+    Process.sleep(200)
+    type(driver, "abcde")
+    terminal = shows(terminal, ~r/^\{:read, /m)
+    assert Terminal.text(terminal) =~ ~r/^\{:read, ~c"abcde"\}$/m
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  # With echo off, group reads with no line editor and draws nothing between a read's lines: a
+  # read that goes on past a line's end is still given what comes next.
+  test "a read that goes on past a line's end with echo off is given what is typed after it" do
+    {driver, terminal} = start()
+    type(driver, ":io.setopts(echo: false); r = IO.read(10); :io.setopts(echo: true); {:read, r}\r")
+    Process.sleep(300)
+    type(driver, "abc\r")
+    Process.sleep(300)
+    type(driver, "defghi")
+    terminal = shows(terminal, ~r/^\{:read, /m)
+    assert Terminal.text(terminal) =~ ~r/^\{:read, ~c"abc\\rdefghi"\}$/m
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
   test "the interrupt at the prompt after a line has ended ends no later line" do
     {driver, terminal} = start()
     type(driver, ":done\r")
