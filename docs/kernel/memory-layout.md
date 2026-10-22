@@ -168,7 +168,13 @@ columns root entries | sharing
 `PROCESS_AREA` holds the current process's header: one page on both widths, the process's own,
 charged to its budget, with no `U` bit. It holds the process's bookkeeping and thread masks, and
 the table from TID to each thread's IPC page (`MAX_THREADS` + 1
-entries of 4 bytes). The kernel asserts that this fits in the page.
+entries of 4 bytes), and the placement areas' runs that fit there: the message area's bits and
+every group record of both areas, with where the next two pages are. Those two, at
+`PROCESS_AREA` + 4 KiB and + 8 KiB, also the process's own, charged to its budget and without
+`U`, hold a bit for each page of `map_anon`'s area, 65,536 bits
+([memory](memory.md#r22-range-cost)); the kernel reaches another process's through the physmap,
+and they go with the space when the process ends. The kernel asserts that the header fits in its
+page.
 
 A thread's saved registers, 32 machine words, are the last bytes of its IPC page, the page a
 thread costs its budget ([objects](objects.md#what-objects-cost)), which the kernel reaches through

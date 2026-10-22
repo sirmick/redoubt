@@ -92,7 +92,7 @@ and a **stamp** (the budget whose destruction closes the handle everywhere,
 | --- | --- | --- | --- | --- |
 | budget | limits on pages, processes and CPU weight; a class, a label set, an account, an optional deadline | `budget_create`; `root`, `system` and `users` at boot | one page to its parent | `budget_destroy`, its deadline, `budget_reap` on its parent, or the destruction of a budget above it |
 | endpoint | what clients call and servers receive on; it holds no queue | `endpoint_create` | one page to its owner, the budget its creator named or else the creator's own | its owner is destroyed |
-| process | an address space, a handle table and threads; its object page holds the one exit notice | `process_create` | the object page to the creator's budget; its header, page tables and memory to the budget it runs in | it exits, faults or is killed; the page stays until the notice is taken or dropped |
+| process | an address space, a handle table and threads; its object page holds the one exit notice | `process_create` | the object page to the creator's budget; its header, its placement runs' two pages, page tables and memory to the budget it runs in | it exits, faults or is killed; the page stays until the notice is taken or dropped |
 | device | an MMIO range (with a DMA flag), an IRQ line, or the Reset right | only at boot, from the loader's device list | one page to its owner (`system` at boot) | its owner is destroyed, or its DMA reset is never confirmed |
 
 Each object lives in a RAM frame of its own. Every lookup compares the id in the frame with the
@@ -282,17 +282,18 @@ programs DMA without hardware to confine it ([devices](devices.md)). Lines are e
 | --- | --- | --- | --- |
 | RustSBI Prototyper, the M-mode firmware | `bios/firmware/prototyper/src` and its `bios/library` crates | 11,843 in the Prototyper | not counted: vendored at a pinned commit |
 | loader | `loader/src` | 1,576 | 18 |
-| kernel | `kernel/src` | 15,899 | 37 |
+| kernel | `kernel/src` | 16,646 | 37 |
 | `redoubt-sys`, the call ABI both sides share | `libs/sys/src` | 2,464 (843 of them host tests) | 3 |
 | `paging`, the Sv32/Sv39 page-table types | `libs/paging/src` | 625 | 12 |
 | `redoubt-layout`, the kernel-half map and PIDs | `libs/layout/src` | 225 | 0 |
 | `redoubt-stride`, the scheduling rules | `libs/stride/src` | 2,143 (831 of them host tests) | 0 |
 | `redoubt-ticket`, the kernel lock's waits | `libs/ticket/src` | 332 (229 of them host tests) | 0 |
+| `redoubt-runs`, a placement area's free runs | `libs/runs/src` | 472 (185 of them host tests) | 0 |
 | `redoubt-signing`, the bundle signature preimage | `libs/signing/src` | 149 | 0 |
 | `blkd`, the virtio-blk driver (DMA) | `servers/blkd/src` | 3,410 | 4 |
 | `netd`, the virtio-net driver (DMA) | `servers/netd/src` | 2,430 | 8 |
 
-Without the firmware, the TCB Redoubt writes is 29,253 lines. The kernel's `unsafe` is split
+Without the firmware, the TCB Redoubt writes is 30,472 lines. The kernel's `unsafe` is split
 three ways in the ratchet:
 
 | Ratchet budget | What its `unsafe` does | `unsafe` (pinned) |
@@ -360,6 +361,7 @@ two, where a file serves two mechanisms).
 | `libs/layout` (`redoubt-layout`) | the kernel-half address map and PIDs, shared with the loader | [memory layout](memory-layout.md) |
 | `libs/stride` (`redoubt-stride`) | the stride rules the scheduler applies | [scheduling](scheduling.md) |
 | `libs/ticket` (`redoubt-ticket`) | the kernel lock's waits: which hart a release wakes | [scheduling](scheduling.md#r78-fair-kernel-entry) |
+| `libs/runs` (`redoubt-runs`) | a placement area's free runs, kept with the page tables, and `map_anon`'s search over them | [memory](memory.md#r22-range-cost) |
 | `libs/signing` (`redoubt-signing`) | the signature preimage the loader checks | [boot](boot.md) |
 | `loader/` | verifies the bundle, places the kernel and `init` | [boot](boot.md) |
 | `model/` (`redoubt-model`) | the executable model, its invariants and mutations | [model](model.md), [invariants](invariants.md) |

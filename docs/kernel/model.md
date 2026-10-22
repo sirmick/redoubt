@@ -82,9 +82,10 @@ Status: built · partly tested: independence from the kernel's source and the em
   the 4 MiB area from `DEFAULT_MESSAGE_BASE`, each searched as the kernel searches it
   ([memory](memory.md#where-map_anon-puts-pages)). A full area is refused as the kernel
   refuses it.
-- **Costs** come from a `costs` table: by default the kernel's table (one header page per
-  process, one page for each other object, 64 handles per handle-table page). The property
-  tests use 8 handles per page, so handle-table growth and its charge show up in short runs.
+- **Costs** come from a `costs` table: by default the kernel's table (three pages per process for
+  its header and its placement runs, one page for each other object, 64 handles per handle-table
+  page). The property tests use 8 handles per page, so handle-table growth and its charge show
+  up in short runs.
 - **Boot.** `root`, `system` and `users` get the kernel's weight split: `root` 1,000,000,
   `system` 250,000, `users` 749,000, so `root` keeps 1,000 free for `init`. Page and process
   limits are small fixed numbers (`root`: 1,024 pages, 24 processes), not derived from RAM. The
@@ -320,7 +321,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 181 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 182 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -386,7 +387,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [R18 (device authority)](devices.md#r18-device-authority) | `R18DeviceByNumber`, `DeviceInfoWrongKind` | a device reached only through a handle to it; `device_info` naming the device the handle names |
 | [R20 (PID reuse)](processes.md#r20-pid-reuse) | `R20NoticePidReused` | no PID reused while a notice names it |
 | [R21 (crash blame)](processes.md#r21-crash-blame) | `BlameNobody`, `BlameNewestCall`, `ExitWithOpenCallsNotFaulted`, `CurrentNeverSet`, `ReceiveKeepsCurrent`, `ServeIgnored`, `ExitEndpointBadged`, `ExitNoticeDroppedIfNoReceiver` | blaming the current call's sender; how `receive` and `serve` set the current call; a badge-0 exit endpoint; a notice kept until received |
-| [R22 (range cost)](memory.md#r22-range-cost) | `R22MapFixedWalksFirst`, `R22RangeCapIgnored`, `R22MapAnonSearchesRange` | `map_fixed`'s pages refused by arithmetic before any walk; a range of at most `MAX_RANGE_PAGES` pages, a longer one refused before any walk; `map_anon` of a longer run placed where all of it is free, its first range alone mapped |
+| [R22 (range cost)](memory.md#r22-range-cost) | `R22MapFixedWalksFirst`, `R22RangeCapIgnored`, `R22MapAnonSearchesRange`, `R22RunsKeepUnmapped` | `map_fixed`'s pages refused by arithmetic before any walk; a range of at most `MAX_RANGE_PAGES` pages, a longer one refused before any walk; `map_anon` of a longer run placed where all of it is free, its first range alone mapped; a placement area's runs kept with its page tables (an unmapped page freed in them), so a search reads them, a constant, and answers what the tables say |
 | [I3 (minted badges are non-zero and narrow)](invariants.md#i3-minted-badges-are-non-zero-and-narrow) | `MintFromUnservedMessage` | minting only from an open call of the caller's own thread |
 | [I4 (only badge-0 handles receive)](invariants.md#i4-only-badge-0-handles-receive) | `ReceiveWithBadgedHandle` | `receive` through a minted handle |
 | [I6 (labels only grow downward)](invariants.md#i6-labels-only-grow-downward) | `LabelsAddedByParentClass` | adding labels needs a system-class caller |

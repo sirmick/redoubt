@@ -137,10 +137,6 @@ pub enum Role {
     /// p0 threads counting until the window ends, and p1 more that sleep until p2 ticks first;
     /// report the total.
     SpinThreads = 31,
-    /// Take a page in every span of the `map_anon` area (`MAX_RANGE_PAGES` long) before the window,
-    /// then ask for a span until the window ends, each request refused after a search of the whole
-    /// area, R12's costliest call (`map-anon-search-bound`); report the refusals.
-    SearchHammer = 32,
     /// Count until the window ends, entering the kernel with `time_now` each p0 µs; report the
     /// count.
     SpinCalling = 33,
@@ -153,11 +149,12 @@ pub enum Role {
     RoundRobin = 34,
     /// Map the longest range the kernel takes at a boundary of the widest page tables, where none
     /// is present, and unmap it, until the window ends: [`RANGE_ASK`] pages first, and once refused
-    /// `TooLarge` a range call's most (kernel/memory.md, R22); report the ranges mapped.
+    /// `TooLarge` a range call's most (kernel/memory.md, R22), counting p0 µs in user mode after
+    /// each; report the ranges mapped.
     RangeHammer = 35,
-    /// The search's length alone: the `map_anon` area pinned as [`Role::SearchHammer`]'s, then
-    /// [`ALONE`] of its refused requests, each timed; report the p50 and the longest.
-    SearchAlone = 36,
+    /// The section [`Role::RangeHammer`] holds the kernel for, alone: [`ALONE`] of its range calls'
+    /// `map_fixed`s, each timed and unmapped; report the p50 and the longest.
+    SectionAlone = 36,
 }
 
 /// The resumptions a [`Role::RoundRobin`] thread reports.
@@ -198,11 +195,10 @@ impl Role {
             ClusterDriver,
             ClusterTimer,
             SpinThreads,
-            SearchHammer,
             SpinCalling,
             RoundRobin,
             RangeHammer,
-            SearchAlone,
+            SectionAlone,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -336,42 +332,31 @@ extern "C" fn gamer_thread(_: usize) -> ! {
     crate::park()
 }
 
-/// [`Role::SearchHammer`]: the `map_anon` area (memory-layout.md, "Regions") with a page taken in
-/// every span of a range call's length, pinned before the window, so no request of a span fits and
-/// each refusal reads every page table of the area; the requests refused until `end`.
-fn search_hammer(end: u64) -> u64 {
-    let mut refused = 0;
-    while ticks() < end {
-        match rd::map_anon(SPAN, rd::rw()) {
-            Err(Error::OutOfMemory) => refused += 1,
-            Ok(at) => rd::unmap(at, SPAN).expect("unmap"),
-            Err(_) => {}
-        }
-    }
-    refused
-}
-
 /// What [`range_hammer`] asks for first: more than a range call may name, a section of about
 /// 100 ms on rv32 in a checked build where the kernel takes it whole.
 const RANGE_ASK: usize = 2048;
 
-/// Where [`range_hammer`] maps: a boundary of the widest page tables (Sv39's 1 GiB at 4 GiB, Sv32's
-/// 4 MiB root entry above 0x5000_0000), so every table of the range is made afresh each time.
+/// Where [`range_hammer`] maps: a boundary of the widest page tables, so every table of the range
+/// is made afresh each time, at each width the costlier of the two places (kernel/memory.md, R22).
+/// On Sv39, 1 GiB at 4 GiB, past the `map_anon` area: its middle tables cost more than the area's
+/// runs (792 µs net in the area, 883 here, checked). On Sv32, a 4 MiB root entry 8 MiB into the
+/// `map_anon` area, where each page also changes the area's runs (967 µs net, 909 outside it).
 #[cfg(target_pointer_width = "64")]
 const RANGE_AT: usize = 0x1_0000_0000;
 #[cfg(target_pointer_width = "32")]
-const RANGE_AT: usize = 0x5040_0000;
+const RANGE_AT: usize = 0x6080_0000;
 
-/// [`Role::RangeHammer`]: the ranges mapped and unmapped until `end`.
-fn range_hammer(end: u64) -> u64 {
+/// [`Role::RangeHammer`]: the ranges mapped and unmapped until `end`, `gap` ticks counted in user
+/// mode after each.
+fn range_hammer(end: u64, gap: u64) -> u64 {
     let mut pages = RANGE_ASK;
     let mut mapped = 0;
     while ticks() < end {
-        let (at, len) = (RANGE_AT - pages / 2 * rd::PAGE_SIZE, pages * rd::PAGE_SIZE);
-        match rd::map_fixed(at, len, rd::rw()) {
+        match map_range(pages) {
             Ok(()) => {
-                rd::unmap(at, len).expect("unmap");
+                unmap_range(pages);
                 mapped += 1;
+                spin_until((ticks() + gap).min(end));
             }
             Err(Error::TooLarge) if pages > rd::MAX_RANGE_PAGES => pages = rd::MAX_RANGE_PAGES,
             Err(e) => panic!("the range hammer's map_fixed: {e:?}"),
@@ -380,52 +365,33 @@ fn range_hammer(end: u64) -> u64 {
     mapped
 }
 
-/// The `map_anon` area and the span [`search_hammer`] asks for: the most a range call may name, so
-/// the shortest refused search a hammer can make (kernel/scheduling.md, R78). A refused search costs
-/// a walk for each start it tries, so a page in every `MAX_RANGE_PAGES` pages and a request of as
-/// many makes it read the whole area through 65,536 / `MAX_RANGE_PAGES` starts (kernel/memory.md,
-/// R22).
-const SEARCH_AREA: core::ops::Range<usize> = 0x6000_0000..0x7000_0000;
-const SPAN: usize = rd::MAX_RANGE_PAGES * rd::PAGE_SIZE;
-/// The spans of the area.
-const SPANS: usize = (SEARCH_AREA.end - SEARCH_AREA.start) / SPAN;
-
-/// What [`fill_search_area`] charges: a page in every span, and at most a leaf page table for every
-/// 512 pages of the area (Sv39's; Sv32's hold 1024) and one above them.
-const SEARCH_PAGES: u64 = (SPANS + (SEARCH_AREA.end - SEARCH_AREA.start) / rd::PAGE_SIZE / 512 + 1) as u64;
-
-/// The spans [`fill_search_area`] mapped a page in, a bit each.
-type Mapped = [u64; SPANS / 64];
-
-/// A page of this process's in every span of the area, so no request of a span fits. The spans
-/// it mapped a page in (a page of this process's may be there already).
-fn fill_search_area() -> Mapped {
-    let mut mapped = [0; SPANS / 64];
-    for (i, span) in SEARCH_AREA.step_by(SPAN).enumerate() {
-        if rd::map_fixed(span, rd::PAGE_SIZE, rd::rw()).is_ok() {
-            mapped[i / 64] |= 1 << (i % 64);
-        }
-    }
-    mapped
+/// `map_fixed` of `pages` across [`RANGE_AT`], and its `unmap`.
+fn map_range(pages: usize) -> Result<(), Error> {
+    rd::map_fixed(RANGE_AT - pages / 2 * rd::PAGE_SIZE, pages * rd::PAGE_SIZE, rd::rw())
 }
 
-/// Searches [`Role::SearchAlone`] times.
+fn unmap_range(pages: usize) {
+    rd::unmap(RANGE_AT - pages / 2 * rd::PAGE_SIZE, pages * rd::PAGE_SIZE).expect("unmap")
+}
+
+/// What a [`Role::RangeHammer`] charges at most: a range at the cap, and the page tables of a
+/// range across [`RANGE_AT`], every level made afresh on each side.
+pub const RANGE_PAGES: u64 = rd::MAX_RANGE_PAGES as u64 + 8;
+
+/// Sections [`Role::SectionAlone`] times.
 const ALONE: usize = 21;
 
-/// [`Role::SearchAlone`]: the search's own length, alone, in a budget that holds the pins: the
-/// area pinned as [`search_hammer`]'s, then [`ALONE`] of its requests, each timed on `time_now` and
-/// each refused. The p50 and the longest, µs, packed (`max << 32 | p50`); `u64::MAX` if a request
-/// was not refused, so the search was not measured.
-fn search_alone() -> u64 {
-    let _ = fill_search_area();
+/// [`Role::SectionAlone`]: the range hammer's costliest section alone (kernel/memory.md, R22): a
+/// `map_fixed` of a range at the cap across [`RANGE_AT`], making every page table of it afresh,
+/// [`ALONE`] times on `time_now`, each then unmapped. The p50 and the longest, µs, packed
+/// (`max << 32 | p50`).
+fn section_alone() -> u64 {
     let mut samples = [0u64; ALONE];
     for s in samples.iter_mut() {
         let t0 = rd::time_now().unwrap_or(0);
-        let got = rd::map_anon(SPAN, rd::rw());
+        map_range(rd::MAX_RANGE_PAGES).expect("a range at the cap");
         *s = rd::time_now().unwrap_or(0).saturating_sub(t0);
-        if got != Err(Error::OutOfMemory) {
-            return u64::MAX;
-        }
+        unmap_range(rd::MAX_RANGE_PAGES);
     }
     samples.sort_unstable();
     samples[ALONE - 1] << 32 | samples[ALONE / 2]
@@ -870,12 +836,6 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
     if let Some(more) = more {
         more(role, false);
     }
-    // A search hammer pins its area before its window, which then holds its searches alone: when
-    // its pins were done, to tell its window they were.
-    let pinned = matches!(role, Some(Role::SearchHammer)).then(|| {
-        let _ = fill_search_area();
-        ticks()
-    });
     let (start, end) = window();
     let tpu = tpu();
     set_end(end);
@@ -958,11 +918,8 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
                 rd::send(1, &rd::body([rd::time_now().unwrap_or(0) as usize, 0, 0, 0]), None, rd::FOREVER);
             rd::process_exit(0)
         }
-        // `u64::MAX` if the pins ran into the window, whose searches were then not all the area's.
-        Some(Role::SearchHammer) if pinned.is_some_and(|at| at > start) => u64::MAX,
-        Some(Role::SearchHammer) => search_hammer(end),
-        Some(Role::RangeHammer) => range_hammer(end),
-        Some(Role::SearchAlone) => search_alone(),
+        Some(Role::RangeHammer) => range_hammer(end, param(0) * tpu),
+        Some(Role::SectionAlone) => section_alone(),
         Some(Role::RoundRobin) => {
             thread(round_robin_thread, 1);
             round_robin_thread(0)
@@ -2803,10 +2760,11 @@ impl Bench {
     pub fn image(&self) -> &Image { &self.image }
 }
 
-/// `sched-lock-contention`: `hammers` budgets (100, from `users`) each refused a `map_anon` after a
-/// search of the whole area in a loop ([`Role::SearchHammer`]), R12's costliest call, one on every
-/// hart but one, beside `sched-latency`'s driver stand-in (1000, from `system`) on the goldfish
-/// RTC's alarm. The trace's lock-wait tickets and the driver's wakes are the post-check's.
+/// `sched-lock-contention`: `hammers` budgets (100, from `users`) each mapping and unmapping a range
+/// at the cap whose page tables it makes afresh, in a loop ([`Role::RangeHammer`]), R12's costliest
+/// call (kernel/memory.md, R22), one on every hart but one, beside `sched-latency`'s driver stand-in
+/// (1000, from `system`) on the goldfish RTC's alarm. The trace's lock-wait tickets and the
+/// driver's wakes are the post-check's.
 pub fn lock_contention(hammers: usize) -> ! {
     let devices = rd::OTHER_DEVICES..rd::first_free();
     let mut b = Bench::new("lock-contention");
@@ -2814,21 +2772,16 @@ pub fn lock_contention(hammers: usize) -> ! {
         b.check(false, format_args!("no goldfish RTC among the device handles"));
         b.finish("SCHED-LOCK-CONTENTION")
     };
-    // One search's length, alone, before the other children run, in a child whose budget holds
-    // the pins: the unit a wake's wait is counted in where the clock is the host's
-    // (`sched-lock-contention-4-mttcg`). Its budget is given back for the hammers'.
-    let budget = b.budget_with(rd::USERS, 100, 1, SEARCH_PAGES, rd::FOREVER);
-    let a = b.start(budget, Role::SearchAlone, &[], &[]);
+    // The section a hammer holds the kernel for, alone, before the other children run: what the
+    // window is sized from. Its budget is given back for the hammers'.
+    let budget = b.budget_with(rd::USERS, 100, 1, RANGE_PAGES, rd::FOREVER);
+    let a = b.start(budget, Role::SectionAlone, &[], &[]);
     b.go(50_000, 1_000);
     let words = b.collect_words(1);
     let alone = join(words[a][0][0], words[a][0][1]);
-    rd::destroy(budget).expect("give the search's budget back");
-    if alone == u64::MAX {
-        b.check(false, format_args!("one search alone: a request was not refused"));
-        b.finish("SCHED-LOCK-CONTENTION")
-    }
+    rd::destroy(budget).expect("give the section's budget back");
     b.note(format_args!(
-        "one search alone: p50 {} µs, max {} µs ({ALONE} searches)",
+        "one section alone, a range at the cap mapped with its page tables: p50 {} µs, max {} µs ({ALONE} sections)",
         alone & 0xffff_ffff,
         alone >> 32
     ));
@@ -2837,29 +2790,24 @@ pub fn lock_contention(hammers: usize) -> ! {
     let d = b.start(driver, Role::Driver, &[K, 1], &[rtc_mmio, rtc_irq]);
     let mut started = [0usize; 3];
     let hammers = &mut started[..hammers.min(3)];
+    // Each hammer counts in user mode for one section between its ranges, so that its hart is in
+    // user mode, where it traps for the alarm, about half the time, and in the kernel the rest
+    // (boot.md, IRQ1).
     for h in hammers.iter_mut() {
-        // Room for a page in every span of the area, and the area's page tables.
-        let budget = b.budget_with(rd::USERS, 100, 1, SEARCH_PAGES, rd::FOREVER);
-        *h = b.start(budget, Role::SearchHammer, &[], &[]);
+        let budget = b.budget_with(rd::USERS, 100, 1, RANGE_PAGES, rd::FOREVER);
+        *h = b.start(budget, Role::RangeHammer, &[alone & 0xffff_ffff], &[]);
     }
-    // The hammers search until the window ends and every driver sample must end inside it, so each
+    // The hammers call until the window ends and every driver sample must end inside it, so each
     // wake is measured under the load (kernel/scheduling.md, R78). A wake waits behind at most a
-    // search a hammer and the one in progress (two at two harts where the boot hart alone takes the
-    // alarm, `irq-boot-hart-only`), plus its alarm's 3 ms: the window holds all `K` of them at that,
-    // and half again for QEMU's turns.
-    let window = K * ((hammers.len() as u64 + 1) * (alone >> 32) + 3_000) * 3 / 2;
-    // The hammers pin their areas before the window opens: three at once take about 6 s of the
-    // lock's turns at four harts.
-    let (_, end) = b.go(10_000_000, window);
-    // The hammers' refusals and the driver's two reports.
+    // section a hammer and the one in progress, plus its alarm's 3 ms: the window holds all `K` of
+    // them at that three times over, for the checked build's audits and QEMU's turns (at four harts
+    // one and a half times fell short).
+    let window = K * ((hammers.len() as u64 + 1) * (alone >> 32) + 3_000) * 3;
+    let (_, end) = b.go(50_000, window);
+    // The hammers' ranges and the driver's two reports.
     let words = b.collect_words(hammers.len() + 2);
-    let counts = || hammers.iter().map(|&i| join(words[i][0][0], words[i][0][1]));
-    b.check(
-        counts().all(|n| n != u64::MAX),
-        format_args!("every hammer pinned its area before the window opened"),
-    );
-    let refused: u64 = counts().filter(|n| *n != u64::MAX).sum();
-    b.note(format_args!("{} hammers' searches refused: {}", hammers.len(), refused));
+    let mapped: u64 = hammers.iter().map(|&i| join(words[i][0][0], words[i][0][1])).sum();
+    b.note(format_args!("{} hammers' ranges mapped: {}", hammers.len(), mapped));
     let stat = |tag: usize| words[d].iter().find(|w| w[3] & 0xff == tag && w[3] >> 8 > 0).copied();
     match stat(Stats::DRIVER_WAKE) {
         Some(w) => b.note(format_args!(
@@ -2871,7 +2819,7 @@ pub fn lock_contention(hammers: usize) -> ! {
         )),
         None => b.check(false, format_args!("driver wake: no samples")),
     }
-    b.check(refused > 0, format_args!("the hammers made their searches"));
+    b.check(mapped > 0, format_args!("the hammers made their range calls"));
     let last = b.samples(d, &words[d], format_args!("contention"));
     b.check(
         last <= end,

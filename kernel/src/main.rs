@@ -33,6 +33,7 @@ mod io;
 mod kframe;
 mod mem;
 mod message;
+mod place;
 mod platform;
 mod process;
 mod ptable;
@@ -79,6 +80,12 @@ pub unsafe extern "C" fn init(
     // Test builds only: the scheduling trace's ring, before the budget tree counts free RAM.
     #[cfg(feature = "sched-trace")]
     crate::mem::MemoryManager::with_mut(crate::sched::trace::init);
+    // The boot spaces' placement runs (place.rs), before the budget tree counts free RAM: the
+    // kernel's frames are kept, `init`'s are among the loader's it is charged for.
+    for pid in [redoubt_layout::KERNEL_PID, crate::budget::INIT_PID] {
+        let space = ProcessTable::with(|pt| pt.mapping_of(pid)).expect("boot: a boot process has a space");
+        crate::mem::MemoryManager::with_mut(|mm| space.boot_runs(mm, pid));
+    }
 
     // The budget tree, with `init` in `root` (budget.rs, `boot_budgets`). `init`'s header page
     // names its threads' IPC pages, so the tree records it with `init`'s account.
@@ -102,9 +109,6 @@ pub unsafe extern "C" fn init(
     // so, and `sched-capped-holds-floor` expects the line, so its failure is this kernel's.
     #[cfg(feature = "sched-capped-holds-floor")]
     println!("kernel: sched-capped-holds-floor: the floor counts the capped budgets");
-    // Debug only: the negative case's kernel says so, as above (`irq-boot-hart-only`).
-    #[cfg(feature = "irq-boot-hart-only")]
-    println!("kernel: irq-boot-hart-only: device interrupts reach the boot hart alone");
     // Test builds only: a print, then a panic, inside `print!` (debug/console.rs).
     #[cfg(feature = "panic-in-print")]
     {

@@ -146,7 +146,8 @@ What a process costs ([objects](objects.md)):
 - the process object: one page, charged to the **creator's** budget (the caller of
   `process_create`), because it holds the notice and the notice must outlive the budget the
   process ran in;
-- its header page (one on both widths), its root page table and every other page-table page, its
+- its header page (one on both widths), the two pages of its placement areas' runs
+  ([memory](memory.md#r22-range-cost)), its root page table and every other page-table page, its
   handle-table pages, one IPC page per thread (which holds the thread's saved registers too) and
   the pages mapped in it: all charged to **the budget it runs in**, and all given back when it ends.
 

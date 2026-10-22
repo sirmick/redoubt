@@ -1,0 +1,9 @@
+[package]
+name = "redoubt-runs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "A placement area's free runs (docs/kernel/memory.md, R22): a bit a page and a record a group, kept with the page tables, so map_anon's search costs a constant whatever the area holds"
+
+# No dependencies: the kernel links this, so it is TCB.
+[dependencies]

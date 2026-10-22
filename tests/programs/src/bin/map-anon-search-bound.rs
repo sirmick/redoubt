@@ -1,9 +1,8 @@
 //! `map_anon`'s placement search (kernel/memory.md; memory-layout.md, "Regions"): every run it
 //! returns lies inside the `map_anon` area, a run that fits only at the area's end is found, a
 //! run over `MAX_RANGE_PAGES` is placed whole with its first range alone mapped, and a refusal
-//! costs a scan of the area,
-//! not the area times the request, so a timer wake meanwhile stays prompt (R12 and R22,
-//! kernel/scheduling.md).
+//! costs a read of the area's runs, a constant whatever the area holds, so a timer wake meanwhile
+//! stays prompt (R12 and R22, kernel/scheduling.md).
 //!
 //! It is the one program the tester starts, in its own budget (slot 3), which is all of
 //! `system`'s free pages bar one: a page in every range of the area is more than `root` keeps in
@@ -28,20 +27,20 @@ const AREA_END: usize = AREA + AREA_PAGES * rd::PAGE_SIZE;
 const STACK: usize = 0x5000_0000;
 
 /// The refused search's bound, for the densest shape this program's budget affords: a page in every
-/// range-long window, 4,096 pages, so the search tries 4,096 starts, a walk each, and reads every
-/// page of the area. Twice the worst measured at that shape in a checked build under `icount`
-/// (22.4 ms on rv64, 16.8 on rv32; 1 ms is 125,000 guest instructions, so the time does not depend
-/// on the host), rounded up. A budget that holds more pins buys denser shapes and longer searches
-/// (kernel/memory.md, R22).
-const REFUSAL_BOUND_US: u64 = 45_000;
+/// range-long window, 4,096 pages, where a search that walked the tables for each start would try
+/// 4,096 of them. Reading the area's runs, a refusal reads every group record twice whatever the
+/// area holds (kernel/memory.md, R22). Twice the worst measured in a checked build under `icount`
+/// (152 µs on rv64, 187 on rv32; 1 ms is 125,000 guest instructions, so the time does not depend
+/// on the host), rounded up.
+const REFUSAL_BOUND_US: u64 = 400;
 /// The pages the program's budget holds at the start: room for a page in every range-long window
 /// of the area and its page tables, not for one in every half-range window, so the shape it
 /// builds is the densest it affords.
 const AFFORDS: core::ops::Range<u64> = 4_500..8_400;
-/// The sleeping thread's timeout, and how late its wake may be: it waits for the search, so twice
-/// the worst lateness measured at this shape (21.6 ms on rv64, 16.0 on rv32), rounded up.
+/// The sleeping thread's timeout, and how late its wake may be: twice the worst lateness measured
+/// at this shape (1.9 ms on rv64, 2.0 on rv32, the search's share of it a tenth), rounded up.
 const SLEEP_US: u64 = 1_000;
-const WAKE_BOUND_US: u64 = 45_000;
+const WAKE_BOUND_US: u64 = 5_000;
 
 /// When the sleeper's timeout was due, and when it ran, in microseconds since boot (which fits
 /// a `usize` on rv32 for over an hour); 0 until it has.
@@ -159,16 +158,16 @@ pub extern "C" fn _start() -> ! {
         rd::receive(None, 100, 0).ok();
     }
     let elapsed = refusal_time(pages(MAX_RANGE_PAGES));
-    log!(out, "[search] a refused search over every page table took {elapsed} us");
-    assert!(elapsed < REFUSAL_BOUND_US, "a refused search over every page table took {elapsed} us");
-    log!(out, "[search] ok: a refused search over every page table took {elapsed} us, under 45 ms");
+    log!(out, "[search] a refused search took {elapsed} us");
+    assert!(elapsed < REFUSAL_BOUND_US, "a refused search took {elapsed} us");
+    log!(out, "[search] ok: a refused search took {elapsed} us, under 400 us");
     while WOKE.load(Ordering::Acquire) == 0 {
         rd::receive(None, SLEEP_US, 0).ok();
     }
     let late = (WOKE.load(Ordering::Acquire) - DUE.load(Ordering::Acquire)) as u64;
     log!(out, "[search] a timer wake during the search was {late} us late");
     assert!(late < WAKE_BOUND_US, "the sleeper woke {late} us late");
-    log!(out, "[search] ok: a timer wake during the search was {late} us late, under 45 ms");
+    log!(out, "[search] ok: a timer wake during the search was {late} us late, under 5 ms");
 
     // Placements that succeed land inside the area.
     pins().chain([AREA_END - pages(MAX_RANGE_PAGES)]).for_each(|at| rd::unmap(at, rd::PAGE_SIZE).unwrap());

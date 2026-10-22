@@ -124,10 +124,26 @@ impl Space {
         audit::removed(self.asid);
     }
 
-    /// Write `pte` at `slot`, the leaf for `virt`, without its flush.
+    /// Write `pte` at `slot`, the leaf for `virt`, without its flush. Every leaf a process's space
+    /// changes is written here, so here a placement area's runs follow an entry that becomes
+    /// empty or stops being empty (`place.rs`).
     fn write_leaf(self, slot: Slot, virt: usize, pte: Pte) {
+        let was = slot.get();
         slot.set(pte);
         wrote(self.leaf(virt));
+        if was.is_empty() != pte.is_empty() {
+            if let Some(at) = crate::place::page_of(virt) {
+                if let Some(header) = self.header() {
+                    crate::place::changed(header, at, pte.is_empty());
+                }
+            }
+        }
+    }
+
+    /// The frame of this space's header page, mapped at `PROCESS_AREA`.
+    fn header(self) -> Option<usize> {
+        let pte = walk(self.root, PROCESS_AREA).ok()?.get();
+        pte.is_valid().then(|| pte.phys())
     }
 
     /// Write `pte` at `slot`, the leaf for `virt`, and flush it.
@@ -680,7 +696,7 @@ impl MemoryMapping {
         // Whatever the PID's last holder left, and the root entries just copied.
         wrote(Stale { asid: Some(space.asid), page: None });
         // A failure's release leaves the space and flushes its ASID (`leave`).
-        if let Err(e) = Self::add_header_page(space, mm, pid) {
+        if let Err(e) = Self::add_header_page(space, mm, pid).and_then(|_| add_runs(space, mm, pid)) {
             mm.release_owned_frames(pid, self);
             self.satp = 0;
             return Err(e);
@@ -700,6 +716,25 @@ impl MemoryMapping {
             .inspect_err(|_| mm.free_frame_of(header_phys, pid).expect("the frame just taken"))?;
         mm.set_header(pid, header_phys);
         Ok(())
+    }
+
+    /// Give a space the loader built (the kernel's, `init`'s) its placement runs, uncharged: the
+    /// boot takes their frames before the budget tree counts RAM, as it does the loader's. They
+    /// start as what its tables already map in the areas.
+    pub fn boot_runs(&self, mm: &mut MemoryManager, pid: Pid) {
+        let space = Space::of(self.satp);
+        add_runs(space, mm, pid).expect("boot: no frame for a boot space's runs");
+        space.flush_tables(PROCESS_AREA);
+        let header = space.header().expect("a boot space has a header");
+        for (kind, base, pages) in crate::place::AREAS {
+            let mut at = base;
+            while let Some(virt) =
+                first_occupied(space.root, physmap::LEVELS - 1, at, base + pages * PAGE_SIZE)
+            {
+                crate::place::changed(header, (kind, (virt - base) / PAGE_SIZE), false);
+                at = virt + PAGE_SIZE;
+            }
+        }
     }
 
     /// Get the currently active memory mapping.
@@ -881,10 +916,7 @@ pub fn lend_out(space: &MemoryMapping, virt: usize) -> Result<usize, PageError> 
 }
 
 /// The frame of `space`'s header page, mapped at `PROCESS_AREA` (the loader's, for `init`).
-pub fn header_phys(space: &MemoryMapping) -> Option<usize> {
-    let pte = walk(root_of(space.satp), PROCESS_AREA).ok()?.get();
-    pte.is_valid().then(|| pte.phys())
-}
+pub fn header_phys(space: &MemoryMapping) -> Option<usize> { Space::of(space.satp).header() }
 
 /// The frame behind a page `space` lent out, from the lender's own entry.
 pub fn lent_frame(space: &MemoryMapping, virt: usize) -> Option<usize> {
@@ -940,6 +972,59 @@ pub fn map_into(
     Ok(())
 }
 
+/// The checked build's proof that `space`'s runs are its tables (`place.rs`): every page of the
+/// areas whose entry is not empty is taken in the runs, the runs take no more, and every record
+/// is what its group's words say, the pending one settled first. At a process's end, before its tables go:
+/// the areas' leaf tables, a count of the runs' words, and every record rebuilt.
+#[cfg(debug_assertions)]
+pub fn check_runs(space: &MemoryMapping) {
+    let space = Space::of(space.satp);
+    let Some(header) = space.header() else { return };
+    let span = physmap::leaf_size(1);
+    for (kind, base, pages) in crate::place::AREAS {
+        let Some((runs_take, records_hold)) = crate::place::audit(header, kind) else { return };
+        assert!(records_hold, "I1: a record of the runs of the area at {:#x} is not its words'", base);
+        let mut taken = 0;
+        for at in (base..base + pages * PAGE_SIZE).step_by(span) {
+            let leaf =
+                (1..physmap::LEVELS).rev().try_fold(space.root, |t, level| t.child(physmap::vpn(at, level)));
+            let Some(leaf) = leaf else { continue };
+            for index in (0..physmap::ENTRIES).filter(|i| !leaf.get(*i).is_empty()) {
+                let page = (at - base) / PAGE_SIZE + index;
+                assert!(
+                    crate::place::taken(header, kind, page) == Some(true),
+                    "I1: page {:#x} is mapped and free in its space's runs",
+                    at + index * PAGE_SIZE
+                );
+                taken += 1;
+            }
+        }
+        assert!(
+            taken == runs_take,
+            "I1: the runs of the area at {:#x} take {} pages, its tables map {}",
+            base,
+            runs_take,
+            taken
+        );
+    }
+}
+
+/// Back and map, beside `space`'s header, the frames that hold its `map_anon` area's bits, and
+/// give the space its runs, every page free (`place.rs`): frames charged to the running budget, as
+/// the header is. On failure the frame is given back, and any already mapped is in the space. The
+/// flush is the caller's.
+fn add_runs(space: Space, mm: &mut MemoryManager, pid: Pid) -> Result<(), PageError> {
+    let mut frames = [0; crate::place::FRAMES_TAKEN];
+    for (n, frame) in frames.iter_mut().enumerate() {
+        let phys = mm.alloc_page(pid)?;
+        map_page_in(space, mm, pid, phys, PROCESS_AREA + (n + 1) * PAGE_SIZE, PteFlags::R | PteFlags::W)
+            .inspect_err(|_| mm.free_frame_of(phys, pid).expect("the frame just taken"))?;
+        *frame = phys;
+    }
+    crate::place::set_up(space.header().expect("a header before its runs"), frames);
+    Ok(())
+}
+
 /// Map `phys` at `virt` in `space` with exactly `flags`, for `pid`: what `process_map` gives a
 /// child, where the parent chooses the permissions and W^X is checked before we get here (R11).
 pub fn map_into_with(
@@ -976,13 +1061,6 @@ pub fn address_available_in(space: &MemoryMapping, virt: usize) -> bool {
 /// interprets what it finds in the page tables.
 pub fn range_available_in(space: &MemoryMapping, addr: usize, len: usize) -> bool {
     first_occupied(root_of(space.satp), physmap::LEVELS - 1, addr, addr + len).is_none()
-}
-
-/// The first page of `[start, end)` that is occupied in the current address space, if any:
-/// what the placement search (`MemoryManager::find_virtual_address`) skips past.
-pub fn first_occupied_page(start: usize, end: usize) -> Option<usize> {
-    debug_assert!(end <= USER_AREA_END, "the placement areas are in user space");
-    first_occupied(current_root(), physmap::LEVELS - 1, start, end)
 }
 
 /// The first page in `[start, end)` that is occupied under `table`, a table at `level`: like

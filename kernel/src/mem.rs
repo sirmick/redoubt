@@ -70,14 +70,14 @@ pub enum PageError {
     BadFlags,
 }
 
-/// Where the first page of each placement area is, per process (`ProcessInner`): what
-/// `find_virtual_address` searches when the caller names no address.
+/// Where the first page of each placement area is, in every space: what `find_virtual_address`
+/// searches when the caller names no address.
 pub const DEFAULT_BASE: usize = 0x6000_0000;
 pub const DEFAULT_MESSAGE_BASE: usize = 0x4000_0000;
 
 /// A placement area: `map_anon`'s (`Default`, 256 MiB from `DEFAULT_BASE`) or the one received
 /// messages are mapped into (`Messages`, one superpage from `DEFAULT_MESSAGE_BASE`).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MemoryType {
     Default,
     Messages,
@@ -886,16 +886,14 @@ impl MemoryManager {
     /// Find a virtual address in the current process's area `kind` where `size` bytes of free
     /// pages fit, and remember it as the area's last placement.
     ///
-    /// Every start in `[area start, area end - size]` is a candidate, the last one included, so a
-    /// run that fits only at the area's end is found, and so is a request for the whole of an
-    /// empty area. The scan begins at the lower of the last placement and the last start that
-    /// fits, runs up to that last start, then wraps once to the area's start and runs up to where
-    /// it began. It skips ahead: when page `p` is taken, no run through `p` fits, so the next
-    /// candidate is `p` plus one page. Each page of the area is therefore looked at once, and a
-    /// missing page table skips its whole span (`first_occupied_page`). So the search costs at
-    /// most the area's pages, a fixed size, and never the area's pages times the request's
-    /// (R12's bound on a call's kernel time, kernel/scheduling.md). Every run returned lies
-    /// inside the area.
+    /// Every start in the area is a candidate, the last one that fits included, so a run that
+    /// fits only at the area's end is found, and so is a request for the whole of an empty area.
+    /// The search begins at the lower of the last placement and the last start that fits, runs up
+    /// to that last start, then wraps once to the area's start. It reads the area's runs, kept
+    /// with the page tables (`place.rs`), not the tables: a record a group of 512 pages and the
+    /// words of at most a few groups, so its cost is a constant of the area's size whatever the
+    /// area holds (R12's bound on a call's kernel time, kernel/scheduling.md; R22). Every run
+    /// returned lies inside the area.
     pub fn find_virtual_address(
         &mut self,
         virt_ptr: *mut u8,
@@ -907,62 +905,14 @@ impl MemoryManager {
             return Ok(virt_ptr);
         }
 
+        let header = crate::arch::mem::header_phys(&crate::arch::mem::MemoryMapping::current())
+            .expect("a running space has a header");
         Process::with_inner_mut(|process_inner| {
-            let (start, end, last) = match kind {
-                MemoryType::Default => (
-                    process_inner.mem_default_base,
-                    process_inner.mem_default_base + 0x1000_0000,
-                    process_inner.mem_default_last,
-                ),
-                MemoryType::Messages => (
-                    process_inner.mem_message_base,
-                    process_inner.mem_message_base + 0x40_0000, // Limit to one superpage
-                    process_inner.mem_message_last,
-                ),
+            let last = match kind {
+                MemoryType::Default => process_inner.mem_default_last,
+                MemoryType::Messages => process_inner.mem_message_last,
             };
-
-            // A request larger than the whole region fits nowhere (and `end - size` would wrap).
-            let Some(last_start) = end.checked_sub(size).filter(|last| *last >= start) else {
-                return Err(PageError::NoSpace);
-            };
-            let first = last.clamp(start, last_start);
-            let taken = |at: usize, until: usize| crate::arch::mem::first_occupied_page(at, until);
-            // From `first` up to the last start. The first page taken at or after `first`
-            // (within one run of it) is remembered for the wrap.
-            let mut candidate = first;
-            let mut taken_after_first = None;
-            let found = loop {
-                if candidate > last_start {
-                    break None;
-                }
-                match taken(candidate, candidate + size) {
-                    None => break Some(candidate),
-                    Some(page) => {
-                        taken_after_first.get_or_insert(page);
-                        candidate = page + PAGE_SIZE;
-                    }
-                }
-            };
-            // Then from the area's start up to `first`. `[first, taken_after_first)` is known to
-            // be free and `taken_after_first` taken, so a run reaching into it is decided without
-            // looking at those pages again.
-            let found = found.or_else(|| {
-                let mut candidate = start;
-                while candidate < first {
-                    let run_end = candidate + size;
-                    match taken(candidate, run_end.min(first)) {
-                        Some(page) => candidate = page + PAGE_SIZE,
-                        None if taken_after_first.is_none_or(|page| run_end <= page) => {
-                            return Some(candidate);
-                        }
-                        // The run reaches a taken page at or past `first`; so does every later
-                        // start below `first`.
-                        None => return None,
-                    }
-                }
-                None
-            });
-            let at = found.ok_or(PageError::NoSpace)?;
+            let at = crate::place::search(header, kind, last, size).ok_or(PageError::NoSpace)?;
             match kind {
                 MemoryType::Default => process_inner.mem_default_last = at,
                 MemoryType::Messages => process_inner.mem_message_last = at,
@@ -1258,6 +1208,12 @@ impl MemoryManager {
     /// took when it fails), so its tables name every frame the process owns: the root, the tables,
     /// the header page, and the pages `process_map` moved in.
     pub fn release_owned_frames(&mut self, pid: Pid, space: &MemoryMapping) {
+        // Its runs are its tables, while it has them; never during a destruction, which it would
+        // scale (as `check_frame_owners`).
+        #[cfg(debug_assertions)]
+        if !self.objects.deferring {
+            crate::sched::audit(crate::sched::AUDIT_INDEXES, || crate::arch::mem::check_runs(space));
+        }
         // Off the dying space, and its ASID flushed, before any of its frames is free
         // (kernel/memory-layout.md, "`satp`").
         crate::arch::mem::leave(space);

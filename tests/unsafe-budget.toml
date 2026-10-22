@@ -48,6 +48,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# A placement area's free runs, linked into the kernel. `#![forbid(unsafe_code)]`.
+name = "redoubt-runs (a placement area's free runs)"
+paths = ["libs/runs/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # The kernel's IPC lists, linked into the kernel. `#![forbid(unsafe_code)]`.
 name = "redoubt-ipclist (IPC lists)"
 paths = ["libs/ipclist/src"]
@@ -107,7 +114,7 @@ paths = [
     "kernel/src/device.rs", "kernel/src/message.rs", "kernel/src/process.rs", "kernel/src/cell.rs",
     "kernel/src/debug", "kernel/src/endpoint.rs",
     "kernel/src/time.rs", "kernel/src/sched.rs", "kernel/src/dma.rs", "kernel/src/bits.rs",
-    "kernel/src/reclaim.rs",
+    "kernel/src/reclaim.rs", "kernel/src/place.rs",
 ]
 # time.rs, sched.rs, bits.rs and reclaim.rs (the kernel's timer, scheduler, bit sets and frames in
 # flight, which reach frames through kframe.rs) have no unsafe, and

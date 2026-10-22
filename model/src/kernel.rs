@@ -44,8 +44,9 @@ pub struct Costs {
     pub budget: u64,
     /// A process object, charged to its creator's budget; it holds the exit notice.
     pub process: u64,
-    /// The process's header page, separate from the process/notice object: one on both widths
-    /// (each thread's saved registers are in its IPC page, `thread`).
+    /// The process's header page, separate from the process/notice object, and the two pages of
+    /// its placement runs: three on both widths (each thread's saved registers are in its IPC
+    /// page, `thread`).
     pub contexts: u64,
     /// Per-thread IPC state.
     pub thread: u64,
@@ -60,12 +61,13 @@ pub struct Costs {
 }
 
 impl Default for Costs {
-    /// The kernel's cost table: one page per object, the header included, 64 handles per table page.
+    /// The kernel's cost table: one page per object, three for the header and the runs, 64 handles
+    /// per table page.
     fn default() -> Costs {
         Costs {
             budget: 1,
             process: 1,
-            contexts: 1,
+            contexts: 3,
             thread: 1,
             endpoint: 1,
             handles_per_page: 64,
@@ -383,6 +385,69 @@ pub struct Process {
     /// placed there last, where the next search starts (kernel/memory.md, "Where `map_anon` puts
     /// pages").
     pub placed: [u64; 2],
+    /// Per placement area, its runs: a bit a page and a record a group, kept with `space` as the
+    /// kernel keeps them with its page tables (`redoubt-runs`; kernel/memory.md, R22).
+    pub runs: [Runs; 2],
+}
+
+/// An area's runs, its store in vectors.
+#[derive(Clone, Debug)]
+pub struct Runs {
+    bits: Vec<u64>,
+    groups: Vec<redoubt_runs::Group>,
+    pending: Option<usize>,
+}
+
+impl Runs {
+    /// Area `area`'s runs, every page free.
+    fn new(area: Area) -> Runs {
+        let (start, end) = area.pages();
+        let pages = (end - start) as usize;
+        let mut runs = Runs {
+            bits: vec![0; pages / 64],
+            groups: vec![Default::default(); pages / GROUP_PAGES],
+            pending: None,
+        };
+        redoubt_runs::Area::new(&mut runs).clear();
+        runs
+    }
+}
+
+impl redoubt_runs::Store for &mut Runs {
+    fn words(&self) -> usize { self.bits.len() }
+
+    fn word(&self, index: usize) -> u64 { self.bits[index] }
+
+    fn set_word(&mut self, index: usize, word: u64) { self.bits[index] = word }
+
+    fn group(&self, index: usize) -> redoubt_runs::Group { self.groups[index] }
+
+    fn set_group(&mut self, index: usize, group: redoubt_runs::Group) { self.groups[index] = group }
+
+    fn pending(&self) -> Option<usize> { self.pending }
+
+    fn set_pending(&mut self, group: Option<usize>) { self.pending = group }
+}
+
+/// The pages a run record covers.
+const GROUP_PAGES: usize = redoubt_runs::GROUP_PAGES;
+
+/// The first page of a free run of `n` pages in `space` between `start` and `end`, page by page:
+/// every start from `last` (clamped to the last that fits) up to the last start that fits, then
+/// from `start`. The search the runs must agree with.
+fn first_fit(space: &BTreeMap<u64, Mapping>, start: u64, end: u64, last: u64, n: u64) -> Option<u64> {
+    let last_start = end.checked_sub(n).filter(|l| *l >= start && n > 0)?;
+    let first = last.clamp(start, last_start);
+    let fits = |s: u64| space.range(s..s + n).next().is_none();
+    (first..=last_start).chain(start..first).find(|s| fits(*s))
+}
+
+/// The area page `v` lies in, and its page there.
+fn area_page(v: u64) -> Option<(Area, usize)> {
+    [Area::Default, Area::Messages].into_iter().find_map(|area| {
+        let (start, end) = area.pages();
+        (start..end).contains(&v).then(|| (area, (v - start) as usize))
+    })
 }
 
 impl Process {
@@ -744,6 +809,7 @@ impl Kernel {
                 dma: BTreeSet::new(),
                 dma_mapped: BTreeSet::new(),
                 placed: [Area::Default.pages().0, Area::Messages.pages().0],
+                runs: [Runs::new(Area::Default), Runs::new(Area::Messages)],
             },
         );
         let root_table = k.page_table_cost();
@@ -1188,42 +1254,34 @@ impl Kernel {
     /// start; a page is free only if nothing is mapped there, either side of a lend included. The
     /// area remembers the run it found even if the call then fails, as the kernel's does. `None`
     /// if no run fits, a request larger than the area included.
+    ///
+    /// The kernel reads the area's runs, not its tables, so R22 holds two contracts here: the runs
+    /// answer what the tables say (they are kept in step), and the search reads at most a constant
+    /// of the area's words and records, whatever the area holds.
     fn place(&mut self, pid: u64, n: u64, area: Area) -> Option<u64> {
         let (start, end) = area.pages();
         let p = self.processes.get_mut(&pid)?;
-        let last_start = end.checked_sub(n).filter(|last| *last >= start)?;
-        let first = p.placed[area as usize].clamp(start, last_start);
-        let taken = |at: u64, until: u64| p.space.range(at..until).next().map(|(v, _)| *v);
-        // From `first` up to the last start. The first page taken at or after `first` is
-        // remembered for the wrap.
-        let mut candidate = first;
-        let mut taken_after_first = None;
-        let mut found = None;
-        while candidate <= last_start {
-            match taken(candidate, candidate + n) {
-                None => {
-                    found = Some(candidate);
-                    break;
-                }
-                Some(v) => {
-                    taken_after_first.get_or_insert(v);
-                    candidate = v + 1;
-                }
-            }
+        let reference = first_fit(&p.space, start, end, p.placed[area as usize], n);
+        let mut runs = redoubt_runs::Area::new(&mut p.runs[area as usize]);
+        let mut reads = 0;
+        let last = (p.placed[area as usize] - start) as usize;
+        let found = usize::try_from(n)
+            .ok()
+            .and_then(|n| runs.place(last, n, &mut reads))
+            .map(|page| start + page as u64);
+        if found != reference {
+            self.ghost.violations.push(alloc::format!(
+                "R22: process {pid}'s runs placed {n} pages at {found:?}, its page tables at {reference:?}"
+            ));
         }
-        // Then from the area's start up to `first`: a run reaching past `first` fits only if it
-        // ends before the page found taken there.
-        let mut candidate = start;
-        while found.is_none() && candidate < first {
-            let run_end = candidate + n;
-            match taken(candidate, run_end.min(first)) {
-                Some(v) => candidate = v + 1,
-                None if taken_after_first.is_none_or(|t| run_end <= t) => found = Some(candidate),
-                None => break,
-            }
+        if reads > runs.most_reads() {
+            self.ghost.violations.push(alloc::format!(
+                "R22: process {pid}'s search read {reads} words and records, over {}",
+                runs.most_reads()
+            ));
         }
         let at = found?;
-        p.placed[area as usize] = at;
+        self.processes.get_mut(&pid)?.placed[area as usize] = at;
         Some(at)
     }
 
@@ -1259,6 +1317,9 @@ impl Kernel {
             for k in table_keys(v) {
                 *p.tables.entry(k).or_insert(0) += 1;
             }
+            if let Some((area, page)) = area_page(v) {
+                redoubt_runs::Area::new(&mut p.runs[area as usize]).set(page, false);
+            }
         }
     }
 
@@ -1267,6 +1328,11 @@ impl Kernel {
         let pt = self.page_table_cost();
         let p = self.processes.get_mut(&pid)?;
         let m = p.space.remove(&v)?;
+        if let Some((area, page)) =
+            area_page(v).filter(|_| self.mutation != Some(Mutation::R22RunsKeepUnmapped))
+        {
+            redoubt_runs::Area::new(&mut p.runs[area as usize]).set(page, true);
+        }
         let mut freed = 0;
         let keep = self.mutation == Some(Mutation::R6EmptyTableKept);
         for k in table_keys(v) {
@@ -3198,6 +3264,7 @@ impl Kernel {
                 dma: BTreeSet::new(),
                 dma_mapped: BTreeSet::new(),
                 placed: [Area::Default.pages().0, Area::Messages.pages().0],
+                runs: [Runs::new(Area::Default), Runs::new(Area::Messages)],
             },
         );
         match self.install(pid, &[h]) {

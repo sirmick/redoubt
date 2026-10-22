@@ -144,6 +144,9 @@ struct ProcessImpl {
     /// Each thread's IPC page, by object frame index, indexed by TID; 0 for none. The memory
     /// manager keeps it (`budget.rs`), reading another process's through the physmap.
     ipc: [u32; MAX_THREADS + 1],
+
+    /// The placement areas' runs (`place.rs`), read and written through the physmap.
+    runs: [u64; crate::place::HEADER_WORDS],
 }
 
 const _: () = assert!(mem::size_of::<Thread>() == 32 * mem::size_of::<usize>());
@@ -152,6 +155,9 @@ const _: () = assert!(mem::size_of::<ProcessImpl>() <= PAGE_SIZE);
 
 /// Where the header's TID -> IPC-frame table lies in its page (`budget.rs`).
 pub const IPC_TABLE_OFFSET: usize = mem::offset_of!(ProcessImpl, ipc);
+
+/// Where the header's placement runs lie in its page (`place.rs`).
+pub const RUNS_OFFSET: usize = mem::offset_of!(ProcessImpl, runs);
 
 /// Which PIDs have an address space the hardware may switch to. Which one each hart runs is in
 /// its block (`hart.rs`). The process table proper is `ptable::ProcessTable`; this is the arch

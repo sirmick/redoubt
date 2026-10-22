@@ -259,7 +259,8 @@ area. A page is free only if its entry is empty: a reservation or either side of
 taken. A request that finds no run, or is larger than the area, is `OutOfMemory`. `map_anon`
 searches for the whole run its length names and maps only the run's first `MAX_RANGE_PAGES`
 pages, so the rest is free when it returns: placement, not a promise, since nothing holds it
-free. The search looks at each page of the area at most once ([R22](#r22-range-cost)).
+free. The search reads the area's runs, a bit a page and a record a group kept with the page
+tables, so its cost is a constant whatever the area holds ([R22](#r22-range-cost)).
 `map_device` and `dma_alloc` place their mappings the same way ([devices](devices.md#map_device)). A
 receiver's lends and transfers land in a second area, 4 MiB from `DEFAULT_MESSAGE_BASE`
 (0x4000_0000), found the same way. The rest of the user layout is on
@@ -542,7 +543,7 @@ device registers, is read-write and never executable.
 
 ### R22 (range cost)
 
-Status: built · tested: bench:map-fixed-attack, bench:map-anon-search-bound, bench:sched-range-hammer, host:redoubt-model::huge_len_is_refused_promptly, host:redoubt-model::a_range_over_the_cap_is_too_large_before_any_other_check_but_its_shape, host:redoubt-model::map_anon_takes_a_run_longer_than_a_range_and_maps_one_range_of_it, mutation:R22RangeCapIgnored, mutation:R22MapAnonSearchesRange
+Status: built · tested: bench:map-fixed-attack, bench:map-anon-search-bound, bench:sched-range-hammer, host:redoubt-model::huge_len_is_refused_promptly, host:redoubt-model::a_range_over_the_cap_is_too_large_before_any_other_check_but_its_shape, host:redoubt-model::map_anon_takes_a_run_longer_than_a_range_and_maps_one_range_of_it, host:redoubt-runs::placement_is_the_old_searchs, host:redoubt-runs::dense_shapes, mutation:R22RangeCapIgnored, mutation:R22MapAnonSearchesRange, mutation:R22RunsKeepUnmapped
 
 A call that takes a range holds the kernel at most about a slice, whatever the length asks, and
 costs what the page tables hold and what the budget can pay for. The kernel runs a call to its end
@@ -568,10 +569,11 @@ with interrupts off, so every wake on the call's hart, and every other hart's en
   `MAX_LEND_PAGES` by measurement, not by definition: a lend's cap bounds what a call carries
   and the 9P `msize`, this one what a range call holds the kernel for.
   `bench:sched-range-hammer` holds it from the kernel's trace: a budget maps and unmaps in a
-  loop the longest range the kernel takes, every table made afresh each time, and every range
-  call's lock section is within the slice net of audits (774 µs at most on rv32, 761 on rv64),
-  while the latency workload's driver stand-in beside it wakes in at most 1.2 ms at p50 and 2.3 ms
-  at p99 against 15 and 50. Asked first for 2,048 pages, the hammer is refused; a kernel that
+  loop the longest range the kernel takes, every table made afresh each time, where it costs most
+  (on rv32 inside `map_anon`'s area, whose runs each page also changes, below; on rv64 across a
+  gigabyte, whose middle tables cost more), and every range call's lock section is within the
+  slice net of audits (967 µs at most on rv32, 883 on rv64), while the latency workload's driver
+  stand-in beside it wakes in at most 1.9 ms at p50 and 2.4 ms at p99 against 15 and 50. Asked first for 2,048 pages, the hammer is refused; a kernel that
   took them whole fails the case, holding the lock 96.8 ms a call on rv32 in a recorded negative
   run. A longer range is its caller's to split: the loader stub maps each segment a range at a
   time, so beamlet's 835-page text, which one call would hold the kernel 39.8 ms for on rv32
@@ -590,39 +592,36 @@ with interrupts off, so every wake on the call's hart, and every other hart's en
   well inside the case's 10 ms bound, over mappings or not.
 - A lend or transfer checks at most the pages mapped in its range, and a lend is at most
   `MAX_LEND_PAGES` (16).
-- `map_anon`'s search, which also places `map_device`, `dma_alloc` and a received message, is
-  one of three kernel costs a slice does not bound, with R10's
-  ([budgets](budgets.md#r10-destruction)) and a device owner's allocation (below), and the one a
-  process can make each of its own calls pay. It never tests a start twice:
-  when a page is taken, the next start tried is the page after it, and a missing page table skips
-  its whole span. So it looks at each page of its fixed area at most once, 65,536 for
-  `map_anon`'s and 1024 for the message area, whatever the request asks. But each start it tries
-  costs a walk of its own, so a refusal's cost follows the starts, not only the pages read: a
-  process with a page taken in every n-page window of its area makes each refused n-page request
-  try 65,536 / n starts. In a checked build under virtual time, with every page table present
-  (worst of three runs, about 5.4 µs a start on rv64 and 4.0 on rv32):
-
-  | n | pages taken | rv32 | rv64 |
-  | --- | --- | --- | --- |
-  | 16 | 4,096 | 16.4 ms | 22.1 ms |
-  | 8 | 8,192 | 23.7 ms | 35.2 ms |
-  | 4 | 16,384 | 38.4 ms | 61.3 ms |
-  | 2 | 32,768 | 67.8 ms | 113.6 ms |
-
-  The worst measured is 114 ms, and what a process can make it cost is what its budget can take:
-  a lease's 5,248 pages hold at most a page in every 13-page window, about 5,000 starts, so at
-  most about 27 ms a call on rv64 at the table's cost a start; a budget of 128 MiB, 32,768 pages, holds n =
-  2's shape, about 114 ms. `bench:map-anon-search-bound` builds the densest refused shape its own
-  budget affords with requests at the cap, n = 16 (4,096 pages taken), and bounds that shape: a
-  refusal under 45 ms and a timer wake during it under 45 ms, twice the worst its own run
-  measured (22.4 ms on rv64; `sched-lock-contention`'s search alone reads 22.6), rounded up. The bound is that shape's; the table says what a larger budget buys. A
-  `map_anon` of a run longer than a range searches for the whole run, and tries no more starts
-  than a shorter request does (at most 65,536 less the run's pages, plus one), so it adds no new
-  worst; it maps a range at most. Bounding the
-  search by construction (a search that walks once and iterates the entries, or a summary of the
-  area's free runs kept with the page tables, read a word a level as the frame bitmap is) is
-  planned.
-- A device owner's `dma_alloc` and `map_device` are the third: each is linear in the pages it
+- `map_anon`'s search, which also places `map_device`, `dma_alloc` and a received message, reads
+  the area's **runs**, not its page tables: a bit a page, set while the page's entry is empty (a
+  reservation or either side of a loan is taken), and a record a group of 512 pages, the free run
+  at its start, the one at its end and its longest (`redoubt-runs`). It reads every record at most
+  twice, from the run placed last and then from the area's start, and a group's words only where
+  the run begins: the group it starts in, and the one whose record says the run fits inside it,
+  after the 8 words of the record it settles first (below). So a search reads at most 296 words and
+  records in `map_anon`'s area and 44 in the message area, whatever the area holds and whatever the
+  request asks, and a run longer than a range costs no more. In a checked build under virtual time
+  a refused search over the densest shape a 128 MiB budget affords, a page taken in every 16-page
+  window, takes 152 µs on rv64 and 187 on rv32. `bench:map-anon-search-bound` holds a refusal under
+  400 µs and a timer wake during it under 5 ms, twice the worst measured, rounded up.
+  The runs are kept with the page tables: every leaf write that empties an entry of an area or
+  fills an empty one sets its page's bit and leaves its group's record pending, rebuilt from the
+  group's words when a change moves to another group or a search settles it first. A range's
+  pages fall in at most two groups, so a range call rebuilds at most three records: a 16-page
+  `map_fixed` in the area with every table absent holds the kernel 967 µs net on rv32, 909 outside
+  it: within the slice by 3 %, the costliest range call there is, and the one
+  `bench:sched-range-hammer` makes on rv32. A `map_anon` whose search reads every record before it
+  finds its run, which it then maps making a page table, holds it 903 µs on rv32 and 707 on rv64
+  (a page taken in every 16-page window but the last table's span; a found run reads at most about
+  one pass of the records, wherever the search starts). Per-page work added to a placement area's leaf write
+  that took it past the slice would drop the cap, by the derivation above, to 8 pages. The runs
+  cost each process two pages, charged with its header ([objects](objects.md#what-objects-cost);
+  [memory layout](memory-layout.md#per-process-kernel-data)).
+  The [model](model.md) keeps the same runs and holds their answer to its page tables' and their
+  reads to the bound; a checked build proves a space's runs equal its tables when its process
+  ends outside a destruction.
+- A device owner's `dma_alloc` and `map_device` are the one kernel cost a slice does not bound
+  besides R10's ([budgets](budgets.md#r10-destruction)): each is linear in the pages it
   asks for, `dma_alloc`'s bounded by the DMA pool (1,024 pages, about 48 ms on rv32 in a checked
   build at the per-page cost above) and `map_device`'s by the device's register region. Only a
   driver `init`'s manifest names holds a device handle that can make them, and the image's
@@ -672,14 +671,10 @@ with interrupts off, so every wake on the call's hart, and every other hart's en
 
 - **A range call's pages cost three walks each.** `map_fixed` walks the page tables once to check
   the range is free, once to make the tables it needs and once to map each page, and takes each
-  frame from the bitmap: about 47 µs a page on rv32 and 40 on rv64 in a checked build, which is
-  what sets `MAX_RANGE_PAGES` at 16 ([R22](#r22-range-cost)). A cheaper page would raise the cap
+  frame from the bitmap, and in a placement area sets its bit in the area's runs: about 47 µs a
+  page on rv32 and 40 on rv64 in a checked build, which is what sets `MAX_RANGE_PAGES` at 16
+  ([R22](#r22-range-cost)). A cheaper page would raise the cap
   and make a launch's loading faster; the loader stub's 835-page text takes 53 calls.
-- **`map_anon`'s search is up to about a hundred slices** ([R22](#r22-range-cost)): a process
-  whose area holds a page in every n-page window makes each of its own refused n-page `map_anon`
-  calls try 65,536 / n starts, a walk each: 22 ms on rv64 at n = 16 and 114 ms at n = 2 in a
-  checked build, as much as its budget can pay to take the pages. Every wake on its hart waits
-  for it (`bench:sched-lock-contention` hammers it).
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
   `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`. It harms only that
   process. The same for the runtime's thread-stack area
