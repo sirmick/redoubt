@@ -290,11 +290,11 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 187 of the 352 run under `icount`: 180 so, six with a disk
+something in it waits on the host, and 187 of the 355 run under `icount`: 180 so, six with a disk
 at `icount = "shift=3"` (the rule for a disk is above), and `bench-qemu-early-exit`, whose `icount`
-is one QEMU refuses. What keeps the other 165 on the host's clock, a case counted under each it
-has: a disk or a userland disk (138 cases); host sockets, a `forward`, a `poke`, a peer or a dial
-(70); input the host types on the console, `[[input]]` (28; under `icount` the rv32 UART lost a
+is one QEMU refuses. What keeps the other 168 on the host's clock, a case counted under each it
+has: a disk or a userland disk (141 cases); host sockets, a `forward`, a `poke`, a peer or a dial
+(72); input the host types on the console, `[[input]]` (28; under `icount` the rv32 UART lost a
 burst of it); and, for 13 of the 15 with none of these, a run whose purpose is the host's time
 (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `console-one-writer`,
 `deadline-placement` and every case named `-mttcg` but `beamlet-schedulers-mttcg` and
@@ -322,7 +322,7 @@ the host's load does not move a guest time, so its pass, and a failure the guest
 reports, are verdicts whatever ran beside it (a pinned seed adds only that the run repeats
 exactly). Its one exposure to the host's clock is `timeout_secs`, the bench's deadline for the
 boot: a case that only ran out of that deadline beside other work has no verdict, and is rerun
-alone. A boot case without `icount` (165 of them) keeps the host's clock in the guest, so load
+alone. A boot case without `icount` (168 of them) keeps the host's clock in the guest, so load
 lengthens every wait it makes: its pass is a verdict unless what it expects is a timeout or a
 bound on a time, and a failure beside other work has no verdict until it fails alone. Every
 bound a case states on a time, a step's, a probe's or a notice's, is the box's under one
@@ -2080,12 +2080,13 @@ for as long as they existed. Without the pinned `mix` the case fails, unless `--
 
 ### What it checks
 
-<details><summary>Status: built · tested (9)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
 - host:redoubt-doccheck::good_tree_is_clean
 - host:redoubt-doccheck::narrow_cases_fire
 - host:redoubt-doccheck::c1_reports_each_failure
 - host:redoubt-doccheck::c13_reports_each_failure
+- host:redoubt-doccheck::c14_reports_each_failure
 - host:redoubt-doccheck::index_over_its_ceiling_names_the_largest_pages
 - host:redoubt-doccheck::pages_scope_keeps_only_the_listed_pages
 - host:redoubt-doccheck::pages_scope_keeps_a_directory
@@ -2102,11 +2103,18 @@ every section has one well-formed status line and every test it names exists; th
 their names; that no page carries process references; that every rule ID is defined once and cited
 by its short name; that every relative link resolves; that the [security register](SECURITY.md)
 agrees with the pages; that no binary sits under `docs/`; that pages keep their templates; that
-every wire table is included once; that every page is in the table of contents; and that every
+every wire table is included once; that every page is in the table of contents; that every
 count in a `` `unsafe` (pinned) `` column equals the ceilings in `unsafe-budget.toml`
 ([the unsafe budget](#the-unsafe-budget)), summed over the budgets under a row's `Where` paths or
-read by the name in its `Ratchet budget` cell. Each rule has a small bad tree it must fire on and a
-good one it must not. `mdbook build docs` renders the book; its search index is held to the
+read by the name in its `Ratchet budget` cell; and that every count of cases this page states
+([the case file](#the-case-file): which cases run in guest time, and on a shared host) equals the
+case files, counted by class (boot cases, those under `icount` and at each setting, those on the
+host's clock and each reason that keeps them there, the `ssh-loopback` cases). A count the page
+stops stating fails too, so a count reworded is reworded in the checker. Two numerators stay by
+hand: the 13 of the 15 cases kept on the host's clock for its time, and the 13 of the 14 loopback
+cases that assert no time, since what sets them apart is a case's purpose, which no field of its
+file states. Each rule has a small bad tree it must fire on and a good one it must not.
+`mdbook build docs` renders the book; its search index is held to the
 ceiling [the book's rules](README.md#the-search-index) state, a failure naming the size and the
 three largest pages, and the check has its own small book over the ceiling.
 

@@ -1,0 +1,9 @@
+description = "A boot with an empty net table and console input"
+kind = "boot"
+
+[net]
+forward = []
+
+[[input]]
+after = "ready"
+text = "go"

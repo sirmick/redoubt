@@ -1,0 +1,2 @@
+description = "A loopback session"
+kind = "ssh-loopback"

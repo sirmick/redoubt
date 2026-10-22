@@ -1,0 +1,5 @@
+description = "A boot with a forward"
+kind = "boot"
+
+[net]
+forward = [22]

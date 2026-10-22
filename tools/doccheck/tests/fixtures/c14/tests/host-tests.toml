@@ -1,0 +1,2 @@
+description = "Host tests"
+kind = "host-tests"

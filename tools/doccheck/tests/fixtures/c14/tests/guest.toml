@@ -1,0 +1,3 @@
+description = "A boot in guest time"
+kind = "boot"
+icount = "shift=3,sleep=off"

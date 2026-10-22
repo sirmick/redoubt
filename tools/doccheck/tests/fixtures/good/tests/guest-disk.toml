@@ -1,0 +1,6 @@
+description = "A boot in guest time with a disk"
+kind = "boot"
+icount = "shift=3"
+
+[disk]
+size_kib = 64
