@@ -128,6 +128,19 @@ built with `wake-preempts`, whose timeout wake preempts the entering thread as a
 fails both on both widths, in recorded negative runs (on rv32 under `icount`: a wake took hart 0
 from budget 37).
 
+**A thread readied where its waker blocks is that hart's own pick.** A thread readied in a kernel
+entry whose runner leaves for `kmain` in that same entry (it blocks, as a `call` does once its
+server is readied, or it exits) is the pick of that hart's `kmain`: the hart sends an idle hart
+the reschedule interrupt only for the work beyond the one its own pick takes (`sched::leave`
+counts the budgets queued that no hart runs and the ready threads of budgets harts run, less
+that one). The pick is the queue's, unchanged: the lowest pass, the thread an idle hart would
+have picked; if a lower-pass budget is runnable it is picked here and an idle hart is told for
+the readied thread, as for any other. The rule changes who picks, never what, and deschedules
+nobody: the waker's slice ended for its own reason. Every other readied thread's idle wake is
+sent in the entry that made it, never later: a `send` or a `reply` leaves its sender running, so
+the thread it readies is picked by an idle hart, and the two threads of one exchange then enter
+the kernel on two harts and wait for each other's sections ([R78](#r78-fair-kernel-entry)).
+
 A device interrupt only wakes too. `sched-irq-wake` runs a driver stand-in on the goldfish RTC's
 alarm beside an equal-weight spinner, so every alarm interrupts the spinner mid-slice, and the
 oracle requires each device interrupt that claimed its source and woke the driver to return to
@@ -439,15 +452,17 @@ expiry it charges only the budget it found last, an expired item's or a wait's t
 its timeout, and with neither, only the budget it interrupted, when it ends that budget's slice.
 Against 30 sleepers a microsecond apart, the same with 64 staggered budget deadlines, and two
 waits answered at once 15 ms before their timeouts, the victim gets 473, 473 and 477 of 1000 net
-on rv64 and 468, 469 and 481 on rv32, and no timer interrupt is nobody's. The last case requires
-interrupts that found the attacker's waits ended early inside the victim's window, so the check
-cannot pass for want of them: 73 on rv64 and 19 to 20 on rv32. Its attacker holds no other
-timed wait that times out within the window: one due at every expiry walk of its process would
-reset the timer's hint each slice, and a hint 15 ms ahead would never come. A sleep of a
-microsecond has passed before its call would block, so it arms nothing; when every call armed
-the timer, each such sleep made an interrupt that found nothing. With the rest of each timer
-interrupt billed to the budget it interrupted (`timer-tail-billed`, the recorded negative run),
-the check fails on both widths: the victim pays for the attacker's waits that ended early.
+on rv64 and 468, 469 and 481 on rv32, and no timer interrupt is nobody's. In the last case a wait
+that ends early takes its hint with it ([the hart timer](timer.md#the-hart-timer)): the case
+requires that no timer interrupt inside the victim's window finds a wait ended early (none on
+either width), its program checking that the waits were answered early, so the check cannot pass
+for want of them. Its attacker holds no other timed wait that times out within the window: one
+due at every expiry walk of its process would recompute the timer's hint each slice, and a hint
+left 15 ms ahead would never come. A sleep of a microsecond has passed before its call would
+block, so it arms nothing; when every call armed the timer, each such sleep made an interrupt
+that found nothing. With the rest of each timer interrupt billed to the budget it interrupted
+(`timer-tail-billed`, the recorded negative run, recorded with each wait that ended early leaving
+its hint early), the check fails on both widths: the victim pays for the attacker's timer work.
 
 A server that works for a caller spends its own budget's CPU: no time is donated
 ([Residual risks](#residual-risks)). CPU charging is separate from page charging
@@ -1316,7 +1331,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (69)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`), and for a `process_exit` ending 254 waits that each hold the timer's hint, within two slices of the same exit on an empty system (`bench:timeout-hint-exit`) · tested (70)</summary>
 
 - bench:sched-share
 - bench:steward-latency
@@ -1345,6 +1360,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - bench:map-anon-search-bound
 - bench:scan-bounds
 - bench:call-bounds
+- bench:timeout-hint-exit
 - bench:worst-walk
 - host:redoubt-stride::the_crate_and_the_model_agree
 - host:redoubt-stride::a_broken_model_disagrees
@@ -1404,7 +1420,13 @@ budgets, or arming timeouts and deadlines gets it more. The rule's parts are the
 free weight, the preemption points, the wake rule and ranks, charging and inheritance. A slice is
 the picked thread's user time: it starts when the thread returns to user mode, so the kernel's
 work between the pick and that return, however long, never uses it up, and a picked thread runs
-its slice unless a budget deadline fires at the return.
+its slice unless a budget deadline fires at the return. A timer interrupt's expiry inside a slice
+does count against it, though billed to the payers of what it ends: bounded by the waits it ends
+and the next of each process ([timer](timer.md#residual-risks)), not by the process's other timed
+waits, but not removed: a deadline that ends 250 waits at once at full occupancy walks 26.8 ms on
+rv64 and 28.9 ms on rv32 (`bench:worst-walk`), many slices of the thread it interrupted. A slice
+that is the thread's own time, its end moved by kernel work billed to another payer, is the
+remedy.
 
 A system call's kernel time is bounded by a constant plus a term linear in the objects it names
 and in the pages it maps, at most `MAX_RANGE_PAGES` pages a call, a constant: a range call's
@@ -1861,9 +1883,11 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   rise takes none, so `sched-lock-contention-4` requires only another hart's). Under multi-threaded TCG at four harts every
   alarm traps the other three (518 to 577 such entries in a run of 200 alarms, twenty runs), each
   holding the lock about 31 µs (p50; 50 µs at p90): at most three are ahead of a wake, about
-  0.15 ms of a p99 of 4 to 12 ms. So it is not routed: sending each source to one idle hart (a busy
-  hart's threshold above the sources' priority while one idles) is the remedy if it comes to
-  matter.
+  0.15 ms of a p99 of 4 to 12 ms. So it is not routed for latency. At rest it costs more than
+  its claims: the network card's answer to one of `ipd`'s keep-alive probes is taken on 1.75 to
+  1.85 harts, and about 5 of the probe's 10 to 11 lock hand-offs follow it and the idle wake its
+  hart sends ([what a probe costs](../servers/ipd.md#the-net-tree)). Sending each source to one
+  idle hart (a busy hart's threshold above the sources' priority while one idles) is the remedy.
 - **Some cases keep one hart.** A case that does not keep its hart count runs at the count the
   bench is given (`--smp`); these keep theirs (`keep_smp`), each for one of four reasons: a proof
   that reads one hart's slices; where a checked build's audits fall; a count with no trace, which
@@ -1902,13 +1926,20 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   `sched-capped` (two, three and four harts), `sched-capped-mttcg` (two and three), `sched-lock-contention` (two),
   `sched-lock-contention-4` (four), `sched-wake-no-preempt-harts` and
   `sched-wake-no-preempt-harts-mttcg` (two) keep the counts they are about.
-- **A call within one budget crosses harts.** A wake sends an idle hart the reschedule interrupt
-  even when the woken thread's budget runs elsewhere, so a server and its client in one budget
-  hand each call and reply across two harts, each hand-off an interrupt and a wait for the lock,
-  where one hart would run them in turn. Under `icount`, `ipc-client`'s 1000 lend round trips
+- **A server's turn crosses harts.** A thread readied where its waker blocks is that hart's pick
+  ([preemption points](#preemption-points)), so a `call` hands its server to no other hart. But a
+  server's `reply` and its next `receive` are two entries, and the reply leaves the server
+  running: the client it readies is an idle hart's pick, even when the two run in one budget, so
+  every server turn ends with a hand-off across harts, an interrupt and a wait for the lock, where
+  one hart would run them in turn. A driver's forward of what its device delivered and its wait
+  for the next interrupt are two entries too. Under `icount`, `ipc-client`'s 1000 lend round trips
   against `log-server` in `system` take 2.07 s at two harts against 2.02 s at one (rv64; 2.06 and
-  2.01 s on rv32), since a hart waiting for the lock halts ([R78](#r78-fair-kernel-entry)). No
-  rule keeps a woken thread on its waker's hart. A call's or a destruction's kernel time delays every wake
+  2.01 s on rv32), since a hart waiting for the lock halts ([R78](#r78-fair-kernel-entry)); at
+  rest, about 5 of the 10 to 11 lock hand-offs of one of `ipd`'s keep-alive probes follow such a
+  `send`, `reply` or the `receive` that takes a queued send
+  ([what a probe costs](../servers/ipd.md#the-net-tree)). A server's turn made one entry (a reply
+  that receives; a receive or a wait for an interrupt that sends first) is the remedy, an addition
+  to the call ABI. A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
   dominates lease termination and follows the dying subtree and the handles that depend on it, so its target
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had

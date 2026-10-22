@@ -13,6 +13,13 @@ path = "src/bin/ipd.rs"
 # smoltcp is vendored (vendor/smoltcp, through the root manifest's [patch.crates-io]; answer
 # 174): IPv4, Ethernet and TCP, and nothing else. tools/vendor-check proves the vendored copy is
 # the one that builds, with exactly these features.
+[features]
+# Test-only, for the bench's launch-idle-probes case, and off in every default build (the image's
+# recipe names no features): a silent socket's keep-alive comes every 2 s, so that one idle window
+# holds about thirty probes and the case can count what each costs (servers/ipd.md, "The `/net`
+# tree").
+keep-alive-probes = []
+
 [dependencies]
 redoubt-rt = { path = "../../libs/rt" }
 smoltcp = { version = "=0.14.0", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp"] }

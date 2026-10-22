@@ -379,6 +379,30 @@ fn a_timed_wait_leaves_by_every_path() {
     assert!(w.0.values().all(|v| *v == 0), "{:?}", w.0);
 }
 
+/// A process's timed waits are kept by deadline, so the first is its earliest timeout: a wait goes
+/// in after every wait due no later, ties in arrival order, and leaving keeps the order.
+#[test]
+fn timed_waits_stay_in_deadline_order() {
+    for seed in 1..=100u64 {
+        let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        let mut w = Mem::default();
+        let timed = List::timed(3);
+        let mut deadlines = BTreeMap::new();
+        let mut want: Vec<u64> = Vec::new();
+        for t in 0x301..=0x340u64 {
+            if !want.is_empty() && rng.below(3) == 0 {
+                let gone = want.remove(rng.below(want.len()));
+                timed.remove(&mut w, gone);
+            }
+            deadlines.insert(t, rng.next() % 16);
+            timed.insert_by(&mut w, t, |_, r| deadlines[&r]);
+            let at = want.iter().position(|r| deadlines[r] > deadlines[&t]).unwrap_or(want.len());
+            want.insert(at, t);
+            assert_eq!(members(&w, timed), want);
+        }
+    }
+}
+
 #[test]
 fn the_groups_follow_the_model() {
     for seed in 1..=200u64 {

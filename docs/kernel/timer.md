@@ -37,10 +37,12 @@ a time never fires before `time_now` reaches it.
 
 ### The hart timer
 
-<details><summary>Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (12)</summary>
+<details><summary>Status: built · partly tested: that a budget deadline's stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (15)</summary>
 
 - bench:timeouts
 - bench:budget-deadline
+- bench:sched-timer-flood
+- bench:timeout-hint-exit
 - bench:sched-share
 - bench:sched-timer-entry
 - bench:deadline-placement
@@ -51,6 +53,7 @@ a time never fires before `time_now` reaches it.
 - host:redoubt-stride::a_hart_covers_an_item_only_when_armed_at_or_before_it
 - host:redoubt-stride::an_item_stays_covered_when_the_hart_that_covered_it_switches_away
 - host:redoubt-stride::a_payer_nowhere_item_stays_covered_across_the_covering_harts_slice_end
+- host:redoubt-ipclist::timed_waits_stay_in_deadline_order
 
 </details>
 
@@ -61,17 +64,36 @@ The kernel keeps three times (`kernel/src/time.rs`) and arms the hardware for th
 - the **earliest timeout** of any blocked thread;
 - the **earliest deadline** of any budget.
 
-The last two are hints, and a hint is only ever early. A thread that blocks with a timeout, or a
-new deadline, lowers it at once; a call that does not block lowers nothing. A wait that ends
-before its timeout, or a budget destroyed by hand, leaves it where it was. A stale hint costs one
-early interrupt and one walk, which recomputes it; nothing is missed. The
-kernel re-arms only when the earliest time changes, and only on its way to where a timer
-interrupt can be taken: the return to user mode, `kmain`'s idle, and a timer interrupt taken in
-that idle, which returns there. What changes the earliest time in between (a call that blocks
-with a timeout, a new deadline, a slice's end, the interrupt that fired) only records it. So a
-preemption arms the timer once, at the return to the thread `kmain` picks. Each arming is one
-`ecall` to the firmware, through the SBI TIME extension (`kernel/src/arch/riscv/timer_sbi.rs`).
-With nothing due at all (the kernel idle, no timeouts, no deadlines) the timer is set to never.
+The last two are hints. A thread that blocks with a timeout, or a new deadline, lowers its hint at
+once; a call that does not block lowers nothing. The timeouts' hint is exact. Each process keeps its
+waits with a deadline in deadline order, the walk to a wait's place its own call's, so the first is
+the process's earliest timeout, which it caches; a wait that ends before its timeout and was first
+raises the cache to the next one's, and a wait whose deadline was the hint marks the hint stale. A
+call, an expiry or an interrupt's delivery that ends such waits recomputes the hint from the caches
+once, one read per live process, however many it ends (an exit, a destruction, an expiry's pumps):
+at its end, and first wherever the hint is read before then. So a wait answered early leaves no walk
+behind, and the next re-arm comes by the next item; a hart already armed for the ended wait that
+passes no re-arm before it still takes that interrupt, which finds nothing. `sched-timer-flood`'s
+waits answered 15 ms before their timeouts leave no timer interrupt that finds a wait ended early
+(none on either width). `timeout-hint-exit`'s exit of a process whose 254 waits each hold the hint
+in turn, with every other PID holding a later timeout, holds the kernel 5,200 ticks longer on rv64
+and 6,765 on rv32 than the same exit on an empty system, 0.52 and 0.68 of a slice under `icount` in
+a checked build: the one recomputation, within the two slices the case allows. Two checks catch a
+hint that is not exact, and not the same faults. A cache left early makes an expiry walk that finds
+nothing due, which the trace records and the bench's `no_stale_waits_in` refuses. A hint left early
+while every cache is exact makes an interrupt whose walk skips every process, which the trace does
+not tell from one that found nothing to do: only the checked build's audit catches it, asserting at
+an entry's end that the hint is the caches' earliest, as it asserts at every audit of the lists that
+each cache is its process's first deadline. The deadlines' hint is only ever early: a budget
+destroyed by hand leaves it where it was, which costs one early interrupt and one walk that
+recomputes it; nothing is missed. The kernel re-arms only when the earliest time changes, and only
+on its way to where a timer interrupt can be taken: the return to user mode, `kmain`'s idle, and a
+timer interrupt taken in that idle, which returns there. What changes the earliest time in between
+(a call that blocks with a timeout, a new deadline, a slice's end, the interrupt that fired) only
+records it. So a preemption arms the timer once, at the return to the thread `kmain` picks. Each
+arming is one `ecall` to the firmware, through the SBI TIME extension
+(`kernel/src/arch/riscv/timer_sbi.rs`). With nothing due at all (the kernel idle, no timeouts, no
+deadlines) the timer is set to never.
 
 **Whose hart comes by an item.** Each hint carries the id of the budget that pays for its item: a
 timeout's, the blocked thread's budget; a deadline's, the dying budget's parent (the bill at the
@@ -208,8 +230,9 @@ matters: a caller whose taken call times out at the instant its server's budget 
 deadline gets `Timeout` with its lend consumed, not `Dead` with it returned.
 
 Finding what is due reads the waits with a deadline of each process whose cached earliest
-timeout has come, which each process keeps on a list of its own, and walks the deadline list.
-Both are skipped while the hints are in the future. After expiry the kernel recomputes both hints,
+timeout has come, which each process keeps on a list of its own in deadline order, up to the
+first still to come, and walks the deadline list. Both are skipped while the hints are in the
+future. After expiry the kernel recomputes both hints,
 and the timer is armed for them on the way out (above).
 
 ### Wall-clock time and time sync
@@ -291,22 +314,27 @@ deadline itself. The only delay is the kernel work already in progress when the 
 
 Status: built · tested: bench:sched-timer-flood, bench:deadline-flood-billed, bench:sched-exit-churn, bench:deadline-placement, bench:deadline-flood-billed-traced-mttcg, bench:sched-exit-churn-mttcg, mutation:R12TimerWorkUnbilled
 
-R12 is owned by [scheduling](scheduling.md#r12-scheduling); this is how its charging applies to
-the timer's work. Each expired item's work is billed under it: a timeout to its thread's budget, a deadline's
-whole destruction to the dying budget's parent, after its carve returns, or to the nearest
-ancestor with free weight above 0 ([scheduling](scheduling.md#charging)). The one walk that
-finds what is due, and its ordering by deadline, is billed in equal shares to the items it
-handles, each with its own ending, so a budget pays for its own share of a shared instant, not a
-neighbour's. The timer is armed for a timeout only when its thread blocks, so a call whose timeout
-has passed, or that is answered at once, arms nothing. A wait that ends before its timeout leaves
-the timer early; the walk that finds it gone is billed to the waiting thread's budget. The rest of
-the entry, the timer's own handling, goes to the budget whose item or wait it found last, so the
-budget the timer interrupted pays for none of it. Each bill closes its interval at the tick that
-opens the next, and the last opens the rest of the entry's, so a timeout's bill never leaves its
-own handling between two intervals, nobody's; a deadline's destruction still does
-([scheduling](scheduling.md#residual-risks)). So a process that arms many timers a
-microsecond apart, or creates many budgets with staggered deadlines, spends its own CPU share, not
-a neighbour's.
+R12 is owned by [scheduling](scheduling.md#r12-scheduling); this is how its charging applies to the
+timer's work. Each expired item's work is billed under it: a timeout to its thread's budget, a
+deadline's whole destruction to the dying budget's parent, after its carve returns, or to the
+nearest ancestor with free weight above 0 ([scheduling](scheduling.md#charging)). The one walk that
+finds what is due, and its ordering by deadline, is billed in equal shares to the items it handles,
+each with its own ending, so a budget pays for its own share of a shared instant, not a neighbour's.
+The timer is armed for a timeout only when its thread blocks, so a call whose timeout has passed, or
+that is answered at once, arms nothing. A wait that ends before its timeout leaves nothing for the
+timer ([the hart timer](#the-hart-timer)): its cache's rise is one read, and the hint's
+recomputation one read per live process, once in the call or expiry that ended it however many such
+waits it ended, and so that one's payer's; the walk to a wait's place among its process's timed
+waits is the blocking call's own. An expiry reads a process's waits due and the next, not every
+timed wait, so its time is the waits it ends; it falls inside the slice of the thread the timer
+interrupted, though billed to the payers ([scheduling](scheduling.md#r12-scheduling)). The rest of
+the entry, the timer's own handling, goes to the budget whose item it found last, so the budget the
+timer interrupted pays for none of it. Each bill closes its interval at the tick that opens the
+next, and the last opens the rest of the entry's, so a timeout's bill never leaves its own handling
+between two intervals, nobody's; a deadline's destruction still does
+([scheduling](scheduling.md#residual-risks)). So a process that arms many timers a microsecond
+apart, or creates many budgets with staggered deadlines, spends its own CPU share, not a
+neighbour's.
 
 On several harts the bill is right, and the hart is the payer's where the payer runs: a hart's
 timer comes by a timeout or a deadline only if it runs the budget that pays for it, or no hart
@@ -428,16 +456,24 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
   is TCB ([boot](boot.md)).
 - **Expiry walks the processes.** An expiry reads every live process's earliest timeout
   (`MAX_PROCESS_COUNT`, 511, a compile-time constant no process can change) and, in those whose
-  earliest timeout has come, only their waits with a deadline, never their other threads, plus
-  the deadline list. One walk finds every wait due and orders them by deadline, so a deadline
-  that ends many waits at once walks once, and ordering its R waits takes R log R steps; both are
-  billed in equal shares to the waits it found. At full occupancy, every PID in use with every
-  thread, the walk that finds 250 waits due at once takes 26.8 ms on rv64 and 28.9 ms on rv32,
-  within R12's 30 (`bench:worst-walk`). A wait the walk finds ended early is billed to its
-  budget. A budget destroyed before its deadline leaves the timer early: one walk of the deadline
-  list, nobody's, for each such destruction, which its destroyer pays for in full. A wait that a
-  deadline's destruction fails during the same expiry leaves its process's earliest timeout
-  early: one more early interrupt, billed as a wait that ended early.
+  earliest timeout has come, only their waits due and the first still to come, never their other
+  threads or their waits not yet due, plus the deadline list. So a process's timed waits still to
+  come cost an expiry one read: with 253 of one process's waits pending and every PID in use, a
+  timer interrupt's expiry takes 5 µs median and 537 µs at most before its slice decision on rv64 in
+  a checked build (`bench:timeout-hint-exit`'s fill), where reading every timed wait of the process
+  takes 1,327 µs median; the exact caches it rests on are what `bench:sched-timer-flood` checks,
+  with no timer interrupt finding a wait ended early. One walk finds every wait due and orders them
+  by deadline, so a deadline that ends many waits at once walks once, and ordering its R waits takes
+  R log R steps; both are billed in equal shares to the waits it found. At full occupancy, every PID
+  in use with every thread, the walk that finds 250 waits due at once takes 26.8 ms on rv64 and 28.9
+  ms on rv32, within R12's 30 (`bench:worst-walk`). A budget destroyed before its deadline leaves
+  the timer early: one walk of the deadline list, nobody's, for each such destruction, which its
+  destroyer pays for in full. Keeping the timeouts' hint exact costs a call that blocks one step per
+  wait of its own process due no later (at most `MAX_THREADS`, 255, its own threads), and an entry
+  that ends a wait holding the hint one read per live process (at most 511), once however many it
+  ends, as an expiry's walk reads them: 0.52 of a slice at full occupancy, every PID holding a
+  timeout, on rv64 and 0.68 on rv32 (`bench:timeout-hint-exit`, whose exit of 254 timed waits holds
+  the kernel 17 to 19 ms in all, the rest its own threads' ends, as on an empty system).
 - **Equal-instant order is argued, not attacked.** Timeouts before deadlines at one instant is
   checked by the model's mutation only; no bench case lands a timeout and a deadline on the same
   microsecond.
@@ -454,8 +490,13 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
   depends on a thread choosing to enter.
 - **Expire first, at every entry.** A deadline that passed must win over whatever the entering
   thread asks for; checking first makes that true at every entry without a special case per call.
-- **Hints that are only ever early.** Lowering a hint is cheap and raising it would need a walk.
-  An early hint costs one spare interrupt; a late one would break I13. So the kernel only lowers.
+- **Exact timeouts, early deadlines.** A late hint would break I13; an early one costs a spare
+  interrupt and a walk. A timeout ends early all the time (every call answered before it), and an
+  early hint left for each would wake a hart for nothing at rest and move the timer twice, so the
+  timeouts' hint is kept exact: the order a process keeps its timed waits in makes raising its
+  cache one read, paid by the call that blocks, and the hint is recomputed only in an entry that
+  ended the wait that held it, once. A deadline ends early only by a destruction, so its hint is
+  only lowered.
 - **Relative timeouts, absolute deadlines.** A timeout is how long the caller will wait from the
   moment it asks, so it is relative and cannot be stale. A deadline is when a lease ends,
   whatever happens to its creator meanwhile, so it is absolute.

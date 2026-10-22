@@ -6,7 +6,7 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 11048
+max_lines = 11095
 
 [[crate]]
 name = "loader"
@@ -61,7 +61,7 @@ max_lines = 200
 [[crate]]
 name = "libs/ipclist"
 paths = ["libs/ipclist/src"]
-max_lines = 532
+max_lines = 544
 
 [[crate]]
 name = "libs/signing"
@@ -171,9 +171,11 @@ paths = ["servers/netd/src"]
 max_lines = 1590
 
 [[crate]]
+# Includes the test-only feature keep-alive-probes (src/stack.rs, its constant), off in every
+# default build.
 name = "servers/ipd"
 paths = ["servers/ipd/src"]
-max_lines = 2988
+max_lines = 2992
 
 [[crate]]
 name = "servers/init"

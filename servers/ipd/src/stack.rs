@@ -67,7 +67,7 @@ pub const PROBES: u64 = 3;
 /// A silent socket's keep-alive interval, counted from the last segment sent: [`PROBES`] probes
 /// fit before the timeout, so a socket survives `PROBES - 1` answers lost in a row (`netd` drops a
 /// frame `ipd` does not take in time: servers/ipd.md, "The `/net` tree").
-pub const KEEP_ALIVE: Duration = Duration::from_micros(IDLE_TIMEOUT.total_micros() / (PROBES + 1));
+pub const KEEP_ALIVE: Duration = Duration::from_micros(KEEP_ALIVE_US);
 /// Ephemeral ports: drawn at random from here, unique among every live socket.
 pub const EPHEMERAL: core::ops::RangeInclusive<u16> = 49152..=65535;
 /// Draws of an ephemeral port before `too_many`.
@@ -1072,3 +1072,9 @@ pub fn classify(frame: &[u8], net: &Net) -> Class {
     }
     Class::Other
 }
+
+/// [`KEEP_ALIVE`]: the timeout over `PROBES` + 1; test-only (`keep-alive-probes`), every 2 s, for
+/// the bench's count of what a probe costs. Here, at the end of the file, so that a default build's
+/// lines, and so its binary, are unchanged.
+const KEEP_ALIVE_US: u64 =
+    if cfg!(feature = "keep-alive-probes") { 2_000_000 } else { IDLE_TIMEOUT.total_micros() / (PROBES + 1) };

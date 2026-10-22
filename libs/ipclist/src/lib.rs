@@ -344,6 +344,21 @@ impl List {
         self.insert_after(w, last, r)
     }
 
+    /// Link `r` into a list ordered by `key`, after every member whose key is not greater: the
+    /// order stays sorted, and stable. One step per member before it.
+    pub fn insert_by<W: Words, K: Ord>(&self, w: &mut W, r: u64, key: impl Fn(&W, u64) -> K) {
+        let k = key(w, r);
+        let mut after = 0;
+        loop {
+            let next = if after == 0 { self.first(w) } else { self.next(w, after) };
+            if next == 0 || key(w, next) > k {
+                break;
+            }
+            after = next;
+        }
+        self.insert_after(w, after, r)
+    }
+
     /// Unlink `r`, which is on the list.
     pub fn remove(&self, w: &mut impl Words, r: u64) {
         let (prev, next) = (self.prev(w, r), self.next(w, r));

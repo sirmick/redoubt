@@ -67,10 +67,10 @@
 //! allowed is to the interrupted budget, and only if the entry ends its slice (it returns to
 //! `kmain`). So the budget it interrupted pays for its own items or its slice's end, never for
 //! another budget's timer. The check counts the interrupts that found neither and ended no slice,
-//! nobody's, inside each share's window (`HART-SHARE`), and those that found another budget's wait
-//! ended early; a case can require some of the latter in a share's window
-//! (`stale_waits_in=<share>`), so the
-//! check it runs cannot pass for want of the interrupts it is about. It reports the interrupts
+//! nobody's, inside each share's window (`HART-SHARE`), and those that found a wait ended early,
+//! which a wait's early end no longer leaves behind (kernel/timer.md, "The hart timer"); a case
+//! whose program ends waits early requires none in a share's window (`no_stale_waits_in=<share>`).
+//! It reports the interrupts
 //! that charged a budget other than the one they interrupted, and a case bounds those inside a
 //! share's window (`foreign_timer_in=<share>:<per mille>`, [`foreign_timer`]): another budget's
 //! timer work in the judged budget's time, judged on two harts or more (kernel/timer.md, "R12
@@ -339,8 +339,8 @@ pub struct Summary {
     pub expiry_charges: Vec<ExpiryCharge>,
     /// When each timer interrupt that found neither and ended no slice came, µs, in trace order.
     pub timer_empty: Vec<u64>,
-    /// When each timer interrupt that found another budget's wait ended early came, µs.
-    pub timer_stale_foreign: Vec<u64>,
+    /// When each timer interrupt that found a wait ended early came, µs.
+    pub timer_stale_at: Vec<u64>,
     /// Device interrupts from user mode checked; those that claimed nothing (another hart claimed
     /// the source first); and those a deadline answered at their entry preempted before their
     /// claim.
@@ -456,9 +456,7 @@ fn check_timer_entry(e: &TimerEntry, to_user: bool, sum: &mut Summary) -> Result
                 sum.timer_expiring += 1;
             } else {
                 sum.timer_stale += 1;
-                if e.interrupted != Some(last) {
-                    sum.timer_stale_foreign.push(e.at);
-                }
+                sum.timer_stale_at.push(e.at);
             }
             for &(payer, ticks, after) in charged.filter(|c| what == 2 || c.2) {
                 if payer != last {
@@ -1522,6 +1520,42 @@ fn check_range_sections(log: &str, sections: &[Section]) -> Result<Option<String
     let each: Vec<_> =
         longest.iter().map(|(c, (net, n))| format!("{} {n}, longest {net}", cause_name(*c))).collect();
     Ok(Some(format!("range sections: every one within {bound} ticks net of audits: {}", each.join("; "))))
+}
+
+/// **A process's exit ending timed waits does not grow with the processes that exist**
+/// (kernel/timer.md, "The hart timer"; kernel/scheduling.md, R12), with `hold-trace`: the program
+/// prints two windows of `rdtime` ticks and a margin (`EXIT-SECTIONS <start> <end> <start> <end>
+/// <margin>`), each holding the same exit, the first on an empty system and the second with every
+/// PID in use, and the second window's longest `process_exit` section, net of audits, is held to
+/// the first's plus the margin. Each window must hold one. `None` without the line.
+fn check_exit_sections(log: &str, sections: &[Section]) -> Result<Option<String>, String> {
+    let Some(line) = log.lines().map(|l| l.trim_end_matches('\r')).find(|l| l.starts_with("EXIT-SECTIONS "))
+    else {
+        return Ok(None);
+    };
+    let f: Vec<u64> =
+        line["EXIT-SECTIONS ".len()..].split_whitespace().filter_map(|x| x.parse().ok()).collect();
+    let [s0, e0, s1, e1, margin] = f[..] else { return Err(format!("malformed {line:?}")) };
+    let exit = redoubt_sys::Number::ProcessExit as u64;
+    let longest = |start: u64, end: u64| {
+        sections
+            .iter()
+            .filter(|s| s.cause == exit && s.from >= start && s.to <= end)
+            .map(|s| s.to - s.from - s.audits)
+            .max()
+            .ok_or("exit sections: a window holds no `process_exit`")
+    };
+    let (empty, filled) = (longest(s0, e0)?, longest(s1, e1)?);
+    if filled > empty + margin {
+        return Err(format!(
+            "exit sections: the exit with every PID in use held the lock {filled} ticks net of audits, above \
+             the exit on an empty system's {empty} plus {margin}"
+        ));
+    }
+    Ok(Some(format!(
+        "exit sections: the exit with every PID in use {filled} ticks net of audits, on an empty system \
+         {empty}, within {margin} of it"
+    )))
 }
 
 /// The fixture fixes both the start order and the sample plan. This parser rejects missing or
@@ -3716,13 +3750,13 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
 /// share the program printed is judged on the kernel's charges in the trace
 /// ([`check_charged_share`]), and each share across harts on the same charges net of lock waits
 /// ([`check_hart_share`]), with the timer interrupts inside its window nobody paid for and those
-/// that found another budget's wait ended early beside; `stale_waits_in=<share>` requires one of
-/// the latter; `foreign_timer_in=<share>:<N>` bounds the ticks of those that interrupted the
-/// judged budget and charged another at N of 1000 of its charges, on two harts or more
-/// ([`foreign_timer`]). With `hart_shares_from=N`, the shares across harts are recorded, not
-/// judged, on a trace of fewer than N harts. With `hold-trace` too, `idle_sections_max=<mark>:<N>`
-/// bounds the kernel sections entered from the idle that found nothing to do, from the first run
-/// of the budget of mark weight `mark` on ([`idle_sections_that_found_nothing`]).
+/// that found a wait ended early beside; `no_stale_waits_in=<share>` requires none of the latter;
+/// `foreign_timer_in=<share>:<N>` bounds the ticks of those that interrupted the judged budget and
+/// charged another at N of 1000 of its charges, on two harts or more ([`foreign_timer`]). With
+/// `hart_shares_from=N`, the shares across harts are recorded, not judged, on a trace of fewer than
+/// N harts. With `hold-trace` too, `idle_sections_max=<mark>:<N>` bounds the kernel sections
+/// entered from the idle that found nothing to do, from the first run of the budget of mark weight
+/// `mark` on ([`idle_sections_that_found_nothing`]).
 /// `round` requires the budget the program marks to run before any other budget is picked twice
 /// ([`check_round`]). `irq_wake_no_preempt=N` needs N device interrupts that woke a budget and
 /// returned to their runner, which ran to its slice's end ([`check_irq_wake_no_preempt`]);
@@ -3730,7 +3764,8 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
 /// mark weight `mark`, its device's owner ([`check_irq_billed_to`]); `deadline_preempts=N` needs
 /// every timer interrupt that destroyed another budget by its deadline to preempt its runner, and
 /// N of them ([`check_deadline_preempts`]). A `CALL-BOUNDS` line in the log is judged on a
-/// `hold-trace` kernel's sections ([`check_call_bounds`]). `deadline_notice_in_launch=1` needs
+/// `hold-trace` kernel's sections ([`check_call_bounds`]), as is an `EXIT-SECTIONS` line
+/// ([`check_exit_sections`]). `deadline_notice_in_launch=1` needs
 /// every deadline notice's deadline inside a `LATENCY-LAUNCH` window the steward printed
 /// ([`deadline_notices_in_launches`]). `record=<width>:<harts>:<group>:<measure>:<quantile>`
 /// names one cell the case records rather than judges (the bench appends the boot's `width=`):
@@ -3828,7 +3863,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             lift_delay = true;
             continue;
         }
-        if let Some(share) = arg.strip_prefix("stale_waits_in=") {
+        if let Some(share) = arg.strip_prefix("no_stale_waits_in=") {
             stale_in.push(share);
             continue;
         }
@@ -3913,6 +3948,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         .transpose()?;
     let call_bounds_proof = check_call_bounds(log, &sum.sections)?;
     let range_sections_proof = check_range_sections(log, &sum.sections)?;
+    let exit_sections_proof = check_exit_sections(log, &sum.sections)?;
     if cluster_old_control && !cluster {
         return Err("cluster_old_control requires cluster".into());
     }
@@ -4120,7 +4156,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     // Each share across harts, of the kernel's charges net of lock waits.
     let hart_shares = hart_shares(log)?;
     if let Some(name) = stale_in.iter().find(|n| !hart_shares.iter().any(|s| s.name == **n)) {
-        return Err(format!("stale_waits_in names {name}, but the log holds no such share"));
+        return Err(format!("no_stale_waits_in names {name}, but the log holds no such share"));
     }
     // On a trace of fewer harts than `hart_shares_from` each is recorded, not judged: under `icount`
     // a hart's clock counts the other harts' turns, which can land in time billed to nobody.
@@ -4137,15 +4173,15 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             (line, met)
         };
         let inside = |t: &&u64| (s.window.0..s.window.1).contains(*t);
-        let stale = sum.timer_stale_foreign.iter().filter(inside).count();
-        let stale_missed = stale_in.contains(&s.name) && stale == 0;
+        let stale = sum.timer_stale_at.iter().filter(inside).count();
+        let stale_missed = stale_in.contains(&s.name) && stale > 0;
         let bound = foreign_in.iter().find(|(n, _)| *n == s.name).map(|(_, b)| *b);
         let (foreign, foreign_met) = foreign_timer(&records, &sum, &s, &judged, bound, harts);
         missed |= !met || stale_missed || !foreign_met;
         lines.push(format!(
-            "{line}; {} timer interrupts nobody's, {stale} finding another budget's wait ended early{}; {foreign}",
+            "{line}; {} timer interrupts nobody's, {stale} finding a wait ended early{}; {foreign}",
             sum.timer_empty.iter().filter(inside).count(),
-            if stale_missed { " (none, but the case requires some)" } else { "" }
+            if stale_missed { " (the case requires none)" } else { "" }
         ));
     }
     if let Some((w, bound)) = idle_sections {
@@ -4240,9 +4276,16 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     if let Some(proof) = lift_delay_proof {
         report.push(proof);
     }
-    for proof in [irq_wake_proof, irq_bill_proof, deadline_proof, call_bounds_proof, range_sections_proof]
-        .into_iter()
-        .flatten()
+    for proof in [
+        irq_wake_proof,
+        irq_bill_proof,
+        deadline_proof,
+        call_bounds_proof,
+        range_sections_proof,
+        exit_sections_proof,
+    ]
+    .into_iter()
+    .flatten()
     {
         report.push(proof);
     }
@@ -7090,18 +7133,19 @@ mod tests {
         };
         let v = run(&with(&[('I', 44, 125), ('O', 0, 1)]), "");
         assert!(v.as_ref().is_ok_and(|s| s.contains("1 timer interrupts nobody's, 0 finding")), "{v:?}");
-        // A case can require interrupts that found another budget's wait ended early in a share's
-        // window: one inside (budget 44 interrupted, 9's wait) meets it; none fails it.
-        let log = with(&[('I', 44, 125), ('E', 9, 2), ('B', 9, 9), ('O', 0, 1)]);
-        let v = run(&log, "stale_waits_in=v");
-        assert!(
-            v.as_ref().is_ok_and(|s| s.contains("target met (220 <= share <= 280); 0 timer interrupts nobody's, 1 finding another budget's wait ended early")),
-            "{v:?}"
-        );
-        let log = with(&[('I', 9, 125), ('E', 9, 2), ('B', 9, 9), ('O', 0, 1)]);
-        let v = run(&log, "stale_waits_in=v");
-        assert!(v.as_ref().is_err_and(|e| e.contains("none, but the case requires some")), "{v:?}");
-        assert!(run(&log, "stale_waits_in=nobody").is_err_and(|e| e.contains("no such share")));
+        // A case can require no interrupt that found a wait ended early in a share's window: none
+        // meets it; one inside fails it, another budget's wait (budget 44 interrupted, 9's) or the
+        // interrupted budget's own.
+        let v = run(&with(&[('I', 44, 125), ('O', 0, 1)]), "no_stale_waits_in=v");
+        assert!(v.as_ref().is_ok_and(|s| s.contains("0 finding a wait ended early;")), "{v:?}");
+        for interrupted in [44, 9] {
+            let log = with(&[('I', interrupted, 125), ('E', 9, 2), ('B', 9, 9), ('O', 0, 1)]);
+            let v = run(&log, "");
+            assert!(v.as_ref().is_ok_and(|s| s.contains("1 finding a wait ended early;")), "{v:?}");
+            let v = run(&log, "no_stale_waits_in=v");
+            assert!(v.as_ref().is_err_and(|e| e.contains("the case requires none")), "{v:?}");
+        }
+        assert!(run(&with(&[]), "no_stale_waits_in=nobody").is_err_and(|e| e.contains("no such share")));
     }
 
     /// Inside a share's window, the timer interrupts that interrupted the judged budget and
@@ -7425,6 +7469,37 @@ mod tests {
         assert!(check_range_sections(log, &sections[1..3]).is_err_and(|e| e.contains("no `map_fixed`")));
         assert!(check_range_sections("no line\n", &sections).unwrap().is_none());
         assert!(check_range_sections("RANGE-SECTIONS 1 2\n", &sections).is_err());
+    }
+
+    /// The exit with every PID in use is held to the same exit's longest section on an empty
+    /// system plus the margin, net of audits, and each window must hold an exit.
+    #[test]
+    fn an_exit_is_held_to_its_empty_system_section() {
+        use redoubt_sys::Number::{ProcessExit, Receive};
+        let section = |from, to, cause: redoubt_sys::Number, audits| Section {
+            from,
+            to,
+            hart: 0,
+            cause: cause as u64,
+            audits,
+        };
+        let log = "EXIT-SECTIONS 100 1000 2000 3000 50\n";
+        // Within the margin net of audits, and a longer section outside the windows or of another
+        // call, pass.
+        let sections = [
+            section(100, 300, ProcessExit, 0),
+            section(2000, 2280, ProcessExit, 30),
+            section(2300, 2900, Receive, 0),
+            section(3000, 9000, ProcessExit, 0),
+        ];
+        let ok = check_exit_sections(log, &sections).unwrap().unwrap();
+        assert!(ok.contains("in use 250 ticks") && ok.contains("empty system 200"), "{ok}");
+        // One tick over is refused, as is a window with no exit.
+        let over = [sections[0], section(2000, 2281, ProcessExit, 30)];
+        assert!(check_exit_sections(log, &over).is_err_and(|e| e.contains("empty system's 200 plus 50")));
+        assert!(check_exit_sections(log, &sections[1..]).is_err_and(|e| e.contains("no `process_exit`")));
+        assert!(check_exit_sections("no line\n", &sections).unwrap().is_none());
+        assert!(check_exit_sections("EXIT-SECTIONS 1 2 3 4\n", &sections).is_err());
     }
 
     /// Each call's longest section after the fill is held to the factor of its empty-system

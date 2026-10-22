@@ -464,13 +464,42 @@ fn timed(pid: Pid) -> List {
 }
 
 /// `(pid, tid)`'s wait has ended: it leaves its process's timed waits, if it was on them (a wait
-/// with no deadline never was).
-fn untime(mm: &MemoryManager, pid: Pid, tid: TID) {
-    timing(|| {
+/// with no deadline never was). The list is kept by deadline ([`mark`]), so a wait that leaves its
+/// head held the process's earliest timeout: the cache rises to the next wait's deadline, or to
+/// never. A wait whose deadline was the timer's hint marks the hint for recomputing, once at the
+/// entry's end (`time::timeout_ended`). So a wait that ends before its timeout leaves no early
+/// interrupt behind (kernel/timer.md, "The hart timer").
+fn untime(mm: &mut MemoryManager, pid: Pid, tid: TID) {
+    let ended = timing(|| {
         let (w, me) = (&mut Frames(mm), tref(pid, tid));
-        if timed(pid).contains(w, me) {
-            timed(pid).remove(w, me);
+        if !timed(pid).contains(w, me) {
+            return None;
         }
+        let first = timed(pid).first(w) == me;
+        let deadline = w.deadline(me);
+        timed(pid).remove(w, me);
+        let next = first.then(|| match timed(pid).first(w) {
+            0 => u64::MAX,
+            r => w.deadline(r),
+        });
+        Some((deadline, next))
+    });
+    let Some((deadline, next)) = ended else { return };
+    // Lowered to a wait's deadline as it is listed ([`mark`]), raised only here.
+    if let (Some(next), Some(a)) = (next, mm.account_mut(pid)) {
+        a.earliest_timeout = a.earliest_timeout.max(next);
+    }
+    crate::time::timeout_ended(deadline);
+}
+
+/// The earliest of every process's earliest timeout, with the budget that pays for it: the
+/// timer's hint recomputed from the caches, one read per live process and no list walked.
+pub fn earliest_timeouts(mm: &MemoryManager) -> redoubt_stride::Hint {
+    mm.live_pids().fold(redoubt_stride::Hint::NONE, |hint, pid| match mm.account(pid) {
+        Some(a) if a.earliest_timeout != u64::MAX => {
+            hint.lowered(a.earliest_timeout, mm.budget_of(pid).map(|f| mm.budget_id(f)))
+        }
+        _ => hint,
     })
 }
 
@@ -619,7 +648,7 @@ fn is_running(ss: &ProcessTable, pid: Pid, tid: TID) -> bool {
 
 /// Hand a thread its result. One that was blocked goes back on the ready list; the thread making
 /// the call was never off it.
-fn wake(ss: &mut ProcessTable, mm: &MemoryManager, pid: Pid, tid: TID, result: Result<Return, Error>) {
+fn wake(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID, result: Result<Return, Error>) {
     // The wait-and-wake diagnostic, beside `settle`'s block record: gated out of every judged
     // build (no case sets `block-trace`).
     #[cfg(feature = "block-trace")]
@@ -653,7 +682,7 @@ fn wake(ss: &mut ProcessTable, mm: &MemoryManager, pid: Pid, tid: TID, result: R
 /// moment ago.
 fn answer_record<const N: usize>(
     ss: &mut ProcessTable,
-    mm: &MemoryManager,
+    mm: &mut MemoryManager,
     pid: Pid,
     tid: TID,
     slots: &[u64; N],
@@ -673,13 +702,18 @@ fn answer_record<const N: usize>(
 fn mark(mm: &mut MemoryManager, pid: Pid, tid: TID, wait: Wait, timeout: u64) {
     // Timeouts are relative microseconds, added with saturation, so `FOREVER` never expires.
     let deadline = crate::time::now_us().saturating_add(timeout);
+    // A wait with a deadline is on its process's timed waits until it ends (`wake`,
+    // `end_thread`), so an expiry reads only those. They are kept by deadline, so the first is the
+    // process's earliest timeout, its cache ([`untime`]): the walk to its place is this thread's
+    // own call's.
+    untime(mm, pid, tid);
     set_tword(mm, pid, tid, W_WAIT, wait as u64);
     set_tword(mm, pid, tid, W_DEADLINE, deadline);
-    // A wait with a deadline is on its process's timed waits until it ends (`wake`,
-    // `end_thread`), so an expiry reads only those.
-    untime(mm, pid, tid);
     if deadline != u64::MAX {
-        timing(|| timed(pid).push_front(&mut Frames(mm), tref(pid, tid)));
+        timing(|| timed(pid).insert_by(&mut Frames(mm), tref(pid, tid), |w, r| w.deadline(r)));
+        if let Some(a) = mm.account_mut(pid) {
+            a.earliest_timeout = a.earliest_timeout.min(deadline);
+        }
     }
 }
 
@@ -707,9 +741,6 @@ fn settle(
         return Ok(None);
     }
     if s.deadline != u64::MAX {
-        if let Some(a) = mm.account_mut(pid) {
-            a.earliest_timeout = a.earliest_timeout.min(s.deadline);
-        }
         crate::time::note_timeout(s.deadline, mm.budget_of(pid).map(|f| mm.budget_id(f)));
     }
     // The two-hart wedge diagnostic: which budget blocks here, waiting on what. Gated out of
@@ -2054,17 +2085,19 @@ pub struct Due {
     /// (`time.rs`).
     pub next: redoubt_stride::Hint,
     /// The last process whose cached earliest timeout had come with none of its threads due: a
-    /// wait that ended before its timeout left the timer early, and this walk is its
-    /// (kernel/timer.md, "R12 (scheduling) for timer work").
+    /// cache left early, and this walk is its (kernel/timer.md, "R12 (scheduling) for timer
+    /// work"). None while the caches are exact ([`untime`]): it is the witness, recorded in the
+    /// trace (`sched::trace::expired`), by which the bench's `no_stale_waits_in` requires none.
     pub stale: Option<Pid>,
 }
 
 /// I13: an expiry's one walk at `now`. Only the timed waits of processes whose cached earliest
-/// timeout has come are read ([`timed`]), never their other threads; every wait due is linked on
-/// the due list, and each such cache is set to the earliest of its process's deadlines still to
-/// come, since every wait listed ends in this expiry or has ended. Then the list is sorted by
-/// deadline, then (pid, tid): the order the timer ends them in (kernel/timer.md, "Expiry"), in R
-/// log R steps for R waits.
+/// timeout has come are read ([`timed`]), never their other threads, and of those only the ones
+/// due and the first still to come, the list being kept by deadline; every wait due is linked on
+/// the due list. Each such cache rises as its due waits end in this expiry ([`untime`]), to the
+/// earliest of its process's deadlines still to come, which the hint takes. Then the list is
+/// sorted by deadline, then (pid, tid): the order the timer ends them in (kernel/timer.md,
+/// "Expiry"), in R log R steps for R waits.
 pub fn collect_due(mm: &mut MemoryManager, now: u64) -> Due {
     let mut due = Due { count: 0, next: redoubt_stride::Hint::NONE, stale: None };
     for pid in mm.live_pids() {
@@ -2080,21 +2113,21 @@ pub fn collect_due(mm: &mut MemoryManager, now: u64) -> Due {
         let mut r = list.first(w);
         while r != 0 {
             let deadline = w.deadline(r);
-            if deadline <= now {
-                found = true;
-                due.count += 1;
-                timing(|| List::due().push_back(w, r));
-            } else {
-                exact = exact.min(deadline);
+            if deadline > now {
+                exact = deadline;
                 due.next = due.next.lowered(deadline, payer);
+                break;
             }
+            found = true;
+            due.count += 1;
+            timing(|| List::due().push_back(w, r));
             r = list.next(w, r);
         }
         if !found {
             due.stale = Some(pid);
-        }
-        if let Some(a) = mm.account_mut(pid) {
-            a.earliest_timeout = exact;
+            if let Some(a) = mm.account_mut(pid) {
+                a.earliest_timeout = exact;
+            }
         }
     }
     timing(|| List::due().sort(&mut Frames(mm), |w, r| (w.deadline(r), r)));
@@ -2139,22 +2172,33 @@ fn poke_receivers(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
 
 // --- The checked build's audit -----------------------------------------------------------------------
 
-/// The checked build's audit of every IPC list from the threads ([`check_lists`]), if one changed
-/// since the last, at the end of each outermost kernel entry that can change one: a system call
-/// (`redoubt::handle`), an expiry (`time::expire_due`) and an interrupt's delivery
-/// (`device::irq_fired`). Never inside a destruction or a pump, which nest in those. An entry that
-/// ends otherwise (a fault that kills) leaves it to the next. Like every audit, it neither moves the
-/// schedule nor counts in a latency target (`sched::audit`). The full audit, from the objects, runs
-/// at the full-audit points ([`check_all`]).
+/// The timeouts' hint settled (`time::settle_timeouts`), then the checked build's audit of every
+/// IPC list from the threads ([`check_lists`]), if one changed since the last, at the end of each
+/// outermost kernel entry that can change one: a system call (`redoubt::handle`), an expiry
+/// (`time::expire_due`) and an interrupt's delivery (`device::irq_fired`). Never inside a
+/// destruction or a pump, which nest in those. An entry that ends otherwise (a fault that kills)
+/// leaves both to the next reader of the hint and the next audit. Like every audit, it neither
+/// moves the schedule nor counts in a latency target (`sched::audit`). The full audit, from the
+/// objects, runs at the full-audit points ([`check_all`]).
 pub fn audit(mm: &MemoryManager) {
+    // Not an audit, and in every build: the entry's one recomputation of the timeouts' hint, if a
+    // wait that held it ended (`time::settle_timeouts`), before the audit reads it.
+    crate::time::settle_timeouts(mm);
     #[cfg(debug_assertions)]
     if CHANGED.with(core::mem::take) {
         crate::sched::audit(crate::sched::AUDIT_IPC_LISTS, || {
             check_lists(mm);
+            // At an entry's end every listed wait has blocked, and the hint is their earliest: a
+            // call's own wait lowers its process's cache as it is listed, the hint only as it blocks.
+            let (hint, earliest) = (crate::time::timeout_hint(), earliest_timeouts(mm).at);
+            assert!(
+                hint == earliest,
+                "I13: the timer's hint is {} for the earliest timeout {}",
+                hint,
+                earliest
+            );
         });
     }
-    #[cfg(not(debug_assertions))]
-    let _ = mm;
 }
 
 /// What the lists hold, or the threads say they must.
@@ -2203,6 +2247,11 @@ fn check_lists(mm: &MemoryManager) -> Listed {
     let mut listed = Listed::default();
     let mut want = Listed::default();
     for pid in mm.live_pids() {
+        // Each cache is its process's first timed wait's deadline ([`untime`]): nothing left early.
+        let first = timed(pid).first(w);
+        let cache = mm.account(pid).map_or(u64::MAX, |a| a.earliest_timeout);
+        let exact = if first == 0 { u64::MAX } else { w.deadline(first) };
+        assert!(cache == exact, "I13: process {} caches {} for its earliest timeout {}", pid, cache, exact);
         // Only `init`, which the loader started, runs with no process object: so every other
         // process is on the chain of the budget it runs in, where a destruction finds it. A
         // `process_create` rolled back after its object was freed leaves its child, which has no
@@ -2428,13 +2477,15 @@ fn audit_stamped(mm: &MemoryManager, b: u32) -> usize {
         .unwrap_or_else(|f| audit_failed(f))
 }
 
-/// A process's timed waits: each a thread of `pid` waiting with a deadline.
+/// A process's timed waits: each a thread of `pid` waiting with a deadline, in deadline order.
 #[cfg(debug_assertions)]
 fn audit_timed(mm: &MemoryManager, list: List, pid: Option<Pid>) -> usize {
+    let mut last = 0;
     list.audit(&Frames(mm), |_, r| {
         let waits = member_word(mm, r, W_WAIT) != Wait::None as u64;
-        let timed = member_word(mm, r, W_DEADLINE) != u64::MAX;
-        member(Some(thread_of(r).0) == pid && waits && timed, Page::Thread(r))
+        let deadline = member_word(mm, r, W_DEADLINE);
+        let ordered = core::mem::replace(&mut last, deadline) <= deadline;
+        member(Some(thread_of(r).0) == pid && waits && deadline != u64::MAX && ordered, Page::Thread(r))
     })
     .unwrap_or_else(|f| audit_failed(f))
 }
