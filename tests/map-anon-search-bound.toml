@@ -1,4 +1,4 @@
-description = "map_anon's placement search: a run over the range cap is placed at the empty area's start with its first range alone mapped, a range in an empty area is placed at its start, a run that fits only at the area's end is placed there, a run that does not fit after a high placement is refused rather than placed past the area's end, and with a page in every range-long window, the densest shape the budget affords (every page table present, 4,096 starts to try), a refused search stays under 45 ms and a timer wake meanwhile under 45 ms, twice the worst measured; every run placed lies inside the area (checked build, virtual time)"
+description = "map_anon's placement search: a run over the range cap is placed at the empty area's start with its first range alone mapped, a range in an empty area is placed at its start, a run that fits only at the area's end is placed there, a run that does not fit after a high placement is refused rather than placed past the area's end, and with a page in every range-long window, the densest shape the budget affords (4,096 pages taken), a refused search, which reads the area's runs and not its page tables, stays under 400 µs and a timer wake meanwhile under 5 ms, twice the worst measured; every run placed lies inside the area (checked build, virtual time)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -8,7 +8,8 @@ debug_assertions = true
 # under the place only the tester gives it, and nothing else runs beside it (docs/testbench.md,
 # "Rule F"). A page in every range of the area needs 4,096 pages of its own budget's, and 128 MiB
 # gives it room for those, not for twice as many: the densest shape it affords, which the bounds
-# are twice the measure of.
+# are twice the measure of. A refusal reads every group record of the runs twice, whatever the
+# shape: the most a search reads but for the words of three groups (kernel/memory.md, R22).
 programs = ["log-server", "map-anon-search-bound"]
 memory_mib = 128
 icount = "shift=3,sleep=off"
@@ -19,8 +20,8 @@ expect = [
     '^\[pid 3\] \[search\] ok: a range in the empty area is placed at its start$',
     '^\[pid 3\] \[search\] ok: a run that fits only at the area.s end is placed there$',
     '^\[pid 3\] \[search\] ok: after a high placement, a run that does not fit is refused$',
-    '^\[pid 3\] \[search\] ok: a refused search over every page table took \d+ us, under 45 ms$',
-    '^\[pid 3\] \[search\] ok: a timer wake during the search was \d+ us late, under 45 ms$',
+    '^\[pid 3\] \[search\] ok: a refused search took \d+ us, under 400 us$',
+    '^\[pid 3\] \[search\] ok: a timer wake during the search was \d+ us late, under 5 ms$',
     '^\[pid 3\] \[search\] ok: every run placed lies inside the area$',
     '^\[pid 3\] \[search\] MAP_ANON SEARCH BOUNDED$',
 ]

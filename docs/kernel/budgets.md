@@ -138,9 +138,10 @@ limit is the free frames less that page. The boot checks that `root`'s limit, it
 the kernel's frames fit in RAM, and stops if they do not.
 
 `init`, the one program the loader starts, runs in `root`, charged there for everything the
-loader gave it (image, stack, page tables, header page, the bundle's frames) and for its first
-thread. It gets handles to `root`, `system` and `users` in slots 1 to 3, stamped with `root`,
-then a handle to every device object ([boot](boot.md)). The machine's device objects are charged
+loader gave it (image, stack, page tables, header page, the bundle's frames), for the two pages
+of placement runs the kernel gives it at boot ([memory](memory.md#r22-range-cost)) and for its
+first thread. It gets handles to `root`, `system` and `users` in slots 1 to 3, stamped with
+`root`, then a handle to every device object ([boot](boot.md)). The machine's device objects are charged
 to `system`. A boot whose `init` and `INIT_PAGES` do not fit does not boot: the kernel stops
 (fail closed).
 

@@ -114,7 +114,7 @@ paths = [
     "kernel/src/device.rs", "kernel/src/message.rs", "kernel/src/process.rs", "kernel/src/cell.rs",
     "kernel/src/debug", "kernel/src/endpoint.rs",
     "kernel/src/time.rs", "kernel/src/sched.rs", "kernel/src/dma.rs", "kernel/src/bits.rs",
-    "kernel/src/reclaim.rs",
+    "kernel/src/reclaim.rs", "kernel/src/place.rs",
 ]
 # time.rs, sched.rs, bits.rs and reclaim.rs (the kernel's timer, scheduler, bit sets and frames in
 # flight, which reach frames through kframe.rs) have no unsafe, and

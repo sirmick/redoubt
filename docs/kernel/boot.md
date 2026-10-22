@@ -223,12 +223,14 @@ the loader's exclusion of them is a reading of a device tree the kernel does not
 
 ### Hardware abstraction
 
-<details><summary>Status: built · tested (5)</summary>
+<details><summary>Status: built · tested (7)</summary>
 
 - bench:rustsbi-boot
 - bench:uart-irq
 - bench:sched-lock-contention
-- bench:irq-boot-hart-only
+- bench:sched-lock-contention-4
+- bench:sched-lock-contention-4-mttcg
+- bench:sched-irq-wake
 - host:loader::each_listed_hart_carries_its_s_mode_context_by_boot_index
 
 </details>
@@ -252,8 +254,15 @@ controller at `KERNEL_PLIC_BASE` for the kernel alone, from the `Plic` tag, and 
 takes device interrupts: each enables every source `Devs` names on its own S-mode context (from
 `Hart`), threshold 0, once it holds the kernel lock, and sets the external interrupt in `sie`. Any
 hart in user mode or idle takes a raised source; the first to hold the kernel lock claims it on its
-own context, and another hart that trapped for it claims nothing. The trap handler claims a source,
-completes it, then masks it until the holder's next `receive`, in one kernel section
+own context, and another hart that trapped for it claims nothing. A checked build counts each
+hart's claims and its claims that found nothing: `sched-lock-contention` and
+`sched-lock-contention-4` require a hart other than the boot hart to take ten or more of their
+alarms, `sched-lock-contention-4-mttcg` every hart, and `sched-irq-wake` reads each device
+interrupt against the runner's slice. The routing saves a wake one kernel section, under a
+millisecond, which no latency target can see
+([R78 (fair kernel entry)](scheduling.md#r78-fair-kernel-entry)), so the counts are its test. The
+trap handler claims a source, completes it, then masks it until the holder's next `receive`, in
+one kernel section
 ([R5 (interrupts)](devices.md#r5-interrupts)). A source is masked and unmasked by its priority (0,
 then 1), not by its enable bits: one write reaches every hart's context, so a hart started later
 needs no copy of the masks; a completion is never ignored, as a PLIC ignores one for a source not

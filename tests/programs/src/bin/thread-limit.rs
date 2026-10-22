@@ -17,6 +17,9 @@ const PARENT: u32 = 1;
 /// Page-table levels: a new address space has a table at each on the way to its header page
 /// (kernel/memory-layout.md).
 const LEVELS: u64 = if cfg!(target_pointer_width = "64") { 3 } else { 2 };
+/// The pages beside the header that hold `map_anon`'s area's runs (kernel/memory-layout.md,
+/// "Per-process kernel data").
+const RUNS: u64 = 2;
 
 extern "C" fn parked(_arg: usize) -> ! { test_programs::park() }
 
@@ -81,8 +84,14 @@ pub extern "C" fn _start() -> ! {
 
     let empty = pages();
     let process = rd::process_create(budget, exit).expect("the holder");
-    let created = pages() - empty == 1 + LEVELS;
-    log!(logger, "[thread-limit] process_create charges the header page and {} tables: {}", LEVELS, created);
+    let created = pages() - empty == 1 + RUNS + LEVELS;
+    log!(
+        logger,
+        "[thread-limit] process_create charges the header page, its {} pages of runs and {} tables: {}",
+        RUNS,
+        LEVELS,
+        created
+    );
     spawn::start(process, &image, holder as *const () as usize, &[], &[to_parent]).expect("start");
     let (_, before) = take(calls, budget);
     let ([threads, tids, refused, _], after) = take(calls, budget);

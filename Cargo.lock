@@ -760,6 +760,7 @@ dependencies = [
  "redoubt-conhold",
  "redoubt-ipclist",
  "redoubt-layout",
+ "redoubt-runs",
  "redoubt-stride",
  "redoubt-sys",
  "redoubt-ticket",
@@ -808,6 +809,7 @@ dependencies = [
 name = "redoubt-model"
 version = "0.1.0"
 dependencies = [
+ "redoubt-runs",
  "redoubt-steward",
  "redoubt-steward-trace",
 ]

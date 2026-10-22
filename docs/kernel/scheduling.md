@@ -589,7 +589,7 @@ got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (27)</summary>
+<details><summary>Status: built · tested (26)</summary>
 
 - bench:sched-latency
 - bench:sched-range-hammer
@@ -613,7 +613,6 @@ got 0.
 - host:testbench::audits_are_subtracted_inside_each_window
 - host:testbench::a_hart_share_is_judged_of_every_charge_against_water_filling
 - host:testbench::latency_targets_are_gated_up_to_gate_harts
-- host:testbench::the_driver_wake_is_judged_in_searches_of_its_own_run
 - host:testbench::an_unmatched_audit_fails
 - host:testbench::cluster_envelope_qualifies_where_the_old_rtc_interval_did_not
 - host:testbench::the_old_control_must_fail_on_its_lower_witness
@@ -777,9 +776,8 @@ and 12.0 ms for the deadline notice, and a lease's end at most 9.8 and 16.6 ms; 
 rv32's driver wake at N = 16, 17.2 ms against 15 ms; rv64's is 12.6 ms. At four harts a wake can
 wait for the kernel lock behind three sections ([residual risks](#residual-risks)).
 `sched-lock-contention` holds the lock's order under R12's costliest call at two and four harts,
-and records the driver's wake there beside the targets, not judged: under the range cap a wake
-waits a whole refused search, longer than the p50 target, until the search is bounded
-([R78](#r78-fair-kernel-entry)).
+and the driver's wake there meets the targets: a wake waits at most the sections ahead of it,
+each about a slice ([R78](#r78-fair-kernel-entry)).
 
 A slice end adds its own kernel time ([charging](#charging)). In the release build that is about
 7,050 instructions on rv64 and 10,600 on rv32 when it switches budgets (4,200 and 6,700 when the
@@ -1385,12 +1383,11 @@ worst section at the cap is measured within one slice ([R22 (range cost)](memory
 `bench:sched-range-hammer`), but for one overrun: `process_map` from untouched reservation pages,
 which it backs and zeroes inside the call, 1.4 to 1.8 slices at the cap, and which only the
 process the loader starts (`init`) can make. It never depends on the extent of an address area or on what other
-processes hold. `map_anon`'s search is linear in the fixed-size area it searches, a constant, and
-never in `len` (`bench:map-anon-search-bound`), but a walk for each start it tries, so a process
-that takes a page in every few pages of its own area makes each of its refusals cost up to 114 ms
-in a checked build (n = 2 on rv64; at most about 27 ms within a lease's 5,248 pages; the table
-is on [R22](memory.md#r22-range-cost)): with R10 ([budgets](budgets.md#r10-destruction)) it is one of
-three costs a slice does not bound. The third is a device owner's `dma_alloc` and `map_device`,
+processes hold. `map_anon`'s search reads the area's runs, kept with the page tables, never the
+tables: at most 296 words and records whatever the area holds and whatever `len` asks, 187 µs in
+a checked build at its worst measured (`bench:map-anon-search-bound`;
+[R22](memory.md#r22-range-cost)). Besides R10 ([budgets](budgets.md#r10-destruction)) one cost
+a slice does not bound remains: a device owner's `dma_alloc` and `map_device`,
 linear in the pages asked for and bounded by the DMA pool (1,024 pages, about 48 ms on rv32 at
 its worst) and the device's registers, which only a driver `init`'s manifest names can make, and
 the image's drivers make once each at start or restart, for a few constant pages
@@ -1466,7 +1463,7 @@ It is attacked three ways:
 
 ### R78 (fair kernel entry)
 
-Status: built · tested: bench:smp-boot, bench:smp-lock-wait, bench:smp-lock-wait-4-mttcg, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:sched-lock-contention-4-mttcg, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order, host:redoubt-ticket::no_hart_halts_past_its_turn_and_a_release_wakes_only_the_hart_it_serves, host:redoubt-ticket::a_halt_ended_with_no_wake_marks_again_and_is_still_woken
+Status: built · tested: bench:smp-boot, bench:smp-lock-wait, bench:smp-lock-wait-4-mttcg, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:sched-lock-contention-4-mttcg, host:testbench::lock_waits_take_the_lock_in_ticket_order, host:redoubt-ticket::no_hart_halts_past_its_turn_and_a_release_wakes_only_the_hart_it_serves, host:redoubt-ticket::a_halt_ended_with_no_wake_marks_again_and_is_still_woken
 
 On several harts, kernel entry is fair across them: the one kernel lock is a FIFO ticket lock,
 so a hart that arrives at the kernel waits behind at most `MAX_HARTS` - 1 kernel sections, never
@@ -1551,61 +1548,40 @@ calls at once may take at most 2.2 times the calls in turn. Alone, twenty runs a
 forty of its runs fail it, the recorded negative runs.
 
 `bench:sched-lock-contention` holds the order in time, under R12's costliest call: on every hart
-but one a budget asks in a loop for a `map_anon` of the most a range call may name, refused after
-a search of the whole area (a page taken in every 64 KiB window of the area, 4,096 pages of the
-budget's, so 4,096 starts: 22.6 ms of kernel time on rv64 and 17.0 ms on rv32 in a checked build,
-[R22](memory.md#r22-range-cost)), beside `sched-latency`'s driver stand-in. The budgets search
-until the window ends, which the program sizes from one search's length alone, and it checks
-that every driver wake fell inside the window, so each wake is measured under the load. A kernel
-built with `lock-trace` records each wait's ticket, and the oracle requires the waits to take the
-lock in ticket order, each drawn behind fewer sections than harts
-([the scheduler oracle](../testbench.md#the-scheduler-oracle)): at two harts 1447 waits on rv64
-and 1442 on rv32, each behind at most one section; at four harts (`sched-lock-contention-4`,
-three such budgets) 22,350 and 24,356, behind at most three. Every started hart takes device
-interrupts ([boot](boot.md#hardware-abstraction)), so the alarm reaches the idle hart, which
-claims it and runs the driver itself.
+but one a budget maps and unmaps in a loop a range at the cap whose page tables it makes afresh
+each time, where that costs most ([R22](memory.md#r22-range-cost)), counting one such section
+in user mode between its ranges, beside `sched-latency`'s driver stand-in. The program first times
+the section alone (897 µs on rv64 and 1,651 µs on rv32 in a checked build, audits included), sizes
+the window the budgets hammer for from it, and checks that every driver wake fell inside the
+window, so each wake is measured under the load. A kernel built with `lock-trace` records each
+wait's ticket, and the oracle requires the waits to take the lock in ticket order, each drawn
+behind fewer sections than harts ([the scheduler oracle](../testbench.md#the-scheduler-oracle)):
+at two harts 1291 waits on rv64 and 1281 on rv32, each behind at most one section; at four
+harts (`sched-lock-contention-4`, three such budgets) 6109 and 7466, behind at most three. Every
+started hart takes device interrupts ([boot](boot.md#hardware-abstraction)), so the alarm
+reaches the idle hart, which claims it and runs the driver itself. The driver wake meets its
+targets, judged net of the audits: p50/p99 1.4/2.1 ms on rv64 and 1.5/2.4 ms on rv32 at two
+harts, 6.7/8.4 and 7.7/9.3 ms at four under `icount`, where a hart woken while another is in a
+section waits for that hart's QEMU turn ([residual risks](#residual-risks)).
 
-**Under the range cap the driver wake's targets cannot be met here.** The driver reads the time
-and calls `receive` for its next alarm just after a wake, which a search's end let run; between
-the two calls the searching budget, back in user mode for 9 µs, has already drawn its next
-ticket, so the `receive` waits in ticket order behind one whole search, R78's one-section bound
-met exactly, and the alarm falls due inside it. A trace of every wake puts each one behind a
-section, phase-locked to the searches. Under the cap the shortest refused search is the one
-above, a page in every range-long window, and it is longer than the 15 ms p50 target: net of the
-audits the driver's p50/p99 read 21.4/21.9 ms on rv64 and 16.0/16.5 ms on rv32 (34.5/35.0 and
-23.3/23.8 ms with a page in every 32 KiB, 35.6 and 24.4 ms a search). So the case records the
-wake beside the 15 and 50 ms targets, which do not move, rather than judging it, until the search
-is bounded ([residual risks](memory.md#residual-risks)), which re-judges the family and its
-self-check. With the boot hart alone taking device interrupts a wake waits two searches, 44.1 ms
-on rv64 and 33.3 ms on rv32 at p50 net: the alarm waits out the boot hart's search, and the
-woken driver's `receive` then draws its ticket behind the next. `bench:irq-boot-hart-only` is
-that kernel (`irq-boot-hart-only`, a debug-only feature) under the same case, the self-check of
-the targets. A negative is judged only while its positive is, so it records its wake too, until
-the search is bounded; a checked build's count at power-off shows its boot hart claiming all 201
-and the other hart's context taking none (no claim, and no claim that found nothing). The count
-is each hart's: its claims, its claims that found nothing (it trapped
-for an alarm another hart claimed first) and their sum, the alarms its context took. The idle hart
-wins the claims, and which hart idles follows the boot's timing (claims 200 and 1 in one
-`sched-lock-contention` run; 29, 4, 168, 0 and 196, 1, 2, 2 in two `sched-lock-contention-4`
-runs), so the cases require what does not: `sched-lock-contention` and `sched-lock-contention-4`
-that a hart other than the boot hart took ten or more alarms, and `sched-lock-contention-4-mttcg`
-that every hart did. At four harts under `icount` the p50 and p99 wait for QEMU's turns and are
-recorded there, not gated ([residual risks](#residual-risks)): a wake waits about five searches
-(113.0/113.5 ms on rv64, 86.1/86.6 ms on rv32). It is judged where the harts run at once:
-`bench:sched-lock-contention-4-mttcg` runs the same program under QEMU's multi-threaded TCG, in
-host time, and judges the driver wake's net p50 and p99 in searches of the same run alone, which
-the program times before its children start (`one search alone`): at most three at p50 and eight
-at p99. A ratio, because the host's speed moves both sides, and a wake waits behind at most three
-searches and the one in progress. A quiet run of each width reads a p50 of 2.5 and 2.2 searches
-and a p99 of 5.5 and 2.7 (a search alone 3.1 and 2.2 ms). The bounds were set from twenty runs
-alone on q's quiet cores at a 9.6 ms search shape (a p50 of 1.6 to 1.9 searches and a p99 of 2.0
-to 3.0, but for one run of each width at 6.1 and 5.1). The p99 bound, at twice the four-search
-claim, cannot see a wake one or two searches longer: in those runs the `irq-boot-hart-only`
-kernel read p99s of 5.4 to 7.1 searches and passed it, and its p50, 3.7 to 4.9 searches, failed
-the p50 bound in all four, so the p50 is the gate that sees that regression. The 15 and 50 ms
-targets are printed beside them and recorded, as at two harts: on this host's TCG a search takes
-a fraction of its virtual length, but on hardware, where a search is its virtual length, a wake
-behind one already misses the p50 target under the cap.
+That every started hart takes device interrupts saves a wake one kernel section: the idle hart
+claims the alarm at once, where the boot hart would first finish its own section, and the woken
+driver's `receive` draws its ticket behind one section, not two. Every section is at most about a
+slice, so that is under a millisecond, which the 15 and 50 ms targets cannot see under any load;
+the one load that makes a section longer, a destruction ([R10](budgets.md#r10-destruction)),
+makes every wake wait the lock and misses the targets however the interrupts are routed. So the
+targets do not test the routing; its count does: a checked build's count at power-off
+gives each hart's claims, its claims that found nothing (it trapped for an alarm another hart
+claimed first) and their sum, the alarms its context took. The idle hart wins the claims, and
+which hart idles follows the boot's timing (claims 200 and 1 in a `sched-lock-contention` run;
+4, 3, 1, 193 on rv64 and 19, 151, 17, 14 on rv32 in `sched-lock-contention-4`), so the cases require
+what does not: `sched-lock-contention` and `sched-lock-contention-4` that a hart other than the
+boot hart took ten or more alarms, and `sched-lock-contention-4-mttcg` that every hart did. The
+hammer's section in user mode between its ranges is what makes the first hold: its hart traps
+for the alarms that rise while it is there. `bench:sched-lock-contention-4-mttcg` runs the
+four-hart program under QEMU's multi-threaded TCG, in host time, where the harts run at once, and
+judges the driver wake at the same targets: net p50/p99 0.9/1.3 ms on rv64 and 0.8/1.2 ms on
+rv32, alone on q's quiet cores, every hart taking 125 or more of the 200 alarms.
 
 ### R23 (no test channels)
 
@@ -1636,7 +1612,7 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `sched-wake-no-preempt-harts`, `sched-wake-no-preempt-harts-mttcg`, `sched-irq-wake`,
   `sched-deadline-preempt`, `sched-cluster`,
   `sched-cluster-old-control`, `sched-latency`, `sched-latency-tcg`, `sched-lock-contention`,
-  `sched-lock-contention-4`, `sched-timer-entry`, `irq-boot-hart-only`, `kernel-containment`, `endpoint-destroy-full`, `smp-fence` and
+  `sched-lock-contention-4`, `sched-lock-contention-4-mttcg`, `sched-timer-entry`, `kernel-containment`, `endpoint-destroy-full`, `smp-fence` and
   `worst-walk`.
 
 The bench checks it on the binary (`bench-no-trace`): a `build` case builds the production
@@ -1652,7 +1628,7 @@ refusal below, in the compiler's words.
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
 alone; `lock-trace`, which implies the trace and records after each wait for the kernel lock its
-ticket and the sections ahead of it when drawn (`k`), for `irq-boot-hart-only`; `hold-trace`,
+ticket and the sections ahead of it when drawn (`k`), for `sched-lock-contention-4-mttcg`; `hold-trace`,
 which implies `lock-trace` and records each section of the kernel lock at its release, its ticks,
 cause and audits (`h`, `j`), for `sched-lock-contention`, `sched-lock-contention-4`,
 `sched-timer-entry` and `call-bounds`; `block-trace`, which implies the trace and records each
@@ -1665,8 +1641,7 @@ its login rather than inferred), for no case: a diagnostic run by hand, which to
 budget waiting to receive a call that never came from one blocked in a call out
 ([responsiveness](#responsiveness)), and placed a burst of the steward's notices between
 beamlet's serve thread and its VM ([the steward](../servers/steward.md#failure-and-restart));
-`irq-boot-hart-only`, whose boot hart alone
-takes device interrupts, for R78's negative case at two harts (recorded under the range cap, as its positive is); `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
+`sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
 `sched-capped-holds-floor`, whose floor counts the capped budgets, for R12's negative case at two
 harts; `sched-test-and-set-entry`, which replaces the kernel lock by test-and-set, and
 `sched-spin-entry`, which makes a hart wait for it spinning, each for one of
@@ -1801,10 +1776,8 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   shootdown's acknowledgements stays under the lock: it totals 0.9 ms over the whole containment
   gate at two harts ([memory](memory.md#residual-risks)). A wake behind R12's costliest call waits at most one section at
   two harts (`sched-lock-contention`, [R78](#r78-fair-kernel-entry)): the idle hart takes the
-  device's interrupt and runs the woken driver itself. But the driver's next `receive` draws its
-  ticket behind the searching budget's next search, so under the range cap a loaded wake waits a
-  whole search, longer than the p50 target, until the search is bounded
-  ([memory](memory.md#residual-risks)); the case records the wake, not judged.
+  device's interrupt and runs the woken driver itself, and the driver's next `receive` draws its
+  ticket behind at most the hammer's next section, about a slice.
 - **Timer work billed to one budget can still take another's hart.** A timeout's or a deadline's
   work is billed to its payer, and its interrupt is armed on the payer's hart where the payer
   runs, so a one-thread victim on two harts, whom no pick can repay, no longer destroys a flood
@@ -1825,10 +1798,11 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   line that rises while the idle hart is halted wakes it on time in virtual time, but the hart runs
   only when the running hart's turn ends, and then draws its ticket behind up to three sections. In
   `sched-lock-contention-4` the driver wake's p50 and p99 follow which turn the wake lands behind
-  as the kernel's timing moves, so both are recorded there, not gated: every long
-  idle halt began with nothing pending, and the kernel cannot shorten another hart's turn. On harts
-  that run at once the woken hart draws its ticket at the rise, and the four-hart p50 and p99 are
-  judged there in searches of the same run, under QEMU's multi-threaded TCG
+  as the kernel's timing moves (6.7 and 7.7 ms at p50 where a section is about a slice, against 1.4
+  and 1.5 ms at two harts): every long idle halt began with nothing pending, and the kernel cannot
+  shorten another hart's turn. They are judged at the targets, which sections of about a slice
+  leave room for; on harts that run at once the woken hart draws its ticket at the rise, and
+  `sched-lock-contention-4-mttcg` judges the same targets under QEMU's multi-threaded TCG
   ([R78](#r78-fair-kernel-entry)). Turns move
   shares too: at two harts on rv32, QEMU ends the heavy budget's hart's turn inside its slice
   end's time billed to nobody (the checked build's audit, or `kmain`'s expiry walk) at every
@@ -1853,8 +1827,8 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   on every hart's context, so each hart in user mode or idle when it rises traps, and all but one
   take the kernel lock for a claim that finds nothing; a hart in the kernel at the rise returns to
   a source already claimed and masked, and does not trap (`sched-lock-contention-4-mttcg` requires
-  every hart to take ten or more of its 200 alarms; under `icount` a hammer in a search at every
-  rise took none, so `sched-lock-contention-4` requires only another hart's). Under multi-threaded TCG at four harts every
+  every hart to take ten or more of its 200 alarms; under `icount` a hammer in the kernel at every
+  rise takes none, so `sched-lock-contention-4` requires only another hart's). Under multi-threaded TCG at four harts every
   alarm traps the other three (518 to 577 such entries in a run of 200 alarms, twenty runs), each
   holding the lock about 31 µs (p50; 50 µs at p90): at most three are ahead of a wake, about
   0.15 ms of a p99 of 4 to 12 ms. So it is not routed: sending each source to one idle hart (a busy

@@ -52,8 +52,7 @@ pub fn init() {
 /// A hart started after boot takes device interrupts on its PLIC context from now on (the
 /// supervisor external interrupt is on in its `sie` since `timer::init_hart`).
 pub fn online() {
-    // Debug only, its negative case's: the other harts' contexts stay off.
-    #[cfg(all(feature = "plic", not(feature = "irq-boot-hart-only")))]
+    #[cfg(feature = "plic")]
     intc::online();
 }
 

@@ -266,6 +266,7 @@ Everything the kernel stores is charged in whole pages to one budget (R6 (chargi
 | device | 1 | its owner: `system`, charged at boot |
 | process object (it holds the exit notice) | 1 | the creator's budget, the budget of `process_create`'s caller |
 | process header | 1 | the budget the process runs in |
+| placement runs (`map_anon`'s area's bits) | 2 | the budget the process runs in |
 | thread IPC page | 1 per thread | the budget the process runs in |
 | page tables | 1 per page-table page, the root table included | the budget the process runs in |
 | handle table | 1 per table page holding a handle | the budget the process runs in |
@@ -273,7 +274,9 @@ Everything the kernel stores is charged in whole pages to one budget (R6 (chargi
 
 Pages a process maps, lends or is given are charged as [memory](memory.md) and [IPC](ipc.md)
 say. The header is the page at `PROCESS_AREA`
-([memory layout](memory-layout.md#per-process-kernel-data)), one on both widths; a thread's saved
+([memory layout](memory-layout.md#per-process-kernel-data)), one on both widths, and beside it the
+two pages of `map_anon`'s area's runs, a bit a page of the area, which `map_anon`'s search reads
+([memory](memory.md#r22-range-cost)); a thread's saved
 registers are the last bytes of its IPC page, so a thread costs one page on both widths too. The
 header and each IPC page are counted once, and neither is the process object's page.
 
@@ -282,7 +285,7 @@ A budget's own page is its parent's, so the whole of a budget's page limit is us
 The process object is charged to its creator, not to the budget the process runs in, because it
 holds the exit notice, and that notice must outlive the budget it ran in; the page was paid at
 `process_create`, so delivering a notice never allocates. Everything the running process needs
-(header, page tables, thread pages, handle table) is charged where it runs, and comes back when
+(header, runs, page tables, thread pages, handle table) is charged where it runs, and comes back when
 it ends.
 
 So a process object belongs to two budgets, and each heads a chain of them, doubly linked through

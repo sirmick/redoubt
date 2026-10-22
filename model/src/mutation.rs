@@ -191,6 +191,9 @@ pub enum Mutation {
     R22RangeCapIgnored,
     /// `map_anon` of a run longer than a range searches for the range it maps, not the whole run.
     R22MapAnonSearchesRange,
+    /// An unmapped page stays taken in its area's runs, so a search no longer finds what the page
+    /// tables say is free.
+    R22RunsKeepUnmapped,
     /// Publishes no lend despite a supplied buffer.
     IpcWrongLend,
     /// Hides a committed partial reply behind its error.
@@ -448,7 +451,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 181] = {
+    pub const ALL: [Mutation; 182] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -525,6 +528,7 @@ impl Mutation {
             R22MapFixedWalksFirst,
             R22RangeCapIgnored,
             R22MapAnonSearchesRange,
+            R22RunsKeepUnmapped,
             IpcWrongLend,
             IpcDropPartial,
             IpcFalseDelivery,
@@ -708,7 +712,9 @@ impl Mutation {
             R81InFlightAllocatable | R81CommitUnzeroed => "R81",
             R18DeviceByNumber | DeviceInfoWrongKind => "R18",
             R20NoticePidReused => "R20",
-            R22MapFixedWalksFirst | R22RangeCapIgnored | R22MapAnonSearchesRange => "R22",
+            R22MapFixedWalksFirst | R22RangeCapIgnored | R22MapAnonSearchesRange | R22RunsKeepUnmapped => {
+                "R22"
+            }
             R12PriorityById
             | R12IgnoreWeight
             | R12WakeBanksCredit

@@ -101,26 +101,18 @@ pub struct Process {
 /// Note that this data is only available when the current process is active.
 #[repr(C)]
 #[derive(Debug, PartialEq, Copy, Clone)]
-/// Default virtual address when MapMemory is called with no `virt`
 pub struct ProcessInner {
-    pub mem_default_base: usize,
-
-    /// The last address allocated from
+    /// Where `map_anon`'s area placed last (`find_virtual_address`): its next search starts there.
     pub mem_default_last: usize,
 
-    /// Address where messages are passed into
-    pub mem_message_base: usize,
-
-    /// The last address that was allocated from
+    /// Where the message area placed last.
     pub mem_message_last: usize,
 }
 
 impl Default for ProcessInner {
     fn default() -> Self {
         ProcessInner {
-            mem_default_base: crate::mem::DEFAULT_BASE,
             mem_default_last: crate::mem::DEFAULT_BASE,
-            mem_message_base: crate::mem::DEFAULT_MESSAGE_BASE,
             mem_message_last: crate::mem::DEFAULT_MESSAGE_BASE,
         }
     }

@@ -636,7 +636,7 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (40)</summary>
+<details><summary>Status: built · tested (39)</summary>
 
 - bench:sched-ties
 - bench:sched-capped
@@ -647,7 +647,6 @@ parks when it is done, unless its exit is the point of its case.
 - bench:sched-range-hammer
 - host:testbench::range_sections_are_held_to_their_bound
 - host:testbench::kernel_sections_say_what_the_lock_waits_waited_behind
-- host:testbench::the_driver_wake_is_judged_in_searches_of_its_own_run
 - host:testbench::a_pick_passes_over_only_a_budget_that_other_harts_run
 - host:testbench::the_oracle_decides_whether_a_timer_interrupt_ended_the_slice
 - bench:sched-wake-no-preempt-harts-mttcg
@@ -722,10 +721,7 @@ with no record of its own but an audit's, a lock take that found nothing due and
 from the first run of the budget the program marks (the mark's weight, as a share's):
 `timer-flood-at-rest`'s two sleepers each sleep a thousand short timeouts on two harts, and a
 kernel that arms every hart's timer for a timeout whose payer runs nowhere wakes each hart for
-the other's naps too ([the hart timer](kernel/timer.md#the-hart-timer)). Where the clock is the host's,
-`driver_wake_p50_searches=K` and `driver_wake_p99_searches=K` judge the driver wake's net p50 and
-p99 against K searches of the same run alone, from the program's `one search alone` line, at any
-hart count (`sched-lock-contention-4-mttcg`). Three checks read the interrupts' brackets
+the other's naps too ([the hart timer](kernel/timer.md#the-hart-timer)). Three checks read the interrupts' brackets
 ([preemption points](kernel/scheduling.md#preemption-points), [charging](kernel/scheduling.md#charging)):
 `irq_wake_no_preempt=N` needs N device interrupts from user mode that claimed a source, woke one
 budget and returned to the runner with no pick inside, whose hart's next pick or interrupt was the
