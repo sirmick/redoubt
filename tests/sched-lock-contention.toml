@@ -1,4 +1,4 @@
-description = "Fair kernel entry under contention (R78, kernel/scheduling.md), at two harts: one budget mapping and unmapping in a loop a range at the cap whose page tables it makes afresh, R12's costliest call (kernel/memory.md, R22), beside the latency workload's driver stand-in on the goldfish RTC's alarm; every wait for the kernel lock takes it in ticket order (the trace's tickets, `lock-trace`; each section's length and cause beside, `hold-trace`), every driver wake falls inside the hammer's window, and the wake's p50 and p99 net of the checked build's audits are within their 15 and 50 ms targets: a wake waits at most the section in progress, about a slice (virtual time, checked build)"
+description = "Fair kernel entry under contention (R78, kernel/scheduling.md), at two harts: one budget mapping and unmapping in a loop a range at the cap whose page tables it makes afresh, R12's costliest call (kernel/memory.md, R22), beside the latency workload's driver stand-in on the goldfish RTC's alarm; every wait for the kernel lock takes it in ticket order (the trace's tickets, `lock-trace`; each section's length and cause beside, `hold-trace`), every driver wake falls inside the hammer's window, and the wake's p50 and p99 net of the checked build's audits are within their 15 and 50 ms targets (p50 2.0 and 2.6 ms): a wake waits at most the section in progress, about a slice; the idle hart alone takes the alarm, so no hart's claims that found nothing pass a single digit, and the claims equal the interrupts the program received (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -14,24 +14,31 @@ keep_smp = true
 # Test builds only: the trace ring with each lock wait's ticket (never in a default kernel).
 kernel_features = ["hold-trace"]
 # The oracle checks the waits' ticket order, and gates the driver wake on sched-latency's targets:
-# every hart's PLIC context takes the RTC's interrupt, so the idle hart wakes, draws its ticket
-# behind the hammer's section in progress and runs the driver itself (kernel/scheduling.md, R78).
+# the idle hart alone takes the RTC's interrupt (kernel/boot.md, "The interrupt controller
+# contract"), so it wakes, draws its ticket behind the hammer's section in progress and runs the
+# driver itself (kernel/scheduling.md, R78). Net p50/p99 2.0/2.4 ms on rv64 and 2.6/3.6 on rv32
+# against 15/50: about 0.5 to 1 ms later than with every hart's context open, a QEMU turn the halted
+# idle hart waits for (kernel/scheduling.md, "Residual risks").
 post_check = "sched_oracle driver_wake_p50_us=15000 driver_wake_p99_us=50000"
 timeout_secs = 1200
 expect = [
     '^\[lock-contention\] one section alone, a range at the cap mapped with its page tables: p50 \d+ µs, max \d+ µs \(21 sections\)$',
     '^\[lock-contention\] 1 hammers. ranges mapped: \d+$',
     '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
+    # How many interrupts the RTC's `receive`s took (below).
+    '^IRQ-RECEIVED \d+$',
     '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
     '^\[lock-contention\] ok: every driver wake fell inside the hammers. window: the last at \d+ µs, the window.s end \d+$',
     '^SCHED-LOCK-CONTENTION TEST PASSED$',
-    # The kernel's count at power-off: each hart's claims, its claims that found nothing, and the
-    # alarms its context took, their sum. The other hart took ten or more, whichever hart idles and
-    # wins the claims: its context is enabled (kernel/boot.md, "Hardware abstraction"; R78).
-    # Recorded: taken by hart [200, 112] (rv64; claimed [200, 1], found nothing [0, 111]) and
-    # [200, 121] (rv32; claimed [200, 1], found nothing [0, 120]): the hammer's hart traps for the
-    # alarms that rise while it counts in user mode, and the idle boot hart claims them.
-    '^external interrupts: claimed by hart \[\d+, \d+\], found nothing by hart \[\d+, \d+\], taken by hart \[\d+, [1-9]\d+\]$',
+    # The kernel's count at power-off: each hart's claims and their total, its claims that found
+    # nothing, and their sum, the alarms its context took. While a hart idles, one idle hart's
+    # context alone takes device interrupts (kernel/boot.md, "The interrupt controller contract"),
+    # so the alarms are claimed where the driver idles and no hart traps for one another claimed:
+    # every hart's claims that found nothing are a single digit (a few may come when every hart
+    # runs and one then idles). The post-check holds their total to the interrupts the program's
+    # `receive`s took, the 200 alarms and the RTC probe's (`IRQ-RECEIVED`): each claimed once and
+    # delivered, none lost or taken twice where the open context moves.
+    '^external interrupts: claimed by hart \[\d+, \d+\] \(\d+ in all\), found nothing by hart \[\d, \d\], taken by hart \[\d+, \d+\]$',
     # A checked build's count: idle and lock-wait halts that found the interrupt they wait for
     # pending ran no `wfi` (kernel/scheduling.md, R78).
     '^halts: [1-9]\d* skipped, an awaited interrupt pending$',

@@ -1558,6 +1558,11 @@ pub mod rtc {
     /// on which returns when the alarm fires. The probing's alarms are all taken before this
     /// returns, so the caller's first `receive` on it meets only an alarm the caller set.
     pub fn find(devices: core::ops::Range<u32>) -> Option<(u32, usize, u32)> {
+        find_counting(devices).map(|(mmio, base, irq, _)| (mmio, base, irq))
+    }
+
+    /// [`find`], and how many interrupts the probing's `receive`s took.
+    pub fn find_counting(devices: core::ops::Range<u32>) -> Option<(u32, usize, u32, usize)> {
         let (mmio, base) = devices.clone().find_map(|h| {
             let (addr, len) = rd::map_device(h).ok()?;
             if len == rd::PAGE_SIZE && read(addr, 0) != VIRTIO_MAGIC {
@@ -1581,13 +1586,15 @@ pub mod rtc {
         })?;
         // A probe's alarm can still be raised on the found source (the kernel reports it at the
         // next unmask): take them all, until 20 ms pass quietly.
+        let mut taken = 1;
         loop {
             clear(base);
             if rd::receive(Some(irq), 20_000, 0).is_err() {
                 break;
             }
+            taken += 1;
         }
-        Some((mmio, base, irq))
+        Some((mmio, base, irq, taken))
     }
 }
 
@@ -2825,7 +2832,7 @@ impl Bench {
 pub fn lock_contention(hammers: usize) -> ! {
     let devices = rd::OTHER_DEVICES..rd::first_free();
     let mut b = Bench::new("lock-contention");
-    let Some((rtc_mmio, _, rtc_irq)) = rtc::find(devices) else {
+    let Some((rtc_mmio, _, rtc_irq, probed)) = rtc::find_counting(devices) else {
         b.check(false, format_args!("no goldfish RTC among the device handles"));
         b.finish("SCHED-LOCK-CONTENTION")
     };
@@ -2848,8 +2855,8 @@ pub fn lock_contention(hammers: usize) -> ! {
     let mut started = [0usize; 3];
     let hammers = &mut started[..hammers.min(3)];
     // Each hammer counts in user mode for one section between its ranges, so that its hart is in
-    // user mode, where it traps for the alarm, about half the time, and in the kernel the rest
-    // (boot.md, IRQ1).
+    // user mode about half the time, where it would trap for an alarm its context took, and in the
+    // kernel the rest (boot.md, "The interrupt controller contract").
     for h in hammers.iter_mut() {
         let budget = b.budget_with(rd::USERS, 100, 1, RANGE_PAGES, rd::FOREVER);
         *h = b.start(budget, Role::RangeHammer, &[alone & 0xffff_ffff], &[]);
@@ -2876,6 +2883,10 @@ pub fn lock_contention(hammers: usize) -> ! {
         )),
         None => b.check(false, format_args!("driver wake: no samples")),
     }
+    // Every interrupt the RTC's `receive`s took, the probing's and the driver's: the post-check
+    // holds the kernel's claims at power-off to it, so none was claimed twice or not delivered.
+    let received = probed + stat(Stats::DRIVER_WAKE).map_or(0, |w| w[3] >> 8);
+    let _ = writeln!(Console, "IRQ-RECEIVED {received}");
     b.check(mapped > 0, format_args!("the hammers made their range calls"));
     let last = b.samples(d, &words[d], format_args!("contention"));
     b.check(

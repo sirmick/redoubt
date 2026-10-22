@@ -80,6 +80,7 @@ pub fn idle() -> bool {
     // Park the hart until an interrupt is pending, without the kernel lock: another hart's wake
     // sends this one the reschedule interrupt while it is marked idle (`hart::wake_idle`).
     hart::set_idle(true);
+    irq::idling();
     crate::reclaim::end_section();
     // With every hart idle, this one zeroes a frame it freed before it halts (R81), unless another
     // hart is draining; with more left it does not halt, but comes back here through `kmain`'s

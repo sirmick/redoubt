@@ -6,10 +6,13 @@
 //! each started hart's S-mode context in `Hart`. The kernel maps the PLIC for itself, so no
 //! userspace process can claim it.
 //!
-//! Every started hart takes device interrupts: each enables every source the loader's `Devs`
-//! names on its own context, threshold 0, when it comes online (`online`). A source is masked and
-//! unmasked by its priority, one write that reaches every context, never by its enable bits
-//! (kernel/boot.md, "The interrupt controller contract").
+//! Each started hart enables every source the loader's `Devs` names on its own context when it
+//! comes online (`online`). Which contexts take them is their thresholds': one hart's context alone
+//! is open (threshold 0) and every other's closed (at the sources' priority) while that hart idles,
+//! or after it unmasked a source until it returns to a thread; with no hart idle, every context is
+//! open (`idling`, `running`). A source is masked and unmasked by its priority, one write that
+//! reaches every context, never by its enable bits (kernel/boot.md, "The interrupt controller
+//! contract").
 //!
 //! The PLIC's claim/complete protocol maps onto Redoubt's interrupt flow like this: the
 //! trap handler calls `pending()`, which claims the highest-priority interrupt on this hart's
@@ -27,11 +30,20 @@ use redoubt_sys::MemFlags;
 use crate::arch::hart::{self, MAX_HARTS};
 use crate::mem::MemoryType;
 
-/// An unmasked source's priority. Every context's threshold is 0, so it is delivered.
+/// An unmasked source's priority. An open context's threshold is 0, so it is delivered there.
 const PRIORITY: u32 = 1;
+
+/// A closed context's threshold: the sources' priority, which the PLIC does not deliver above.
+const CLOSED: u32 = PRIORITY;
 
 /// Each started hart's S-mode context, by boot index.
 static CONTEXTS: [AtomicUsize; MAX_HARTS] = [const { AtomicUsize::new(0) }; MAX_HARTS];
+
+/// The boot index of the hart whose context alone is open, idle or about to block after an unmask,
+/// or [`EVERY`]: every context is open. Changed only under the kernel lock.
+static TAKER: AtomicUsize = AtomicUsize::new(EVERY);
+const EVERY: usize = usize::MAX;
+
 /// The interrupt claimed by `pending()` and not yet completed, or 0. One word for every hart: a
 /// claim and its completion are in one kernel section, under the kernel lock.
 static CLAIMED: AtomicU32 = AtomicU32::new(0);
@@ -88,24 +100,72 @@ pub fn init() {
     online();
 }
 
-/// This hart takes device interrupts from now on: every source the loader's `Devs` names enabled
-/// on its context, threshold 0. Each source is still masked by its priority until a `receive`
-/// unmasks it. The boot hart at `init`; every other hart once it first holds the kernel lock
-/// (`hart::hart_main`). It writes only this hart's context.
+/// This hart's context takes device interrupts from now on: every source the loader's `Devs`
+/// names enabled on it, open while every context is, else closed until the hart takes over
+/// ([`running`]). Each source is still masked by its priority until a `receive` unmasks it. The
+/// boot hart at `init`; every other hart once it first holds the kernel lock (`hart::hart_main`).
+/// It writes only this hart's context.
 pub fn online() {
     let context = context();
     for irq in crate::device::irq_sources() {
         plic().enable(irq as u32, context);
     }
-    plic().set_threshold(context, 0);
+    plic().set_threshold(context, if TAKER.load(Ordering::Relaxed) == EVERY { 0 } else { CLOSED });
+}
+
+/// This hart idles, holding the kernel lock (`arch::idle`), or unmasks a source ([`enable_irq`]):
+/// with no hart taking device interrupts alone, it does from now on, every other context closed, so
+/// a source raised at rest traps one hart, and one that went pending while masked is raised at its
+/// unmask on the hart that is about to block for it, not on every hart in user mode. One already
+/// does: nothing changes. On one hart there is no other context to close.
+pub fn idling() {
+    if hart::started() < 2 || TAKER.load(Ordering::Relaxed) != EVERY {
+        return;
+    }
+    let me = hart::index();
+    TAKER.store(me, Ordering::Relaxed);
+    for i in (0..hart::started()).filter(|&i| i != me) {
+        plic().set_threshold(CONTEXTS[i].load(Ordering::Relaxed), CLOSED);
+    }
+}
+
+/// The boot index of the hart whose context alone is open, if one is.
+pub fn taker() -> Option<usize> { Some(TAKER.load(Ordering::Relaxed)).filter(|&t| t != EVERY) }
+
+/// This hart leaves the kernel for a thread, holding the kernel lock (`sched::leave`): if it was
+/// the one taking device interrupts, another idle hart takes them, its context opened before this
+/// one closes, or with none idle every context opens. One context is open at every instant, so a
+/// pending source is delivered on the next. A hart that did not take them changes nothing.
+pub fn running() {
+    let me = hart::index();
+    if TAKER.load(Ordering::Relaxed) != me {
+        return;
+    }
+    match hart::idle_other() {
+        Some(next) => {
+            plic().set_threshold(CONTEXTS[next].load(Ordering::Relaxed), 0);
+            plic().set_threshold(context(), CLOSED);
+            TAKER.store(next, Ordering::Relaxed);
+        }
+        None => {
+            for i in (0..hart::started()).filter(|&i| i != me) {
+                plic().set_threshold(CONTEXTS[i].load(Ordering::Relaxed), 0);
+            }
+            TAKER.store(EVERY, Ordering::Relaxed);
+        }
+    }
 }
 
 /// Unmask a source: its priority, which every context sees. A priority write is also what makes
 /// QEMU's PLIC look at its sources again (it re-evaluates its output when a priority, a pending
 /// bit or a claim changes, not when an enable bit does), so a source that became pending while
 /// masked is delivered at its unmask. This is the only unmask, so every re-arm after a claim
-/// (`receive`'s) goes through it.
-pub fn enable_irq(irq_no: usize) { plic().set_priority(irq_no as u32, PRIORITY); }
+/// (`receive`'s) goes through it. With every context open, this hart takes them alone first
+/// ([`idling`]).
+pub fn enable_irq(irq_no: usize) {
+    idling();
+    plic().set_priority(irq_no as u32, PRIORITY);
+}
 
 /// Mask a source: priority 0, which the PLIC never delivers, on any context. Its enable bits stay,
 /// so a completion for it is never ignored (a PLIC ignores one for a source not enabled on the
@@ -121,7 +181,8 @@ pub fn complete() {
 }
 
 /// Claim the highest-priority pending interrupt on this hart's context: its source number, or
-/// `None` when nothing is pending there (another hart claimed it first, or it was masked).
+/// `None` when nothing is pending there (another hart claimed it first, it was masked, or this
+/// context was closed since the trap).
 pub fn pending() -> Option<usize> {
     #[cfg(debug_assertions)]
     assert_eq!(CLAIMED.load(Ordering::Relaxed), 0, "a claim before the last one was completed");
@@ -138,15 +199,16 @@ pub fn pending() -> Option<usize> {
 }
 
 /// A checked build's count, by boot index, of the sources each hart claimed and of its claims that
-/// found nothing, another hart's context having claimed the source first ([`report`]).
+/// found nothing, another hart's context having claimed the source first or this one closed since
+/// ([`report`]).
 #[cfg(debug_assertions)]
 static CLAIMS: [AtomicU32; MAX_HARTS] = [const { AtomicU32::new(0) }; MAX_HARTS];
 #[cfg(debug_assertions)]
 static EMPTY: [AtomicU32; MAX_HARTS] = [const { AtomicU32::new(0) }; MAX_HARTS];
 
 /// A checked build's account at `system_reset` (`hart::report`), the started harts only: each
-/// hart's claims, its claims that found nothing, and their sum, the interrupts its context took
-/// whoever claimed them.
+/// hart's claims and their total, each hart's claims that found nothing, and each hart's sum, the
+/// interrupts its context took whoever claimed them.
 #[cfg(debug_assertions)]
 pub fn report() {
     let n = hart::started();
@@ -154,8 +216,9 @@ pub fn report() {
     let empty = EMPTY.each_ref().map(|count| count.load(Ordering::Relaxed));
     let took: [u32; MAX_HARTS] = core::array::from_fn(|i| claimed[i] + empty[i]);
     println!(
-        "external interrupts: claimed by hart {:?}, found nothing by hart {:?}, taken by hart {:?}",
+        "external interrupts: claimed by hart {:?} ({} in all), found nothing by hart {:?}, taken by hart {:?}",
         &claimed[..n],
+        claimed[..n].iter().sum::<u32>(),
         &empty[..n],
         &took[..n]
     );

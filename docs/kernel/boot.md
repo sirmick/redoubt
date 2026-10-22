@@ -223,10 +223,11 @@ the loader's exclusion of them is a reading of a device tree the kernel does not
 
 ### Hardware abstraction
 
-<details><summary>Status: built · tested (7)</summary>
+<details><summary>Status: built · tested (8)</summary>
 
 - bench:rustsbi-boot
 - bench:uart-irq
+- bench:launch-idle-probes
 - bench:sched-lock-contention
 - bench:sched-lock-contention-4
 - bench:sched-lock-contention-4-mttcg
@@ -248,22 +249,40 @@ mean "has a PLIC" or "runs under SBI".
   assembly key on the pointer width ([memory layout](memory-layout.md)).
 
 The **interrupt controller contract** (`kernel/src/arch/riscv/irq.rs`): a backend provides
-`init`, `online` (a started hart takes device interrupts), `enable_irq`, `disable_irq`, `pending`
-(claim at most one interrupt, on the calling hart) and `complete`. The PLIC backend maps the
-controller at `KERNEL_PLIC_BASE` for the kernel alone, from the `Plic` tag, and every started hart
-takes device interrupts: each enables every source `Devs` names on its own S-mode context (from
-`Hart`), threshold 0, once it holds the kernel lock, and sets the external interrupt in `sie`. Any
-hart in user mode or idle takes a raised source; the first to hold the kernel lock claims it on its
-own context, and another hart that trapped for it claims nothing. A checked build counts each
-hart's claims and its claims that found nothing: `sched-lock-contention` and
-`sched-lock-contention-4` require a hart other than the boot hart to take ten or more of their
-alarms, `sched-lock-contention-4-mttcg` every hart, and `sched-irq-wake` reads each device
-interrupt against the runner's slice. The routing saves a wake one kernel section, under a
-millisecond, which no latency target can see
-([R78 (fair kernel entry)](scheduling.md#r78-fair-kernel-entry)), so the counts are its test. The
-trap handler claims a source, completes it, then masks it until the holder's next `receive`, in
-one kernel section
-([R5 (interrupts)](devices.md#r5-interrupts)). A source is masked and unmasked by its priority (0,
+`init`, `online` (a started hart's context takes device interrupts), `enable_irq`, `disable_irq`,
+`pending` (claim at most one interrupt, on the calling hart), `complete`, and the routing's
+`idling` and `running` (below). The PLIC backend maps the controller at `KERNEL_PLIC_BASE` for the
+kernel alone, from the `Plic` tag, and each started hart enables every source `Devs` names on its
+own S-mode context (from `Hart`) once it holds the kernel lock, and sets the external interrupt in
+`sie`. Which contexts take a raised source is their thresholds'. While any hart idles, one hart
+takes device interrupts, the taker: its context's threshold is 0 and every other started
+context's 1, the sources' priority, above which the PLIC delivers nothing, so a source raised at
+rest traps one hart, which claims it and runs the woken driver itself. While no hart idles, every
+context's threshold is 0: every hart in user mode or idle takes a raised source, the first to
+hold the kernel lock claims it on its own context, and another that trapped for it claims
+nothing. The role moves only under the kernel lock. A hart that idles while no hart takes them
+becomes the taker and closes every other context; so does one that unmasks a source in `receive`
+while every context is open, so that a source that went pending while masked is raised on the
+hart about to block for it, not on every hart in user mode. The taker, leaving the kernel for a
+thread, opens another idle hart's context before it closes its own, or every context if no other
+hart idles; a taker woken for nothing keeps the role, and a wake of an idle hart wakes the taker
+last, so the role stays where the interrupts land. At every instant the taker's context or every
+context is open, and each move is one kernel section; a source pending at a move is raised on the
+newly open context by the PLIC's level semantics (QEMU re-evaluates its output on a threshold
+write), so none is lost. One race leaves a claim of nothing: with every context open a busy hart
+traps, and before it holds the lock another hart idles and closes its context. That needs every
+hart busy first, so it never happens at rest. On one hart nothing moves. So a driver's wake never
+waits for a busy hart's kernel section ([R78 (fair kernel entry)](scheduling.md#r78-fair-kernel-entry)):
+while a hart idles the taker is idle and the wake waits for no section at all, and with no hart idle
+every hart takes the source. Under emulation the halted taker's own wake is later at the latency
+targets ([residual risks](scheduling.md#residual-risks)). A checked build counts each hart's
+claims, their total and its claims that found nothing: `sched-lock-contention`,
+`sched-lock-contention-4` and `sched-lock-contention-4-mttcg` require every hart's claims that
+found nothing to be a single digit, and their post-check the claims to equal the interrupts the
+program's `receive`s took; `launch-idle-probes` holds the network card's answer at rest to one
+device interrupt a frame; `sched-irq-wake` reads each device interrupt against the runner's
+slice. The trap handler claims a source, completes it, then masks it until the holder's next
+`receive`, in one kernel section ([R5 (interrupts)](devices.md#r5-interrupts)). A source is masked and unmasked by its priority (0,
 then 1), not by its enable bits: one write reaches every hart's context, so a hart started later
 needs no copy of the masks; a completion is never ignored, as a PLIC ignores one for a source not
 enabled on the completing context; and a priority write is what makes QEMU's PLIC look at its
