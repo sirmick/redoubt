@@ -62,6 +62,7 @@ fires! {
     c11_code: 11, "c11";
     c12_summary: 12, "c12";
     c13_pinned_unsafe: 13, "c13";
+    c14_case_counts: 14, "c14";
 }
 
 /// C1's failures on one page: no status, malformed, double, stray and misplaced lines, and a
@@ -79,6 +80,27 @@ fn c1_reports_each_failure() {
 fn c13_reports_each_failure() {
     let lines: BTreeSet<usize> = run("c13").iter().filter(|f| f.rule == 13).map(|f| f.line).collect();
     assert_eq!(lines, BTreeSet::from([5, 6, 7, 11, 13]));
+}
+
+/// C14's failures on one page, each once with its class: a count of boot cases (a `.toml` under
+/// `tests/data/` is not a case), one past a line break and one in words that the case files
+/// disagree with, and a count the page no longer states; the true counts beside them pass, and a
+/// count in a fenced block is not read. The good tree states every count truly, a phrase broken
+/// inside a code span among them.
+#[test]
+fn c14_reports_each_failure() {
+    let found: Vec<(usize, String)> =
+        run("c14").into_iter().filter(|f| f.rule == 14).map(|f| (f.line, f.message)).collect();
+    let want = [
+        (
+            1,
+            "no longer states `of the {}) passes as a verdict`: state the count, or reword it in the checker too",
+        ),
+        (3, "states 3 boot cases; the case files hold 2"),
+        (4, "states 2 boot cases at `icount = \"shift=3\"`; the case files hold 0"),
+        (8, "states 5 boot cases on the host's clock; the case files hold 1"),
+    ];
+    assert_eq!(found, want.map(|(l, m)| (l, m.to_string())));
 }
 
 /// The search index over its ceiling fails naming the size, the ceiling and the three largest

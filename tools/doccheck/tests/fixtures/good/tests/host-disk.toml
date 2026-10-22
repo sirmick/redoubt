@@ -1,0 +1,4 @@
+description = "A boot with the userland disk"
+kind = "boot"
+
+[userland]

@@ -1,6 +1,7 @@
-//! The docs checker: holds the pages to the style guide's rules C1..C13 (status lines, tests,
+//! The docs checker: holds the pages to the style guide's rules C1..C14 (status lines, tests,
 //! milestones, process references, rule IDs, links, the security register, no binaries,
-//! templates, wire tables, code comments, the table of contents, pinned `unsafe` counts).
+//! templates, wire tables, code comments, the table of contents, pinned `unsafe` counts, the
+//! bench's case counts).
 //!
 //! Markdown is read line by line: fenced blocks (```` ``` ```` or `~~~`) are tracked, and a
 //! heading is a line starting `#`..`######` and a space, outside a fence. Patterns are matched
@@ -71,6 +72,7 @@ pub fn check(root: &Path, scope: Scope) -> Vec<Finding> {
     wire_tables(&mut c, &pages);
     summary(&mut c, &pages);
     pinned_unsafe(&mut c, &pages);
+    case_counts(&mut c, &pages);
     if scope.code {
         code(&mut c, &defs);
     }
@@ -309,7 +311,7 @@ fn has_phrase(lower: &str, phrase: &str) -> bool {
 /// Words that look like commit hashes and are not.
 const NOT_HASHES: [&str; 1] = ["ed25519"];
 
-/// C4's patterns; commit hashes only when `hashes`. With `checker`, `C1`..`C13` are this
+/// C4's patterns; commit hashes only when `hashes`. With `checker`, `C1`..`C14` are this
 /// checker's rule names, not package IDs (the page that documents the checker). One message per
 /// match.
 fn process_refs(s: &str, hashes: bool, checker: bool) -> Vec<String> {
@@ -334,7 +336,7 @@ fn process_refs(s: &str, hashes: bool, checker: bool) -> Vec<String> {
         } else if checker
             && w.strip_prefix('C')
                 .and_then(|n| n.parse::<u8>().ok())
-                .is_some_and(|n| (1..=13).contains(&n) && !w.starts_with("C0"))
+                .is_some_and(|n| (1..=14).contains(&n) && !w.starts_with("C0"))
         {
         } else if PACKAGES.iter().any(|p| w.strip_prefix(p).is_some_and(|r| digits_then(r, true))) {
             out.push(format!("package ID `{w}`"));
@@ -1265,6 +1267,167 @@ fn pinned_under(list: &[UnsafeBudget], paths: &[String]) -> Result<i64, String> 
 
 /// The contents of each `` `...` `` span in `s`.
 fn code_spans(s: &str) -> Vec<String> { s.split('`').skip(1).step_by(2).map(str::to_string).collect() }
+
+// ---- C14: the bench's case counts ----
+
+const TESTBENCH: &str = "docs/testbench.md";
+
+/// A class of case files that a stated count counts.
+struct Class {
+    name: &'static str,
+    has: fn(&toml::Table) -> bool,
+}
+
+fn kind(case: &toml::Table) -> &str { case.get("kind").and_then(|k| k.as_str()).unwrap_or("") }
+fn icount(case: &toml::Table) -> Option<&str> { case.get("icount").map(|i| i.as_str().unwrap_or("")) }
+/// A key that is set and, if a list, not empty.
+fn set(v: Option<&toml::Value>) -> bool { v.is_some_and(|v| v.as_array().is_none_or(|a| !a.is_empty())) }
+fn host_clock(case: &toml::Table) -> bool { kind(case) == "boot" && icount(case).is_none() }
+fn disk(case: &toml::Table) -> bool { case.contains_key("disk") || case.contains_key("userland") }
+fn sockets(case: &toml::Table) -> bool {
+    ["forward", "poke", "peer", "dial"].iter().any(|k| set(case.get("net").and_then(|n| n.get(k))))
+}
+fn input(case: &toml::Table) -> bool { set(case.get("input")) }
+
+const BOOT: Class = Class { name: "boot cases", has: |c| kind(c) == "boot" };
+const GUEST: Class =
+    Class { name: "boot cases under `icount`", has: |c| kind(c) == "boot" && icount(c).is_some() };
+const GUEST_IDLE: Class = Class {
+    name: "boot cases at `icount = \"shift=3,sleep=off\"`",
+    has: |c| kind(c) == "boot" && icount(c) == Some("shift=3,sleep=off"),
+};
+const GUEST_DISK: Class = Class {
+    name: "boot cases at `icount = \"shift=3\"`",
+    has: |c| kind(c) == "boot" && icount(c) == Some("shift=3"),
+};
+const HOST: Class = Class { name: "boot cases on the host's clock", has: host_clock };
+const HOST_DISK: Class = Class { name: "host-clock cases with a disk", has: |c| host_clock(c) && disk(c) };
+const HOST_SOCKETS: Class =
+    Class { name: "host-clock cases with host sockets", has: |c| host_clock(c) && sockets(c) };
+const HOST_INPUT: Class =
+    Class { name: "host-clock cases with `[[input]]`", has: |c| host_clock(c) && input(c) };
+const HOST_NONE: Class = Class {
+    name: "host-clock cases with no disk, sockets or input",
+    has: |c| host_clock(c) && !disk(c) && !sockets(c) && !input(c),
+};
+const LOOPBACK: Class = Class { name: "`ssh-loopback` cases", has: |c| kind(c) == "ssh-loopback" };
+
+/// The counts testbench.md states ("Which cases run in guest time" and "On a shared host"): each
+/// a phrase, matched within a paragraph whatever its line breaks, with `{}` where a number
+/// stands (digits or a word up to twenty), and the class each number counts. Every phrase must be
+/// on the page, so that a count reworded is not left unchecked: reword it here too.
+const STATED: [(&str, &[Class]); 8] = [
+    (
+        "and {} of the {} run under `icount`: {} so, {} with a disk at `icount = \"shift=3\"`",
+        &[GUEST, BOOT, GUEST_IDLE, GUEST_DISK],
+    ),
+    ("What keeps the other {} on the host's clock", &[HOST]),
+    ("a disk or a userland disk ({} cases)", &[HOST_DISK]),
+    ("a peer or a dial ({})", &[HOST_SOCKETS]),
+    ("`[[input]]` ({};", &[HOST_INPUT]),
+    ("of the {} with none of these", &[HOST_NONE]),
+    ("A boot case without `icount` ({} of them)", &[HOST]),
+    ("of the {}) passes as a verdict", &[LOOPBACK]),
+];
+
+const NUMBER_WORDS: &str = "zero one two three four five six seven eight nine ten eleven twelve thirteen \
+    fourteen fifteen sixteen seventeen eighteen nineteen twenty";
+
+/// Every count `STATED` names on testbench.md equals the case files the bench runs
+/// (`tests/*.toml`), counted by class, as C7 holds the security register to the pages.
+fn case_counts(c: &mut Ctx, pages: &[Page]) {
+    let Some(p) = pages.iter().find(|p| p.path == TESTBENCH) else { return };
+    // The page's paragraphs outside fences, each joined into one line, with the offset at which
+    // each of its lines starts.
+    let mut paras: Vec<(String, Vec<(usize, usize)>)> = Vec::new();
+    let mut open = false;
+    for (i, l) in p.lines.iter().enumerate() {
+        if p.fenced[i] || l.trim().is_empty() {
+            open = false;
+            continue;
+        }
+        if !open {
+            paras.push((String::new(), Vec::new()));
+            open = true;
+        }
+        let (text, starts) = paras.last_mut().expect("opened above");
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        starts.push((text.len(), i));
+        text.push_str(l.trim());
+    }
+    let cases = match case_files(c.root) {
+        Ok(cases) => cases,
+        Err((path, e)) => return c.err(14, &path, 1, e),
+    };
+    for (phrase, classes) in STATED {
+        let mut stated = false;
+        for (text, starts) in &paras {
+            for numbers in occurrences(text, phrase) {
+                stated = true;
+                for (&(at, n), class) in numbers.iter().zip(classes) {
+                    let want = cases.iter().filter(|case| (class.has)(case)).count() as u64;
+                    if n != want {
+                        let line = starts.iter().rev().find(|(s, _)| *s <= at).map_or(0, |(_, i)| *i);
+                        let msg = format!("states {n} {}; the case files hold {want}", class.name);
+                        c.err(14, TESTBENCH, line + 1, msg);
+                    }
+                }
+            }
+        }
+        if !stated {
+            let msg =
+                format!("no longer states `{phrase}`: state the count, or reword it in the checker too");
+            c.err(14, TESTBENCH, 1, msg);
+        }
+    }
+}
+
+/// Each place `phrase` occurs in `text`: the offset and value of the number at each `{}`.
+fn occurrences(text: &str, phrase: &str) -> Vec<Vec<(usize, u64)>> {
+    let (first, rest) = phrase.split_once("{}").expect("a stated count has a number");
+    let mut out = Vec::new();
+    'found: for (start, _) in text.match_indices(first) {
+        let mut at = start + first.len();
+        let mut numbers = Vec::new();
+        for literal in rest.split("{}") {
+            let token = text[at..].split(|ch: char| !(is_word(ch) || ch == ',')).next().unwrap_or("");
+            let token = token.trim_end_matches(',');
+            let value = token.replace(',', "").parse().ok().or_else(|| {
+                NUMBER_WORDS.split_whitespace().position(|w| token.eq_ignore_ascii_case(w)).map(|n| n as u64)
+            });
+            let Some(value) = value else { continue 'found };
+            numbers.push((at, value));
+            at += token.len();
+            let Some(after) = text[at..].strip_prefix(literal) else { continue 'found };
+            at = text.len() - after.len();
+        }
+        out.push(numbers);
+    }
+    out
+}
+
+/// The case files the bench runs, `tests/*.toml`, parsed; or the first that does not parse, and why.
+fn case_files(root: &Path) -> Result<Vec<toml::Table>, (String, String)> {
+    // The top level only, as the bench reads it: the directories beside the cases hold their data.
+    let mut files: Vec<String> = fs::read_dir(root.join("tests"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .map(|e| format!("tests/{}", e.file_name().to_string_lossy()))
+        .filter(|f| f.ends_with(".toml"))
+        .collect();
+    files.sort();
+    files
+        .into_iter()
+        .map(|f| {
+            let text = fs::read_to_string(root.join(&f)).map_err(|e| (f.clone(), e.to_string()))?;
+            text.parse::<toml::Table>().map_err(|e| (f.clone(), format!("not a case file: {e}")))
+        })
+        .collect()
+}
 
 /// The book's search index (`searchindex*.js` under `book`; mdbook names the file by its hash):
 /// its size in bytes, or, over `ceiling`, a message naming the size, the ceiling and the three

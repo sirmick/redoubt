@@ -1,0 +1,2 @@
+description = "A boot on the host clock"
+kind = "boot"
