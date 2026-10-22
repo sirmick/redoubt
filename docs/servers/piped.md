@@ -88,8 +88,8 @@ is already built and attacked.
 </details>
 
 A session starts `piped` with `launch` and `serve => "serve"`
-([beamlet](../userland/beamlet.md#natives)): the platform gives `piped` the endpoint's receive right
-and the session the one connection nobody minted, badge 1 (`ROOT_BADGE`). Only that badge attaches,
+([beamlet](../userland/beamlet.md#natives)): the platform makes the endpoint in `piped`'s budget,
+gives `piped` its receive right and the session the one connection nobody minted, badge 1 (`ROOT_BADGE`). Only that badge attaches,
 at the root and with no name; only it makes and removes pipes, and only in the root; any other badge
 below the minted range is refused. The session mints each stage's connections through it with
 `new_connection`, at `NAME/r` or `NAME/w`; a mint at the root or at a pipe's directory is refused,
@@ -111,7 +111,7 @@ admission allows.
   allowance (`BUDGET`) before it serves; the buffers, 32 pages at most, are beside it. The session
   carves `piped` 768 pages for all of it: the lends at worst are 552 pages, the buffers 32, and
   its image, stack, heap and records the rest; 512 would not hold the two buckets admission needs
-  at the least. After `pipe-carries`' pipelines it holds 86 pages on rv64 and 83 on rv32: the
+  at the least. After `pipe-carries`' pipelines it holds 87 pages on rv64 and 84 on rv32: the
   rest of the carve is what its clients' parked calls may lend it at worst. The carve is held
   only while a pipeline runs: `Redoubt.Pipes` destroys it when the last process holding `piped`
   lets go or ends, and starts another at the next pipeline, which `pipe-carries` times at about
@@ -152,9 +152,10 @@ page.
 Status: built · partly tested: a `piped` that ends while a pipeline runs is argued, not attacked
 
 - **No `buckets=N`, or one its allowance cannot hold**, and `piped` exits before it serves.
-- **`piped` ends** (its budget destroyed, a fault): its endpoint dies, and every stage's call on it
-  fails, as a read or write error; the session sees the exit notice, and starts another `piped` at
-  its next pipeline. The session destroys its budget itself when no pipeline holds it
+- **`piped` ends** (its budget destroyed, or a fault, whose exit notice has the session destroy
+  its budget): its endpoint, made in that budget, dies with it, and every call on it fails, a
+  stage's as a read or write error and the session's waiter's at once, so the waiter gives its
+  place back; the session sees the exit notice, and starts another `piped` at its next pipeline. The session destroys its budget itself when no pipeline holds it
   (bench:pipe-carries, bench:pipe-never-reads, bench:pipe-interrupted).
 - **A connection whose reply is lost** is rolled back ([replies and rollback](serving.md#replies-and-rollback)).
 

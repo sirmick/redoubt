@@ -2726,7 +2726,7 @@ impl Kernel {
             S::ProcessStart { process, entry, sp, arg, handles } => {
                 done(self.process_start(pid, *process, *entry, *sp, *arg, handles).map(|_| Ret::Unit))
             }
-            S::EndpointCreate => done(self.endpoint_create(pid).map(Ret::Handle)),
+            S::EndpointCreate { budget } => done(self.endpoint_create(pid, *budget).map(Ret::Handle)),
             S::Mint { source, badge, budget } => {
                 done(self.mint(pid, tid, *source, *badge, *budget).map(Ret::Handle))
             }
@@ -3269,14 +3269,39 @@ impl Kernel {
         Ok(())
     }
 
-    /// `endpoint_create() -> h (badge 0)`: pages charged. Stamped with the caller's budget (R9).
-    pub fn endpoint_create(&mut self, pid: u64) -> R<u64> {
-        let b = self.budget_of(pid).ok_or(Error::Dead)?;
+    /// `endpoint_create(budget?) -> h (badge 0)`: owned by and charged to the budget named, or with
+    /// none the caller's, and stamped with that owner (R9).
+    pub fn endpoint_create(&mut self, pid: u64, budget: Option<u64>) -> R<u64> {
+        // Decoding: the optional budget (0 is none).
+        let budget = decode_optional_handle(budget)?;
+        let caller = self.budget_of(pid).ok_or(Error::Dead)?;
+        // Arguments, then permission: a budget named is the caller's own or below it, and what
+        // is sent to its endpoint may flow to the caller, who receives it (R1, I7).
+        let b = match budget {
+            Some(h) => self.lookup_budget(pid, h)?,
+            None => caller,
+        };
+        if !self.broken(Mutation::R9EndpointInAnyBudget) && !self.is_descendant_or_self(b, caller) {
+            return Err(Error::NotPermitted);
+        }
+        let (c, o) = (&self.budgets[&caller], &self.budgets[&b]);
+        if !self.broken(Mutation::R1EndpointOwnerLabelsIgnored)
+            && c.class != Class::System
+            && !superset(&c.labels, &o.labels)
+        {
+            return Err(Error::LabelDenied);
+        }
         let cost = if self.broken(Mutation::R6EndpointsFree) { 0 } else { self.costs.endpoint };
         self.charge(b, cost)?;
         let id = self.next_endpoint;
-        let h =
-            Handle { object: Object::Endpoint(id), badge: 0, stamp: b, origin: Origin::Created { by: b } };
+        // Stamped with its owner, so every handle to an endpoint is stamped with its owner or a
+        // budget below it (R9).
+        let h = Handle {
+            object: Object::Endpoint(id),
+            badge: 0,
+            stamp: b,
+            origin: Origin::Created { by: caller },
+        };
         self.endpoints.insert(
             id,
             Endpoint {
@@ -4036,7 +4061,7 @@ mod lifetime_regressions {
         for destroy_creator in [false, true] {
             for destroy_before_exit in [false, true] {
                 let mut k = Kernel::boot(&Boot::default(), None).unwrap();
-                let ep = k.endpoint_create(INIT_PID).unwrap();
+                let ep = k.endpoint_create(INIT_PID, None).unwrap();
                 let Object::Endpoint(e) = k.processes[&INIT_PID].handles[&ep].object else { panic!() };
                 let creator_budget = k.budget_create(INIT_PID, USERS, 32, 1, 10, &[], 0, FOREVER).unwrap();
                 let creator_h = k.process_create(INIT_PID, creator_budget, ep).unwrap();
@@ -4073,7 +4098,7 @@ mod lifetime_regressions {
                         .any(|p| { p.handles.values().any(|h| h.object == Object::Process(child)) })
                 );
 
-                let new_ep = k.endpoint_create(INIT_PID).unwrap();
+                let new_ep = k.endpoint_create(INIT_PID, None).unwrap();
                 let Object::Endpoint(new_e) = k.processes[&INIT_PID].handles[&new_ep].object else {
                     panic!()
                 };
@@ -4103,7 +4128,7 @@ mod lifetime_regressions {
     #[test]
     fn ghost_rejects_reuse_and_free_before_notice_retirement() {
         let mut k = Kernel::boot(&Boot::default(), None).unwrap();
-        let ep = k.endpoint_create(INIT_PID).unwrap();
+        let ep = k.endpoint_create(INIT_PID, None).unwrap();
         let h = k.process_create(INIT_PID, SYSTEM, ep).unwrap();
         let Object::Process(child) = k.processes[&INIT_PID].handles[&h].object else { panic!() };
         k.process_start(INIT_PID, h, 0, 0, 0, &[]).unwrap();
@@ -4161,7 +4186,7 @@ mod tick_equivalence {
         for mutation in core::iter::once(None).chain(Mutation::ALL.into_iter().map(Some)) {
             for kind in 0..7 {
                 let mut k = Kernel::boot(&Boot::default(), mutation).unwrap();
-                let ep = k.endpoint_create(INIT_PID).unwrap();
+                let ep = k.endpoint_create(INIT_PID, None).unwrap();
                 // All but the one-budget control have two runnable budgets.
                 if kind != 0 {
                     let child = k.process_create(INIT_PID, SYSTEM, ep).unwrap();

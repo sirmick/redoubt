@@ -6,9 +6,12 @@
 //!   namespace entries and named handles, its arguments. The platform adds the loader stub, which it carries
 //!   as `init` does, and the job's own exit endpoint, since `process_create` gives no PID to tell two
 //!   children's notices apart.
-//! - **A server is given its endpoint here.** With `serve`, the platform makes an endpoint, gives the child
-//!   its receive right under that name and closes its own once the child has started, so the child alone
-//!   serves it; the caller gets a send right ([`SERVED_BADGE`]), the one connection to it that nobody minted.
+//! - **A server is given its endpoint here.** With `serve`, the platform makes an endpoint in the child's
+//!   budget, gives the child its receive right under that name and closes its own once the child has started,
+//!   so the child alone serves it; the caller gets a send right ([`SERVED_BADGE`]), the one connection to it
+//!   that nobody minted. The endpoint is that budget's, so it dies with the child's budget: every call to it
+//!   then fails, one queued and one made after alike, and none waits for a server that has gone
+//!   (docs/kernel/ipc.md, R4b).
 //! - **At most [`MAX_JOBS`] jobs run at once**, each watched by one of as many threads, started the first
 //!   time one is needed and reused: a thread receives on its job's exit endpoint until the notice comes and
 //!   wakes the VM with it through a badge minted for it ([`BADGE`] + its index). The VM then closes the job's
@@ -110,7 +113,7 @@ impl Jobs {
         };
         let Resolved { budget, budget_pages, namespace, handles } = resolved;
         let served = match &l.serve {
-            Some(_) => Some(served()?),
+            Some(_) => Some(served(budget)?),
             None => None,
         };
         let close_served = |served: &Option<(Endpoint, Endpoint)>| {
@@ -211,9 +214,10 @@ impl Jobs {
     }
 }
 
-/// A new endpoint for a child to serve: its receive right, and the caller's send right to it.
-fn served() -> Result<(Endpoint, Endpoint), Refused> {
-    let receive = Endpoint::create().map_err(|e| Refused(kernel(e)))?;
+/// A new endpoint for a child to serve, owned by its budget: its receive right, and the caller's
+/// send right to it.
+fn served(budget: Handle) -> Result<(Endpoint, Endpoint), Refused> {
+    let receive = Endpoint::create_in(&Budget::from_handle(budget)).map_err(|e| Refused(kernel(e)))?;
     let badge = NonZeroU64::new(SERVED_BADGE).ok_or(Refused("protocol"))?;
     match receive.mint(badge, None) {
         Ok(send) => Ok((receive, send)),

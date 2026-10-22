@@ -47,7 +47,9 @@ impl World {
     }
 
     pub fn setup(&mut self) -> Result<(u64, u64, u64), String> {
-        let Ret::Handle(ep) = self.value(1, Syscall::EndpointCreate)? else { return Err("endpoint".into()) };
+        let Ret::Handle(ep) = self.value(1, Syscall::EndpointCreate { budget: None })? else {
+            return Err("endpoint".into());
+        };
         let Ret::Handle(client) =
             self.value(1, Syscall::Mint { source: MintSource::Handle(ep), badge: 7, budget: None })?
         else {
@@ -167,7 +169,7 @@ pub fn swept_index_stays_dead(mutation: Option<Mutation>) -> Result<(), String> 
         deadline: FOREVER,
     };
     let b = handle(w.value(1, spec)?)?;
-    let ep = handle(w.value(1, Syscall::EndpointCreate)?)?;
+    let ep = handle(w.value(1, Syscall::EndpointCreate { budget: None })?)?;
     let m = handle(w.value(1, Syscall::Mint { source: MintSource::Handle(ep), badge: 5, budget: Some(b) })?)?;
     expect(w.result(1, Syscall::BudgetDestroy { h: b })? == Ok(Ret::Unit), "destroyed")?;
     let send =
@@ -179,11 +181,11 @@ pub fn swept_index_stays_dead(mutation: Option<Mutation>) -> Result<(), String> 
     expect(w.result(1, mint)? == Err(Error::Dead), "a dead budget narrowing a mint")?;
     expect(w.result(1, Syscall::BudgetUsage { h: m })? == Err(Error::Dead), "Dead before WrongObject")?;
     expect(w.result(1, Syscall::BudgetUsage { h: ep })? == Err(Error::WrongObject), "a live endpoint")?;
-    let fresh = handle(w.value(1, Syscall::EndpointCreate)?)?;
+    let fresh = handle(w.value(1, Syscall::EndpointCreate { budget: None })?)?;
     expect(fresh != b && fresh != m, "a new handle takes no dead index")?;
     expect(w.result(1, Syscall::HandleClose { h: b })? == Ok(Ret::Unit), "a dead entry closes")?;
     expect(w.result(1, Syscall::HandleClose { h: b })? == Err(Error::BadHandle), "then it is gone")?;
-    let again = handle(w.value(1, Syscall::EndpointCreate)?)?;
+    let again = handle(w.value(1, Syscall::EndpointCreate { budget: None })?)?;
     expect(again == b.min(m), "closed, the lowest dead index is free again")?;
     trace_roundtrip(&w, mutation)
 }
@@ -231,7 +233,9 @@ pub fn reap_empties_and_keeps(mutation: Option<Mutation>) -> Result<(), String> 
     expect(usage(&mut w, p)? == empty, "reaping an empty budget changes nothing")?;
     expect(w.result(1, Syscall::BudgetReap { h: 1 << 20 })? == Err(Error::BadHandle), "no such handle")?;
     expect(w.result(1, Syscall::BudgetReap { h: 0 })? == Err(Error::BadHandle), "handle 0")?;
-    let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate)? else { return Err("endpoint".into()) };
+    let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate { budget: None })? else {
+        return Err("endpoint".into());
+    };
     expect(w.result(1, Syscall::BudgetReap { h: ep })? == Err(Error::WrongObject), "not a budget")?;
     trace_roundtrip(&w, mutation)
 }
@@ -268,7 +272,7 @@ pub fn sibling_destroy_spares_neighbours(mutation: Option<Mutation>) -> Result<(
     };
     for order in orders {
         let mut w = World::booted(&boot, mutation);
-        let e = handle(w.value(1, Syscall::EndpointCreate)?)?;
+        let e = handle(w.value(1, Syscall::EndpointCreate { budget: None })?)?;
         let carve = Syscall::BudgetCreate {
             parent: 3,
             pages: 13 * N as u64,
@@ -343,8 +347,8 @@ fn destruction_delivers_at_its_end(mutation: Option<Mutation>) -> Result<World, 
         Ret::Tid(t) => Ok(t),
         r => Err(format!("expected a thread, got {r:?}")),
     };
-    let e = handle(w.value(1, Syscall::EndpointCreate)?)?;
-    let f = handle(w.value(1, Syscall::EndpointCreate)?)?;
+    let e = handle(w.value(1, Syscall::EndpointCreate { budget: None })?)?;
+    let f = handle(w.value(1, Syscall::EndpointCreate { budget: None })?)?;
     // B holds K and carves C, which holds S: more than `budget`'s 64 pages and 2 processes.
     let carve = Syscall::BudgetCreate {
         parent: 3,
@@ -388,8 +392,67 @@ pub fn destruction_delivery_trace() -> String {
     trace::record(&Boot::default(), &destruction_delivers_at_its_end(None).unwrap().ops, None).unwrap()
 }
 
+/// `endpoint_create` naming a budget (kernel/objects.md): the endpoint is owned by that budget,
+/// stamped with it, and dies with it, while the caller's handle to it was the one way in; a budget
+/// above the caller's is `NotPermitted`, one with a label the caller's lacks `LabelDenied`, and an
+/// endpoint `WrongObject`. The caller runs in a budget carved from `users`, given `system`, a budget
+/// below its own, one below its own with a label (carved by `init`, which may add one), and an
+/// endpoint, in its slots 1 to 4.
+pub fn endpoint_create_owned(mutation: Option<Mutation>) -> Result<(), String> {
+    trace_roundtrip(&endpoint_create_world(mutation)?, mutation)
+}
+
+/// The world of [`endpoint_create_owned`], for replay: random traces never name a labelled budget
+/// below a user-class caller.
+pub fn endpoint_create_trace() -> String {
+    trace::record(&Boot::default(), &endpoint_create_world(None).unwrap().ops, None).unwrap()
+}
+
+fn endpoint_create_world(mutation: Option<Mutation>) -> Result<World, String> {
+    let mut w = World::new(mutation);
+    let handle = |r: Ret| match r {
+        Ret::Handle(h) => Ok(h),
+        r => Err(format!("expected a handle, got {r:?}")),
+    };
+    let carve = |parent: u64, pages: u64, processes: u64, weight: u64, labels: Vec<u64>| {
+        Syscall::BudgetCreate { parent, pages, processes, weight, labels, account: 0, deadline: FOREVER }
+    };
+    let e = handle(w.value(1, Syscall::EndpointCreate { budget: None })?)?;
+    let own = handle(w.value(1, carve(3, 32, 1, 2, vec![]))?)?;
+    let below = handle(w.value(1, carve(own, 4, 0, 0, vec![]))?)?;
+    let labelled = handle(w.value(1, carve(own, 4, 0, 0, vec![5]))?)?;
+    let (pid, tid) = spawn_with(&mut w, own, e, vec![2, below, labelled, e])?;
+    let create = |w: &mut World, budget: u64| match w
+        .op(Op::Sys { pid, tid, call: Syscall::EndpointCreate { budget: Some(budget) } })?
+        .outcome
+    {
+        Outcome::Done(r) => Ok(r),
+        x => Err(format!("endpoint_create: {x:?}")),
+    };
+    expect(create(&mut w, 1)? == Err(Error::NotPermitted), "a budget above the caller's")?;
+    expect(create(&mut w, 3)? == Err(Error::LabelDenied), "a budget with a label the caller lacks")?;
+    expect(create(&mut w, 4)? == Err(Error::WrongObject), "an endpoint")?;
+    let r = handle(create(&mut w, 2)?.map_err(|e| format!("a budget below the caller's: {e:?}"))?)?;
+    let budget_of = |w: &World, pid: u64, h: u64| match w.k.processes[&pid].handles.get(&h).map(|h| h.object)
+    {
+        Some(Object::Budget(b)) => Some(b),
+        _ => None,
+    };
+    let b = budget_of(&w, 1, below).ok_or("init's handle to the budget below")?;
+    let made = w.k.processes[&pid].handles[&r];
+    let Object::Endpoint(id) = made.object else { return Err("not an endpoint".into()) };
+    expect(w.k.endpoints[&id].owner == b && made.stamp == b, "owned by and stamped with the budget named")?;
+    w.value(1, Syscall::BudgetDestroy { h: below })?;
+    expect(
+        !w.k.endpoints.contains_key(&id) && !w.k.processes[&pid].handles.contains_key(&r),
+        "the endpoint and its receive right go with the budget",
+    )?;
+    Ok(w)
+}
+
 /// Independent examples from the completion table, not kernel-derived expectations.
 pub fn ipc_contracts(mutation: Option<Mutation>) -> Result<(), String> {
+    endpoint_create_owned(mutation)?;
     bad_record_takes_nothing(mutation)?;
     trace_roundtrip(&destruction_delivers_at_its_end(mutation)?, mutation)?;
     reap_empties_and_keeps(mutation)?;
@@ -526,7 +589,9 @@ pub fn partial_reply_trace() -> String {
 pub fn dma_quarantine_trace() -> String {
     let mut w = World::new(None);
     let child = |w: &mut World, handles: Vec<u64>| {
-        let Ok(Ret::Handle(ep)) = w.value(1, Syscall::EndpointCreate) else { panic!("endpoint") };
+        let Ok(Ret::Handle(ep)) = w.value(1, Syscall::EndpointCreate { budget: None }) else {
+            panic!("endpoint")
+        };
         let call = Syscall::BudgetCreate {
             parent: 3,
             pages: 40,
@@ -690,7 +755,9 @@ pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
     // slice ends (R12: never preempt on a wake).
     {
         let mut w = World::new(mutation);
-        let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate)? else { return Err("endpoint".into()) };
+        let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate { budget: None })? else {
+            return Err("endpoint".into());
+        };
         let b1 = budget(&mut w, 3, 100, FOREVER)?;
         let b2 = budget(&mut w, 3, 100, FOREVER)?;
         let (pa, ta) = spawn(&mut w, b1, ep)?;
@@ -836,7 +903,9 @@ pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
             },
         )?;
         expect(r.outcome == Outcome::Done(Err(Error::InvalidArgument)), "carving all of init's free weight")?;
-        let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate)? else { return Err("endpoint".into()) };
+        let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate { budget: None })? else {
+            return Err("endpoint".into());
+        };
         let x = budget(&mut w, 3, 10, FOREVER)?;
         let r = w.sys(
             1,
@@ -918,7 +987,9 @@ pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
 /// ops make a trace that replay checks against the expiry order.
 fn expiry_order_world(mutation: Option<Mutation>) -> Result<World, String> {
     let mut w = World::new(mutation);
-    let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate)? else { return Err("endpoint".into()) };
+    let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate { budget: None })? else {
+        return Err("endpoint".into());
+    };
     let Ret::Handle(h) =
         w.value(1, Syscall::Mint { source: MintSource::Handle(ep), badge: 7, budget: None })?
     else {

@@ -256,7 +256,7 @@ Status: built · tested: bench:redoubt-ipc-attack, mutation:R1ChecksReceiverNotO
 
 ### R1 (flow)
 
-<details><summary>Status: built · partly tested: a call or send between user budgets with different labels is attacked only in the model; on the target only a `budget_usage` read and an exit notice are · tested (6)</summary>
+<details><summary>Status: built · partly tested: a call or send between user budgets with different labels is attacked only in the model; on the target only a `budget_usage` read and an exit notice are · tested (7)</summary>
 
 - bench:process-attack
 - bench:process-review
@@ -264,12 +264,13 @@ Status: built · tested: bench:redoubt-ipc-attack, mutation:R1ChecksReceiverNotO
 - mutation:R1ChecksReceiverNotOwner
 - mutation:R1ExitNoticeIgnoresLabels
 - mutation:R1UsageIgnoresLabels
+- mutation:R1EndpointOwnerLabelsIgnored
 
 </details>
 
 Information flows from budget A to budget B only if B is class `system` or B's labels include
 all of A's. A message is a flow from the sender's budget to the endpoint's **owner** (the budget
-that created it), whoever takes it, so the check is made when the message is sent. Because every
+it was made in), whoever takes it, so the check is made when the message is sent. Because every
 call is answered or refused, it is also a flow back. So between two `user`-class budgets the
 label sets must be **equal**, or the call gets `LabelDenied`. When either side is `system`
 class the kernel does not check: system servers serve many label sets and check them
@@ -437,7 +438,13 @@ notices. A `send` is never an open call, so `reply` to a send's id is `InvalidAr
 When a thread or process exits, faults or is killed holding open calls, each waiting caller
 gets `Dead` and its lend back intact; the lend of an abandoned call is freed. Senders still
 queued on the endpoint keep waiting: the endpoint outlives the server, and a restarted server
-receives them ([init](../servers/init.md#restarts-and-reboots)). A thread of a
+receives them ([init](../servers/init.md#restarts-and-reboots)); `init`'s servers' endpoints are
+`root`'s for that. A server a session launches is the other way: its endpoint is made in its own
+budget ([objects](objects.md#making-copying-and-closing-handles)), so its end, that budget
+destroyed, fails every caller with `Dead`: one queued, and one calling after through the dead
+entry the destruction left of its handle (I17 (a swept index stays dead until closed)), so none
+waits on a server that has gone
+([beamlet](../userland/beamlet.md#natives)). A thread of a
 [doomed](budgets.md#r10-destruction) process (one the destruction will kill: its budget is dying,
 or its creator's is) is offered nothing (no message, exit notice or abandoned-call notice):
 nothing is delivered while the destruction runs, and the deliveries at its end find it gone.

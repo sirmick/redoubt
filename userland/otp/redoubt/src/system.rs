@@ -494,10 +494,10 @@ impl System for Redoubt {
     /// from its own budget, so no budget it carved is below another. It takes the bindings of the
     /// connections that came through it too: every known handle whose returns died with it is
     /// forgotten, every prefix naming its connection unbound, and its hub connection ended
-    /// ([`crate::io::Io::forget`]), so the VM's send right to a server it launched there (the
-    /// VM's own to close: the endpoint is charged to the VM's budget) is closed when its last
-    /// term goes, nothing is sent on it after, and the namespace holds no entry to a server that
-    /// is gone.
+    /// ([`crate::io::Io::forget`]), so the VM's send right to a server it launched there, a dead
+    /// entry too since the endpoint was that budget's (`jobs.rs`), is closed when its last term
+    /// goes, nothing is sent on it after, and the namespace holds no entry to a server that is
+    /// gone.
     fn budget_destroy(&mut self, b: &Object) -> Result<(), Refused> {
         // The handle is the term's, which closes it.
         Budget::from_handle(budget(b)?.0).destroy_keeping().map_err(|e| name(e.into()))?;

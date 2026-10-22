@@ -797,7 +797,8 @@ fn serving(k: &Kernel) -> Check {
 /// I1: every live handle names a live object (and process tables use indices from 1).
 /// I2: no handle is stamped with a destroyed budget.
 /// I3: a minted handle's badge is non-zero and its stamp is its source's default stamp or a
-///     descendant; a created handle is stamped with its creator's budget (R9).
+///     descendant; a created handle is stamped with its creator's budget, or an endpoint's with
+///     its owner, the creator's budget or one below it within the creator's labels (R9, I7).
 /// I4: badge-0 endpoint handles are `endpoint_create`'s results or copies of them.
 /// I17: an index a sweep closed stays a dead entry, live to no handle, until its holder closes it.
 fn i17_swept_indices(k: &Kernel) -> Check {
@@ -830,9 +831,31 @@ fn i1_i2_i3_i4_handles(k: &Kernel) -> Check {
         ensure!(k.budgets.contains_key(&h.stamp), "I2: {at} is stamped with destroyed budget {}", h.stamp);
         match h.origin {
             Origin::Boot => ensure!(h.stamp == ROOT, "R9: {at}: a boot handle stamped {}", h.stamp),
-            Origin::Created { by } => {
-                ensure!(h.stamp == by, "R9: {at}: created by budget {by}, stamped {}", h.stamp)
-            }
+            // An endpoint is stamped with its owner, which `endpoint_create` may name: its
+            // creator's budget or one below it, whose labels the creator's include unless it is
+            // system class, since the creator receives what is sent to the owner (R9, I7).
+            Origin::Created { by } => match h.object {
+                Object::Endpoint(e) => {
+                    let owner = k.endpoints[&e].owner;
+                    ensure!(h.stamp == owner, "R9: {at}: an endpoint owned by {owner}, stamped {}", h.stamp);
+                    ensure!(
+                        k.is_descendant_or_self(owner, by),
+                        "R9: {at}: created by budget {by}, owned by {owner}, which is not it or below it"
+                    );
+                    let (Some(creator), Some(o)) = (k.budgets.get(&by), k.budgets.get(&owner)) else {
+                        return Err(format!(
+                            "R9: {at}: created by budget {by}, gone while its endpoint lives"
+                        ));
+                    };
+                    ensure!(
+                        creator.class == Class::System || superset(&creator.labels, &o.labels),
+                        "I7: {at}: created by budget {by} with {:?}, owned by {owner} with {:?}",
+                        creator.labels,
+                        o.labels
+                    );
+                }
+                _ => ensure!(h.stamp == by, "R9: {at}: created by budget {by}, stamped {}", h.stamp),
+            },
             Origin::Minted { default_stamp } => {
                 ensure!(h.badge != 0, "I3: {at}: minted with badge 0");
                 ensure!(

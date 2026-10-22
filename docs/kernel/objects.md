@@ -37,7 +37,7 @@ those three walls and the tests that attack them.
 | Kind | What it is | Made by | Ends when |
 | --- | --- | --- | --- |
 | budget | limits on pages, processes and CPU weight, with a class, labels, an account and an optional deadline ([budgets](budgets.md)) | `budget_create`; `root`, `system` and `users` by the kernel at boot | it or a budget above it is destroyed, by `budget_destroy` or a deadline |
-| endpoint | what clients call and servers receive on; it holds no queue ([IPC](ipc.md)) | `endpoint_create` | its **owner**, the budget of the process that created it, is destroyed |
+| endpoint | what clients call and servers receive on; it holds no queue ([IPC](ipc.md)) | `endpoint_create` | its **owner**, the budget its creator named or else the creator's own, is destroyed |
 | device | an MMIO range with a DMA flag, an interrupt line, or the right to power off or reboot ([devices](devices.md)) | the kernel at boot, from the loader's device list; never later | its owner is destroyed, or a DMA device fails its reset |
 | process | a program with its address space and threads, and afterwards its exit notice ([processes](processes.md)) | `process_create` | its exit notice is received or dropped, or its creator's budget is destroyed |
 
@@ -187,23 +187,36 @@ yet received still arrives as 0.
 
 ### Making, copying and closing handles
 
-<details><summary>Status: built · tested (5)</summary>
+<details><summary>Status: built · partly tested: `endpoint_create`'s `LabelDenied` is attacked only in the model · tested (9)</summary>
 
 - bench:budget
+- bench:budget-syscall-attack
 - bench:process
 - bench:process-attack
 - bench:redoubt-ipc
 - bench:redoubt-revoke
+- host:redoubt-model::an_endpoint_named_into_a_budget_below_is_owned_by_it_and_dies_with_it
+- mutation:R9EndpointInAnyBudget
+- mutation:R1EndpointOwnerLabelsIgnored
 
 </details>
 
 | Call | Arguments -> result | The handle |
 | --- | --- | --- |
-| `endpoint_create` | -> h | the receive right (badge 0) to a new endpoint, owned by and charged to the caller's budget |
+| `endpoint_create` | h(budget) or none -> h | the receive right (badge 0) to a new endpoint, owned by and charged to the budget named, or with none to the caller's budget |
 | `budget_create` | h(parent), spec -> h | a new child budget ([budgets](budgets.md)) |
 | `process_create` | h(budget), h(exit endpoint) -> h | a new process object ([processes](processes.md)) |
 | `mint` | source, badge, h(budget) or none -> h | another handle to an existing endpoint, with a non-zero badge ([below](#mint)) |
 | `handle_close` | h | removed, or a dead entry freed; the object is untouched |
+
+`endpoint_create` with a budget handle makes the endpoint that budget's: it is charged there and
+dies when that budget is destroyed, whoever holds its receive right. The budget must be the
+caller's own or below it in the budget tree, or the call is `NotPermitted`, so no endpoint
+outlives the budget that made it. Whoever holds the receive right takes what is sent to the owner,
+a flow from the owner to the caller, so a caller not of class `system` whose labels do not include
+the budget's gets `LabelDenied` ([R1 (flow)](ipc.md#r1-flow)). A launcher names the budget it
+carved for a server it starts, so the server's end fails every call to its endpoint
+([R4b (a server dies)](ipc.md#r4b-a-server-dies)).
 
 Each call that makes a handle installs it at the lowest free index of the caller's table,
 stamped as [R9](#r9-stamps) says. If the table cannot take it (`TooLarge`, or `OutOfMemory` for
@@ -249,7 +262,7 @@ Everything the kernel stores is charged in whole pages to one budget (R6 (chargi
 | What | Pages | Charged to |
 | --- | --- | --- |
 | budget | 1 | its parent; `root`'s own to `root`, a rule the boot code departs from ([budgets](budgets.md#residual-risks)) |
-| endpoint | 1 | its owner, the budget of the process that created it |
+| endpoint | 1 | its owner, the budget its creator named or else the creator's own |
 | device | 1 | its owner: `system`, charged at boot |
 | process object (it holds the exit notice) | 1 | the creator's budget, the budget of `process_create`'s caller |
 | process header | 1 | the budget the process runs in |
@@ -402,14 +415,16 @@ A handle of another kind gets `WrongObject`. A device handle is the only way to 
 
 ### R9 (stamps)
 
-<details><summary>Status: built · partly tested: a handle minted from a call taking that call's stamp is attacked only in the model · tested (7)</summary>
+<details><summary>Status: built · partly tested: a handle minted from a call taking that call's stamp is attacked only in the model · tested (9)</summary>
 
 - bench:process-attack
 - bench:redoubt-revoke
 - bench:budget-deadline
+- bench:budget-syscall-attack
 - mutation:R9ReceivedHandleRestamped
 - mutation:R9MintStampsCaller
 - mutation:R9MsgStampIsSenderBudget
+- mutation:R9EndpointInAnyBudget
 - mutation:R10KeepForeignHandles
 
 </details>
@@ -417,9 +432,12 @@ A handle of another kind gets `WrongObject`. A device handle is the only way to 
 Every handle has a stamp, a budget. Destroying that budget, or any budget above it, closes the
 handle and every copy of it, in every table; a copy in a message not yet received arrives as 0
 ([R10 (destruction)](budgets.md#r10-destruction), I2). Which budget the stamp is:
-- `endpoint_create`, `budget_create` and `process_create` stamp the new handle with the
-  **caller's budget**, the one its process runs in. A budget handle made by a process in budget A
-  dies with A, even though the budget it names sits under another parent and outlives it.
+- `budget_create` and `process_create` stamp the new handle with the **caller's budget**, the
+  one its process runs in. A budget handle made by a process in budget A dies with A, even though
+  the budget it names sits under another parent and outlives it.
+- `endpoint_create` stamps the receive right with the **endpoint's owner**: the caller's budget,
+  or the budget it named, which is at or below it. So every handle to an endpoint is stamped with
+  its owner or a budget below it.
 - **A copy keeps its stamp.** A handle delivered in a message or a reply, or placed by
   `process_start`, is stamped as the sender's was. No path restamps a handle.
 - **`mint` stamps with the source's default stamp**, or with a budget the caller names at or below

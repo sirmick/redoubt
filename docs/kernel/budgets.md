@@ -472,7 +472,7 @@ with `OutOfMemory` before anything changes. Who pays:
   until it maps nothing, [memory](memory.md#page-tables)) and mapped pages: the budget the
   process **runs in**;
 - a handle-table page: the budget of the process whose table it is;
-- an endpoint: the budget of the process that created it, its **owner**;
+- an endpoint: its **owner**, the budget its creator named or else the creator's own;
 - an open call's page: the receiving process's budget ([R4a (open calls)](ipc.md#r4a-open-calls));
 - a lent page and the page tables that map it: the caller **and** the receiving process's budget
   while the call is open ([R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls)).

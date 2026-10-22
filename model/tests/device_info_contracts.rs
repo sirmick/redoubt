@@ -40,8 +40,12 @@ fn every_device_handle_answers_its_devs_entry() {
 #[test]
 fn what_is_not_a_device_is_refused_in_order() {
     let mut w = World::new(None);
-    let Ok(Ret::Handle(ep)) = call(&mut w, Syscall::EndpointCreate) else { panic!("endpoint") };
-    let Ok(Ret::Handle(closed)) = call(&mut w, Syscall::EndpointCreate) else { panic!("endpoint") };
+    let Ok(Ret::Handle(ep)) = call(&mut w, Syscall::EndpointCreate { budget: None }) else {
+        panic!("endpoint")
+    };
+    let Ok(Ret::Handle(closed)) = call(&mut w, Syscall::EndpointCreate { budget: None }) else {
+        panic!("endpoint")
+    };
     assert_eq!(call(&mut w, Syscall::HandleClose { h: closed }), Ok(Ret::Unit));
     for h in [0, 1 << 32, u64::MAX, closed, 999] {
         assert_eq!(call(&mut w, Syscall::DeviceInfo { h }), Err(Error::BadHandle), "handle {h:#x}");

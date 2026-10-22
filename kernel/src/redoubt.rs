@@ -94,8 +94,8 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             write_record_to(usage_rec, &frames, &usage.encode());
             Ok(Some(Return::Nothing))
         }),
-        Call::EndpointCreate => MemoryManager::with_mut(|mm| {
-            let handle = mm.endpoint_create(pid)?;
+        Call::EndpointCreate { budget } => MemoryManager::with_mut(|mm| {
+            let handle = mm.endpoint_create(pid, budget.map(|h| h.index()))?;
             Ok(Some(Return::Handle(redoubt_sys::Handle::new(handle).expect("indices start at 1"))))
         }),
         Call::Mint { source, badge, budget } => MemoryManager::with_mut(|mm| {

@@ -1030,9 +1030,10 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
   ([init](../servers/init.md#the-startup-block)): one source, nothing a caller types. A receive right the
   VM serves among them goes to the program as a send right with a badge of the launch's own, in a
   budget the VM carved (below). With `serve => Name`
-  the program is a server: the platform makes an endpoint, gives the child its receive right as
-  the named handle `Name`, keeps none of it once the child has started, and answers `{ok, Job,
-  Connection}`, the caller's send right with the server's own badge (below every minted one), which
+  the program is a server: the platform makes an endpoint in the launch's budget, so it dies with
+  the server's budget ([objects](../kernel/objects.md#making-copying-and-closing-handles)), gives
+  the child its receive right as the named handle `Name`, keeps none of it once the child has
+  started, and answers `{ok, Job, Connection}`, the caller's send right with the server's own badge (below every minted one), which
   `bind/2` attaches like any other; this is how a session starts the server of its pipes
   ([native programs](native.md#standard-input-and-output-and-pipes)). At most `MAX_JOBS` run at
   once, each watched by a thread, started the first time one is needed, that waits for its exit
@@ -1072,10 +1073,14 @@ So a collection always closes what its term held, dead or live: the budget's own
 handle the server launched with `serve` in that budget minted and returned to calls on it, since
 its mints are stamped with that budget (a pipeline's stage connections, which `piped` mints), and
 a handle such a server forwarded rather than minted, which lives on. The VM carves only from its
-own budget, so no budget it carved is below another. What is the VM's own goes the other way: the
-send right a `launch` with `serve` gives it is to an endpoint the VM made, charged to the VM's
-budget, so the server's death leaves the slot to the VM, and it is closed when the right's last
-term goes. A handle the VM started with is known to the namespace for the VM's life; one a bind
+own budget, so no budget it carved is below another. The send right a `launch` with `serve` gives
+the VM goes the same way: its endpoint is the launch budget's, so the destruction leaves the right
+a dead entry too, and the server's end fails every call to the endpoint with `Dead`, the waiter's
+included, whether the server had taken it, it was queued, or it is made after; so the waiter
+hands its end over and gives its place back
+([R4b (a server dies)](../kernel/ipc.md#r4b-a-server-dies)). Once the endpoint was the VM's, and a
+waiter that called between the server's last answer and its death waited for ever, holding its
+place. A handle the VM started with is known to the namespace for the VM's life; one a bind
 made known lives with the budget it came through (the budget a `launch` with `serve` ran in, or
 the one the connection a call brought it on came through), so destroying that budget forgets it,
 unbinds its prefixes and ends its hub connection, and a session's `piped`, bound at every
@@ -1089,9 +1094,11 @@ its end over** (`Io::forget`): its terms' collection cannot close it while the w
 and no later handle takes the index under it. Tested: `a_destroyed_budgets_dead_entry_is_closed_when_its_term_is_collected`,
 `what_a_served_server_returned_goes_with_its_budget_and_is_closed_with_its_term`,
 `a_served_servers_binding_and_handle_go_with_its_budget` and
-`a_forgotten_connections_requests_reach_no_later_holder_of_its_index` on the host, against
-a fake kernel that keeps those indices dead as the kernel does, and `pipe-eight` and
-`pipe-sixty-four` on the machine. A request's handles come with no budget: the kernel tells a receiver the sender's
+`a_forgotten_connections_requests_reach_no_later_holder_of_its_index`,
+`a_served_servers_end_before_its_waiters_next_call_frees_the_place` and
+`a_served_servers_end_fails_its_waiters_queued_call` on the host, against a fake kernel that
+keeps those indices dead, destroys a budget's endpoints and kills its processes as the kernel
+does, and `pipe-eight` and `pipe-sixty-four` on the machine. A request's handles come with no budget: the kernel tells a receiver the sender's
 badge, account and labels, never its budget, and a carved budget carries the session's account and
 labels. So a receive right the VM serves, given in a `launch`'s `handles` or `namespace` to a
 program in a budget the VM carved, goes to the program as a send right with a badge of that

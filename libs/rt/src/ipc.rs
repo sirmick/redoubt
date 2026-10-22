@@ -187,7 +187,13 @@ impl Drop for CallOutcome {
 impl Endpoint {
     /// A new endpoint; the handle is its receive right (badge 0).
     pub fn create() -> Result<Endpoint, Error> {
-        handle(syscall(&Call::EndpointCreate)).map(Endpoint::from_handle)
+        handle(syscall(&Call::EndpointCreate { budget: None })).map(Endpoint::from_handle)
+    }
+
+    /// A new endpoint owned by and charged to `budget`, the caller's own or one below it, so it
+    /// dies with that budget: for a server launched there, whose end then fails every call to it.
+    pub fn create_in(budget: &Budget) -> Result<Endpoint, Error> {
+        handle(syscall(&Call::EndpointCreate { budget: Some(budget.handle()) })).map(Endpoint::from_handle)
     }
 
     /// A handle to this endpoint with `badge` (this must be the receive right), stamped with

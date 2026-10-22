@@ -211,8 +211,11 @@ pub const OWN: u32 = 3;
 /// (`budgets = [...]`), in that order.
 pub const GIVEN: u32 = 4;
 
-pub fn endpoint_create() -> Result<u32, Error> {
-    match redoubt_sys::syscall(&Call::EndpointCreate)? {
+pub fn endpoint_create() -> Result<u32, Error> { endpoint_create_owned(None) }
+
+/// `endpoint_create(budget?)`: owned by and charged to `budget`, or with none the caller's own.
+pub fn endpoint_create_owned(budget: Option<u32>) -> Result<u32, Error> {
+    match redoubt_sys::syscall(&Call::EndpointCreate { budget: budget.map(h) })? {
         Return::Handle(handle) => Ok(handle.index()),
         _ => Err(Error::InvalidArgument),
     }

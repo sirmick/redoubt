@@ -30,6 +30,9 @@ pub enum Mutation {
     /// R1 takes the sender's class from the stamp of the handle it sends through: a system sender
     /// is refused by a labelled user endpoint.
     R1SenderClassFromStamp,
+    /// `endpoint_create` takes as the endpoint's owner a budget below the caller's whose labels a
+    /// user-class caller's lack, so it receives what that label set sends.
+    R1EndpointOwnerLabelsIgnored,
     // R2. Fair waiting.
     /// Blocked senders are served oldest first across all senders.
     R2FifoAcrossAccounts,
@@ -114,6 +117,8 @@ pub enum Mutation {
     /// A message records its sender's budget as the stamp, not the stamp of the handle it was
     /// sent through (so `mint` from it gets the wrong default stamp).
     R9MsgStampIsSenderBudget,
+    /// `endpoint_create` takes a budget above the caller's as the endpoint's owner.
+    R9EndpointInAnyBudget,
     // R10. Destruction.
     /// Destroying a budget leaves handles stamped with it in other processes' tables.
     R10KeepForeignHandles,
@@ -439,7 +444,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 177] = {
+    pub const ALL: [Mutation; 179] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -449,6 +454,7 @@ impl Mutation {
             R1ExitExemptBySystemExiting,
             R1ChecksReceiverNotOwner,
             R1SenderClassFromStamp,
+            R1EndpointOwnerLabelsIgnored,
             R2FifoAcrossAccounts,
             R2NoWaitCap,
             R2KeyByAccountOnly,
@@ -485,6 +491,7 @@ impl Mutation {
             R9ReceivedHandleRestamped,
             R9MintStampsCaller,
             R9MsgStampIsSenderBudget,
+            R9EndpointInAnyBudget,
             R10KeepForeignHandles,
             R10KeepCarvedLimits,
             R10SpareDescendantProcesses,
@@ -636,7 +643,8 @@ impl Mutation {
             | R1UsageExemptBySystemTarget
             | R1ExitExemptBySystemExiting
             | R1ChecksReceiverNotOwner
-            | R1SenderClassFromStamp => "R1",
+            | R1SenderClassFromStamp
+            | R1EndpointOwnerLabelsIgnored => "R1",
             R2FifoAcrossAccounts
             | R2NoWaitCap
             | R2KeyByAccountOnly
@@ -666,7 +674,10 @@ impl Mutation {
             | R6PidUncountedAtEnd => "R6",
             R7NoCarveCheck | R7CarveToZeroFree | ProcessInWeightlessBudget => "R7",
             R8AccountFromArgument => "R8",
-            R9ReceivedHandleRestamped | R9MintStampsCaller | R9MsgStampIsSenderBudget => "R9",
+            R9ReceivedHandleRestamped
+            | R9MintStampsCaller
+            | R9MsgStampIsSenderBudget
+            | R9EndpointInAnyBudget => "R9",
             R10KeepForeignHandles
             | R10KeepCarvedLimits
             | R10SpareDescendantProcesses

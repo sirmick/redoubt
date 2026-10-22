@@ -111,7 +111,11 @@ impl Number {
             }
             Number::ProcessMap => set(&[BadHandle, WrongObject, InvalidArgument, NotPermitted, OutOfMemory]),
             Number::ProcessStart => set(&[BadHandle, TooLarge, WrongObject, NotPermitted, OutOfMemory]),
-            Number::EndpointCreate => ADDS_HANDLE,
+            // `NotPermitted`: the budget is not the caller's or below it; `LabelDenied`: R1 from
+            // that budget to the caller.
+            Number::EndpointCreate => {
+                set(&[BadHandle, WrongObject, NotPermitted, LabelDenied]).with(ADDS_HANDLE)
+            }
             Number::Mint => {
                 set(&[InvalidArgument, BadHandle, Dead, WrongObject, NotPermitted]).with(ADDS_HANDLE)
             }

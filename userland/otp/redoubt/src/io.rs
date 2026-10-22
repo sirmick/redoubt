@@ -66,12 +66,15 @@ impl Io {
     /// is ended, so nothing more is sent on it: a request made on it after this, a stale file's
     /// clunk at its term's collection, is refused, and never goes out on the handle, which the
     /// destruction left dead until its last term is collected and closes it (I17;
-    /// docs/userland/beamlet.md, "Handles are resource terms"). The server is dead, so its waiter's
-    /// completion call fails at once and the waiter sends its last hand-over: the VM waits for it here,
-    /// [`HAND_US`] at most, and lets the connection go, so the place is free before the next server needs
-    /// it. Past the bound the place is let go when the hand-over comes ([`Io::connect`], its caller
-    /// parked). Until the hand-over, `owned`, the connection's handle, is held (`held`). A
-    /// connection the hub never opened has nothing to end, and no waiter to hold the handle for.
+    /// docs/userland/beamlet.md, "Handles are resource terms"). The server is dead, and the
+    /// endpoint its waiter calls went with the same budget (a served child's is made in it,
+    /// `jobs.rs`), so the waiter's completion call fails `Dead` at once: parked with the server,
+    /// queued untaken, or made after the death through the dead entry. The waiter then sends its
+    /// last hand-over: the VM waits for it here, [`HAND_US`] at most, and lets the connection go, so
+    /// the place is free before the next server needs it. Past the bound the place is let go when
+    /// the hand-over comes ([`Io::connect`], its caller parked). Until the hand-over, `owned`, the
+    /// connection's handle, is held (`held`). A connection the hub never opened has nothing to end,
+    /// and no waiter to hold the handle for.
     pub(crate) fn forget(&mut self, conn: &Connection, owned: &Arc<Owned>) {
         let hub =
             self.conns.iter().find(|(k, _, _)| k.same(conn)).and_then(|(_, c, _)| c.as_ref().ok().copied());
