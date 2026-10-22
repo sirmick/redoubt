@@ -1541,6 +1541,33 @@ fn check_range_sections(log: &str, sections: &[Section]) -> Result<Option<String
     Ok(Some(format!("range sections: every one within {bound} ticks net of audits: {}", each.join("; "))))
 }
 
+/// **Every device interrupt claimed was delivered, once** (kernel/boot.md, "The interrupt
+/// controller contract"), in a checked build: the program prints how many interrupts its
+/// `receive`s took (`IRQ-RECEIVED <n>`), and the kernel's count at power-off (`external
+/// interrupts: claimed by hart [...] (<m> in all), ...`) must claim exactly that many: one more is
+/// an interrupt claimed and never delivered, or claimed twice; one fewer, one delivered unclaimed.
+/// The kernel counts every source's claims, so the line belongs only in a case whose program's
+/// device is the one source that interrupts (the contention cases' goldfish RTC), and the count is
+/// a checked build's (`debug_assertions`), as those cases are. `None` without the program's line.
+fn check_irq_received(log: &str) -> Result<Option<String>, String> {
+    let lines = || log.lines().map(|l| l.trim_end_matches('\r'));
+    let Some(received) = lines().find_map(|l| l.strip_prefix("IRQ-RECEIVED ")) else {
+        return Ok(None);
+    };
+    let received: u64 =
+        received.trim().parse().map_err(|_| format!("malformed IRQ-RECEIVED {received:?}"))?;
+    let claimed = lines()
+        .find_map(|l| l.strip_prefix("external interrupts: claimed by hart "))
+        .and_then(|rest| rest.split_once(" in all)")?.0.rsplit_once('(')?.1.parse::<u64>().ok())
+        .ok_or("irq received: no kernel count of the claims at power-off")?;
+    if claimed != received {
+        return Err(format!(
+            "irq received: the kernel claimed {claimed} device interrupts, the program received {received}"
+        ));
+    }
+    Ok(Some(format!("irq received: {received} device interrupts, each claimed once and delivered")))
+}
+
 /// **A process's exit ending timed waits does not grow with the processes that exist**
 /// (kernel/timer.md, "The hart timer"; kernel/scheduling.md, R12), with `hold-trace`: the program
 /// prints two windows of `rdtime` ticks and a margin (`EXIT-SECTIONS <start> <end> <start> <end>
@@ -4001,6 +4028,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     let call_bounds_proof = check_call_bounds(log, &sum.sections)?;
     let range_sections_proof = check_range_sections(log, &sum.sections)?;
     let exit_sections_proof = check_exit_sections(log, &sum.sections)?;
+    let irq_received_proof = check_irq_received(log)?;
     if cluster_old_control && !cluster {
         return Err("cluster_old_control requires cluster".into());
     }
@@ -4340,6 +4368,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         call_bounds_proof,
         range_sections_proof,
         exit_sections_proof,
+        irq_received_proof,
     ]
     .into_iter()
     .flatten()
@@ -7548,6 +7577,22 @@ mod tests {
 
     /// A range call's sections inside the window are held to the bound net of audits, and the
     /// window must hold a `map_fixed`.
+    /// The program's count of the interrupts its `receive`s took must equal the kernel's claims at
+    /// power-off; no program line, no check.
+    #[test]
+    fn device_interrupts_received_equal_the_kernel_s_claims() {
+        let kernel = "external interrupts: claimed by hart [1, 200] (201 in all), found nothing by hart [0, 0], taken by hart [1, 200]\n";
+        let ok = check_irq_received(&format!("IRQ-RECEIVED 201\n{kernel}")).unwrap().unwrap();
+        assert!(ok.contains("201 device interrupts, each claimed once"), "{ok}");
+        let short = check_irq_received(&format!("IRQ-RECEIVED 200\n{kernel}")).unwrap_err();
+        assert!(
+            short.contains("the kernel claimed 201 device interrupts, the program received 200"),
+            "{short}"
+        );
+        assert!(check_irq_received("IRQ-RECEIVED 201\n").is_err_and(|e| e.contains("no kernel count")));
+        assert!(check_irq_received(kernel).unwrap().is_none());
+    }
+
     #[test]
     fn range_sections_are_held_to_their_bound() {
         use redoubt_sys::Number::{MapFixed, Receive, Unmap};

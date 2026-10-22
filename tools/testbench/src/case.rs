@@ -542,6 +542,9 @@ pub struct Idle {
     pub frames: Option<u64>,
     /// Every hart's interrupts, over the frames.
     pub interrupts_per_frame: Option<f64>,
+    /// Every hart's device interrupts (`s_external`), over the frames: 1 when each frame traps one
+    /// hart alone.
+    pub device_interrupts_per_frame: Option<f64>,
     /// The kernel's calls to the firmware (SBI), every hart's, over the frames.
     pub sbi_calls_per_frame: Option<f64>,
     /// System calls from user mode, every hart's, over the frames.

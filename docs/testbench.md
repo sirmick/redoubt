@@ -642,7 +642,7 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (39)</summary>
+<details><summary>Status: built · tested (40)</summary>
 
 - bench:sched-ties
 - bench:sched-capped
@@ -652,6 +652,7 @@ parks when it is done, unless its exit is the point of its case.
 - bench:sched-timer-entry
 - bench:sched-range-hammer
 - host:testbench::range_sections_are_held_to_their_bound
+- host:testbench::device_interrupts_received_equal_the_kernel_s_claims
 - host:testbench::kernel_sections_say_what_the_lock_waits_waited_behind
 - host:testbench::a_pick_passes_over_only_a_budget_that_other_harts_run
 - host:testbench::the_oracle_decides_whether_a_timer_interrupt_ended_the_slice
@@ -747,7 +748,10 @@ section in the second, net of audits, is held to `factor` times its longest in t
 in the kernel's ticks and a bound: every section of `map_anon`, `map_fixed`, `unmap`, `set_flags`
 or `process_map` in it, net of audits, is held to the bound, one slice, and at least one
 `map_fixed` must be there (`sched-range-hammer`,
-[R22 (range cost)](kernel/memory.md#r22-range-cost)). `sched-capped` runs the model's capped
+[R22 (range cost)](kernel/memory.md#r22-range-cost)). An `IRQ-RECEIVED` line gives how many
+interrupts the program's `receive`s took, and the checked kernel's count of its claims at
+power-off must equal it: none claimed and not delivered, or claimed twice (the contention cases,
+[boot](kernel/boot.md#hardware-abstraction)). `sched-capped` runs the model's capped
 scenarios ([model](kernel/model.md#scheduler-scenarios)) on the machine at two, three and four
 harts, each budget's share judged as below; `hart_shares_from=4` records the shares on a trace of fewer harts,
 since under `icount` QEMU's turns move them, and `sched-capped-mttcg` judges the two- and
@@ -1644,20 +1648,25 @@ features by package; the image's recipes name none, and only this case names thi
 counts the card's interrupts as answer frames: one within six traps of the last, or with no system
 call from user mode since it, is the same frame taken on another hart, since `netd` and `ipd` run
 for each frame before the next. It judges per frame (`[idle]`'s `frames`, `interrupts_per_frame`,
-`sbi_calls_per_frame`, `user_ecalls_per_frame`) over the span of exactly `frames` frames, from the
+`device_interrupts_per_frame`, `sbi_calls_per_frame`, `user_ecalls_per_frame`) over the span of exactly `frames` frames, from the
 first frame's first trap to the first trap of the frame after them, the background in that span
 included, and a window without that frame fails. About 19 of a frame's user ecalls are background
 that runs with time, so a count over however many frames the window happened to hold would move by
 a frame's worth with each one more or fewer; over a fixed span it does not. So it is a per-frame
 guard, not the per-probe cost ([what a probe costs](servers/ipd.md#the-net-tree)), which is a
-window less `launch-idle`'s: about 10 to 16 interrupts and 14 to 19 SBI calls a probe. Its
+window less `launch-idle`'s: about 6 to 10 interrupts and 11 to 14 SBI calls a probe. Its
 ceilings are idle ceilings, tighter than `launch-idle`'s twice the most: the most per frame
-measured alone, three rounds a width, plus the rounds' spread, the wider width's, rounded up: 32
-interrupts and 40 SBI calls a frame (the most 26.0 and 34.7, spreads 5.8 and 5.1), so a timer armed
+measured alone, three rounds a width, plus the rounds' spread, the wider width's, rounded up: 24
+interrupts and 33 SBI calls a frame (the most 22.8 and 32.1, spreads 0.9 and 0.7), so a timer armed
 only when its target changes ([the hart timer](kernel/timer.md#the-hart-timer)) is guarded at
-rest, and so is every hand-off across harts a probe's turns leave out; and 30.1 user ecalls (the
-most 30.0, spread 0.1: 11 a probe plus about 19 a frame of background). A server's turn made two
-calls again adds two user ecalls a probe and fails that ceiling. It is kept so that
+rest, and so is every hand-off across harts a probe's turns leave out; and 29.9 user ecalls (the
+most 29.8, spread 0.1: 11 a probe plus about 19 a frame of background). A server's turn made two
+calls again adds two user ecalls a probe and fails that ceiling. Device interrupts are held to one
+a frame: while a hart idles one idle hart alone takes the card's answer
+([boot](kernel/boot.md#hardware-abstraction)), where with every hart's context open it traps 1.67
+to 1.87 harts a frame. That ceiling is the exact witness of the routing: the card's answer taken on
+every hart also lifts interrupts and SBI calls over their ceilings, but SBI calls by little. It is
+kept so that
 `launch-idle`'s ceilings are not the only reading of a frame's cost. It is a host-clock case in the
 quiet class.
 

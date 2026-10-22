@@ -1,4 +1,4 @@
-description = "sched-lock-contention-4 where the harts run at once (multi-threaded TCG, no icount): three budgets mapping and unmapping in a loop a range at the cap whose page tables each makes afresh, beside the driver stand-in; every wait for the kernel lock takes it in ticket order, and the driver wake's p50 and p99 net of the checked build's audits are within their 15 and 50 ms targets (kernel/scheduling.md, R78) (host time, checked build)"
+description = "sched-lock-contention-4 where the harts run at once (multi-threaded TCG, no icount): three budgets mapping and unmapping in a loop a range at the cap whose page tables each makes afresh, beside the driver stand-in; every wait for the kernel lock takes it in ticket order, and the driver wake's p50 and p99 net of the checked build's audits are within their 15 and 50 ms targets (p50 1.2 ms on both widths; kernel/scheduling.md, R78); the idle hart alone takes the alarm, so no hart's claims that found nothing pass a single digit, and the claims equal the interrupts the program received (host time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -10,7 +10,10 @@ kernel_features = ["lock-trace"]
 # The oracle checks the waits' ticket order and judges the driver wake's net p50 and p99 against
 # their targets: a wake waits behind at most three sections and the one in progress (R78), each
 # about a slice at most (kernel/memory.md, R22), so host time can stretch them far before a target
-# moves.
+# moves. Net p50/p99 1.2/1.7 ms on rv64 and 1.2/1.7 on rv32 against 15/50, about 0.3 ms later than
+# with every hart's context open: the idle hart that alone takes the alarm is halted, and QEMU
+# runs it later than when the busy harts' empty entries gave way (kernel/scheduling.md, "Residual
+# risks").
 # Host time: a verdict only alone, on q's quiet cores
 # (scripts/jobs.mk; docs/testbench.md, "On a shared host"). That set is four cores for four vCPU
 # threads and QEMU's main thread: if the case flakes, look there first.
@@ -20,15 +23,20 @@ expect = [
     '^\[lock-contention\] one section alone, a range at the cap mapped with its page tables: p50 \d+ µs, max \d+ µs \(21 sections\)$',
     '^\[lock-contention\] 3 hammers. ranges mapped: \d+$',
     '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
+    # How many interrupts the RTC's `receive`s took (below).
+    '^IRQ-RECEIVED \d+$',
     '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
     '^\[lock-contention\] ok: every driver wake fell inside the hammers. window: the last at \d+ µs, the window.s end \d+$',
     '^SCHED-LOCK-CONTENTION TEST PASSED$',
-    # The kernel's count at power-off: every hart's context took ten or more of the 200 alarms
-    # (claims and claims that found nothing). Where the harts run at once each one in user mode or
-    # idle when an alarm rises traps for it (kernel/scheduling.md, "Every hart pays for each device
-    # interrupt"): taken by hart [129, 190, 126, 125] (rv64) and [146, 133, 168, 131] (rv32).
-    # Under icount, `sched-lock-contention-4`, a hammer can be in the kernel at every rise.
-    '^external interrupts: claimed by hart \[\d+(, \d+){3}\], found nothing by hart \[\d+(, \d+){3}\], taken by hart \[[1-9]\d+(, [1-9]\d+){3}\]$',
+    # The kernel's count at power-off: each hart's claims and their total, its claims that found
+    # nothing, and their sum, the alarms its context took. While a hart idles, one idle hart's
+    # context alone takes device interrupts (kernel/boot.md, "The interrupt controller contract"),
+    # so the alarms are claimed where the driver idles and no hart traps for one another claimed:
+    # every hart's claims that found nothing are a single digit (a few may come when every hart
+    # runs and one then idles). The post-check holds their total to the interrupts the program's
+    # `receive`s took, the 200 alarms and the RTC probe's (`IRQ-RECEIVED`): each claimed once and
+    # delivered, none lost or taken twice where the open context moves.
+    '^external interrupts: claimed by hart \[\d+(, \d+){3}\] \(\d+ in all\), found nothing by hart \[\d(, \d){3}\], taken by hart \[\d+(, \d+){3}\]$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]
 forbid = ['\[lock-contention\] FAIL']
