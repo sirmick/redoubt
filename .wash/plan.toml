@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 281
+revision = 282
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -3109,5 +3109,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["B111"]
   body = "Ruled by the Architect on arch-b111-typeahead (rulings file 'B111 review P2: what survives an interrupt'). Found by B111 (nscr-interrupt's hang under load) and servers-red's P2: the shell's driver drops bytes after an interrupt in the same read but gives bytes in a later read to the next line, so what survives an interrupt depends on how the console split the reads, which no person can predict; a paste holding Ctrl+\\ may leave its tail, bracketed-paste end marker included, in the next line, and a tail with a newline runs at the next prompt (the hostile-text family; bracketed paste is not built, shell.md 'Open'). shell.md states no rule. Rule: an interrupt discards the input queued when it is taken: the remainder of the read it came in and everything buffered and not yet given to a line; what the console delivers after the interrupt is handled is the next line's. The tty rule (an interrupt flushes queued input), which a person already expects. Residual, stated: a long paste whose later chunks arrive after the interrupt is handled is new input; the gap closes when bracketed paste makes a paste one event (the existing Open item). Pages: shell.md 'Interrupting and killing jobs' gains the rule beside 'What a job cannot do'; the paste Open item gains the pointer. Tests: the driver's ExUnit suite (driver_test.exs): an interrupt mid-read with a same-read tail and with input buffered before it, both dropped; input read after it kept; on beamlet and the BEAM via ./test-shell; nscr-interrupt's and the job-interrupt cases' comments state the rule and the residual. Shell track: the shell branch, host gates, one reviewer, batched into main via the shell set. Size S. Does not block B111, which lands case-only with its comment corrected to read no more into shell.md than the page says."
-  state = "reported"
-  revision = 281
+  state = "done"
+  revision = 282
