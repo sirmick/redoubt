@@ -2444,3 +2444,133 @@ vCPU turns, which no kernel change reaches.
   2-11 % of noise would add a weaker judge of the same thing.
 - **Pages**: scheduling.md's residual "A server's turn crosses harts" rewritten with today's
   figures (main and K37, both modes) and the turns sentence; the stale 2.07/2.02 goes.
+
+### K38 design: one idle hart takes device interrupts; IRQ1 amended, not superseded (architect-oct21, 2026-10-22)
+
+Design: .wash/local/K38-design.md. **Approved as shaped.** The taker: while any hart idles, one
+idle hart's context has threshold 0 and every other started context threshold 1 (sources stay at
+priority 1; R5's masking by priority 0/1 unchanged); with no hart idle every context is 0, as
+today. Moves under the kernel lock: at idle this hart becomes the taker if none is (harts - 1
+writes); at a pick the taker hands the role to another idle hart (2 writes) or opens all
+(harts - 1); a taker woken for nothing stays; one hart, no routing. No model change; R78 and R5
+unchanged.
+
+- **IRQ1 is amended, not superseded.** Its rule is what it protects: a driver's wake never waits
+  for a busy hart's kernel section. Under K38 that holds more strongly (the taker is idle, so a
+  wake waits no section at all), and the "all" state is IRQ1's mechanism verbatim when nobody
+  idles. boot.md's contract paragraph is rewritten to the taker rule with the invariant (at every
+  instant the taker's context or every context is open; the moves are one section; a source
+  pending at a move is raised on the newly open context by the PLIC's level semantics, which QEMU
+  re-evaluates on a threshold write) and its one race (a claim of nothing only in "all", when a
+  busy hart traps and another idles before it holds the lock: never at rest). The residual
+  "Every hart pays for each device interrupt" on scheduling.md becomes: cost measured, remedy
+  built; under full load (no hart idle) the old cost returns, bounded as before.
+- **Q1: yes.** The "taken by" clauses tested IRQ1's every-hart mechanism, which K38 replaces; the
+  family's routing clause becomes the new mechanism's two observables, both exact checked-build
+  counts: (i) every hart's "found nothing" a single digit (0 expected; the race allows a few in
+  "all"), red on main on all three (-4-mttcg 518-577; -4 found nothing 17/57/30/0; two harts
+  0/111); (ii) **the claims sum to the case's alarms (200), each taken exactly once**: this is the
+  witness that no interrupt is lost at a move, the one new failure the threshold moves could
+  cause; the kernel's line prints the total or the oracle sums, the implementer's choice. "The
+  counts keep" in the node meant the lock-order, ticket and wake clauses: unchanged, as read.
+- **Q2: agreed.** irq-boot-hart-only is gone since K34; the node's sentence is stale. The
+  witnesses are the probe case's `externals_per_frame = 1.0` (main 1.75-1.85, red) with the
+  interrupt and SBI ceilings re-derived at 2x the worst of three alone rounds a width on K37's
+  tip, and the family's clauses above. A negative control is not owed where the positive is red
+  on main by an exact count.
+- **Q3: in scope.** `wake_idle` preferring an idle non-taker is part of the pick rule (keep the
+  role where the interrupts land); it changes no wake semantics: an idle hart is still woken,
+  the taker last, so the taker is woken when it is the only idle hart.
+- **Q4**: the orchestrator's; the alone rounds are on the final base, since the per-frame
+  figures are K37's too.
+- Conditions: the PLIC write cost measured and stated (per move, both modes); sched-irq-wake,
+  sched-latency, the family, bench-net classes re-recorded both widths, no target moves; ipd.md's
+  probe naming updated (the interrupt-shaped hops gone, what remains named); unsafe ratchet +0.
+
+### K39's re-arm per interrupt return → B112 (architect-oct21, 2026-10-22)
+
+Finding (K38's implementer, main 78664b727, quiet cores): launch-idle-probes 71.0 / 70.3 SBI
+calls a frame (rv64 / rv32) against 48.1-53.0 / 48.9-52.2 recorded before K39; interrupts 35.4 /
+34.8; 1,242 of an rv64 window's SBI calls are `time::rearm`. The 2x guard (106) passed, so the
+train was green; the idle box pays about a third more.
+
+1. **A defect K39 owes, not an accepted cost.** Likely cause: the resume at an interrupt's
+   return moves the slice end and re-arms the hart timer for it, one SBI call per interrupted
+   slice. That is against the settled direction (IDLE2: the timer is re-armed only when its
+   target changes; K31: no set_timer in the timer entry or before the pick) and against the idle
+   cost K35 just named on ipd.md. Rule: **a return re-arms only when the hart's armed target
+   changes.** The moved slice end does not re-arm: the timer armed for the old end fires once,
+   the decision (`end <= at`) finds the slice not over, and the resume re-arms then. So an
+   interrupt inside a slice costs at most one early slice interrupt, and only if the thread runs
+   to its old end, which at rest it does not (it blocks first). The fairness rule is untouched:
+   the victim keeps its slice either way. Stated on scheduling.md's slice paragraph and timer.md's
+   re-arm rule with the figures. Cause confirmed by trace before the fix, not assumed.
+2. **Node B112** (added, todo, needs K39, Tier A, size S). Acceptance: the probe case's SBI and
+   interrupt per-frame ceilings become **idle ceilings at the measured worst + spread** of three
+   alone rounds a width on the fixed kernel, as launch-idle's are, no longer 2x guards: red on
+   main at 70-71, and the class is guarded from now on (a 2x guard let a third slip through);
+   sched-slice-own-time still passes; sched-timer-flood, timeouts, budget-deadline, launch-idle
+   unchanged; K35's per-probe cost on ipd.md re-measured and restated.
+3. **K38 is not blocked in building or in its own witnesses** (externals_per_frame = 1.0, the
+   family's counts), which are independent of the SBI count. **K38's probe ceilings are derived
+   after B112 lands**, from a main that has it: deriving at 2x from today's main would bake the
+   regression into the ceilings. If B112 is slow, K38 lands with its ceilings derived from the
+   pre-K39 recorded figures and the current reading recorded with this reason; the orchestrator
+   chooses by B112's time. B112 lands first in order where it can.
+
+### B111 review P2: what survives an interrupt → B113 (architect-oct21, 2026-10-22)
+
+Finding (servers-red on B111): the shell's driver drops bytes after an interrupt in the same
+read but gives bytes in a later read to the next line, so what survives depends on how the
+console split the reads: nondeterministic for a person too. A paste holding Ctrl+\ may leave its
+tail, bracketed-paste end marker included, in the next line; with a newline in it, the tail runs
+at the next prompt (the hostile-text family; bracketed paste is not built). shell.md states no
+rule: "What a job cannot do" says what a stage cannot take, not what the next line gets.
+
+1. **Rule: an interrupt discards the input queued when it is taken**: the remainder of the read
+   it came in and everything buffered and not yet given to a line. What the console delivers
+   after the interrupt is handled is the next line's. This is the tty rule (an interrupt flushes
+   queued input), which a person already expects, and it is deterministic in the only sense
+   available: by what has arrived, not by how it was split. Keeping a same-read tail is refused
+   (it is what makes a paste's tail a command), and stating the current split is refused (a rule
+   nobody can learn is not a rule). Residual, stated: a long paste whose later chunks arrive
+   after the interrupt is handled is new input; the gap closes when bracketed paste makes a paste
+   one event, the existing Open item, which gains the pointer. Written on shell.md
+   "Interrupting and killing jobs" beside "What a job cannot do".
+2. **A node, B113** (added, todo, needs B111): a behaviour change in the shell's driver with its
+   tests in the driver's ExUnit suite (an interrupt mid-read with a same-read tail and with input
+   buffered before it, both dropped; input read after it kept), run on beamlet and the BEAM by
+   ./test-shell; the interrupt cases' comments state the rule and the residual. Shell track: the
+   shell branch, host gates, one reviewer, batched into main via the shell set. Size S.
+3. **B111 is not blocked.** It is a case-only fix with its witness; it lands with its comment
+   corrected to read no more into shell.md than the page says (the leftover is possible because
+   what survives an interrupt is not stated; the rule is coming), and Ctrl+U stays: under the rule
+   a later read arriving after the interrupt is still new input, so the case's clearing is the
+   bench's own robustness, not a workaround for a defect.
+
+### K38: the driver-wake shift under load is the emulator's, stated as the rule's cost (architect-oct21, 2026-10-22)
+
+Evidence (-4-mttcg rv64, quiet, gross driver wake p10/p50/p90 µs): main 691/938/1246; no routing
+(v0) 666/930/1181, main's; routing with no moves (v2) 1085/1263/1554, K38's head (1091/1243/1499).
+So the routing, not the moves (about 10 µs an alarm), is the +0.3 ms in host time; under icount
++0.5-0.8 ms, traced to QEMU's turns (the lock free at +191 µs, the taker entering at +686 on head
+against +197 on main). **Correction to the K38 design ruling's framing**: on main the idle hart
+claims the alarm too; the busy harts take an empty entry per alarm (found nothing 116-131 per
+hammer hart per 200), and that trap-and-halt is what let the idle vCPU run sooner: main's earlier
+wake was a side effect of the waste K38 removes. The "red on main" clauses stand on the counts.
+
+**Ruling: (a).** The shift is the emulator's: an idle vCPU halted in `wfi` runs when QEMU
+schedules it (host time) or when its turn comes (icount), and on main the hammers' empty entries
+yielded sooner; on hardware a halted hart wakes at the interrupt and no such dependence exists.
+It is a tenth of a millisecond scale inside targets of 15 and 50 ms, and (b) would restore the
+per-alarm empty entries on every busy hart and the per-packet cost at rest (s_external back to
+1.6-1.8 a frame), undoing the rule for an artefact. No target moves; the figures are recorded.
+
+**Where it is stated.** scheduling.md: the rewritten IRQ residual ("Every hart pays for each device
+interrupt" → the taker rule, cost measured, remedy built) carries the shift with its mechanism and
+the three figures (main, v0, v2/head), and the "A hart waits for QEMU's turns" residual gains the
+driver wake under the taker as a case beside the share and notice cells; the family's description
+and toml comments record p50 beside the judged 15/50. boot.md's IRQ1 paragraph states the rule
+and, in one sentence, that the idle hart's wake under emulation costs a sub-millisecond shift
+stated on scheduling.md; it does not repeat the numbers (one page owns a figure). sched-irq-wake
+at one hart is unchanged by construction and says nothing new.

@@ -1,6 +1,6 @@
 # Environment and rules for every member launched 2026-10-20
 
-Main is b6d28a6b6 (train 99: K35 exact timeout caches and the probe guard, B110 doccheck C14). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
+Main is 78664b727 (train 100: K39 slice is the thread's own time, B109 n4/n16 twins). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
 
 ## Shell
 
