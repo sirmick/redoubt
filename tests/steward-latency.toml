@@ -73,10 +73,14 @@ smp = { rv64 = [1, 2], rv32 = [1, 2] }
 # sixteen); the reboot rule needs six exits within 60 s.
 # Three rounds here: on rv32 under icount the third round's counts come after about a hundred minutes.
 timeout_secs = 10800
-# Three cells are recorded, not judged, their target unmoved: the deadline notice's p99 at N = 1
-# to 3 on rv32 at two harts, which misses 40 ms on the base kernel too and is a finding a later
-# package takes apart and judges (kernel/scheduling.md, "With the real steward").
-post_check = "sched_oracle gate_harts=2 r10_p99_us=30000 lease_end_p99_us=125000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000 record=rv32:2:N=1:deadline_notice:p99 record=rv32:2:N=2:deadline_notice:p99 record=rv32:2:N=3:deadline_notice:p99"
+# Six cells are recorded, not judged, their target unmoved: the deadline notice's p99 at N = 1
+# to 3 at two harts on both widths. Under icount the harts take turns on one host thread and both
+# harts' instructions advance one clock, so the other hart's reads of the system volume are
+# counted inside the steward's send (p99 43.4 / 45.3 / 56.5 ms on rv32 and 30.4 / 32.4 / 24.6
+# on rv64 at N = 1 to 3); the cell is judged where the harts run at once, in
+# steward-latency-mttcg (kernel/scheduling.md, "With the real steward" and "A hart waits for
+# QEMU's turns").
+post_check = "sched_oracle gate_harts=2 r10_p99_us=30000 lease_end_p99_us=125000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000 record=rv64:2:N=1:deadline_notice:p99 record=rv64:2:N=2:deadline_notice:p99 record=rv64:2:N=3:deadline_notice:p99 record=rv32:2:N=1:deadline_notice:p99 record=rv32:2:N=2:deadline_notice:p99 record=rv32:2:N=3:deadline_notice:p99"
 expect = [
     '^init: started sshd, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',

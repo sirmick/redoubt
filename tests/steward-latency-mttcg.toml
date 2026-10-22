@@ -1,0 +1,124 @@
+description = "steward-latency where the harts run at once (multi-threaded TCG, no icount, the host's clock): the deadline notice's p99 at two harts, N = 1, 2 and 3, judged at 40 ms net of the checked build's audits on both widths (docs/kernel/scheduling.md, \"With the real steward\" and \"A hart waits for QEMU's turns\"), where steward-latency records it: under icount the harts take turns on one host thread and both harts' instructions advance one clock, so the other hart's reads of the system volume (verity:system, blkd:system) are counted inside the steward's send (p99 43.4 / 45.3 / 56.5 ms on rv32 and 30.4 / 32.4 / 24.6 on rv64 at N = 1 to 3 there). Every other figure of the rounds is printed and recorded here, judged in steward-latency (one case judges each cell): the one-hart deadline notice, the wakes, the destroy call, R10 and a lease's end. The rounds, the manifest, the probe and the session are steward-latency's; the leases are this case's, twice each round's worst launch measured on the host's clock"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# No icount: the harts run at once on their own host threads, and the clock is the host's (a
+# quiet-class case, on q's reserved cores, one at a time). The guest seed is steward-latency's.
+qemu_seed = 3
+# Out of the whole run, as steward-latency is: it runs by name.
+whole_run = false
+# steward-latency's programs: the steward built with its test-only latency-probe.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-crossing", bin = "crossing" },
+    { package = "redoubt-steward-server", bin = "steward", features = ["latency-probe"] },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# Sixteen lease VMs of 5248 pages beside alice's two sessions of 11392, the console's and the
+# SSH session that drives the rounds: her budget is the latency manifest's (213,542 pages,
+# 834 MiB, sized by the carve for the sixteen: a share of 106,770 = 2 x 11,393 + 16 x 5,249,
+# each budget's own page counted), bob's 16,384 beside it under `users`, 229,928 of the 241,605
+# pages `users` holds at this size on rv32 (the kernel's `Budgets:` line; 241,707 on rv64),
+# and the trace ring's large form (256 MiB, about 2.6 million records a run)
+# holds a boot this long. 1536 MiB, not 2048: RAM starts at 0x8000_0000 and two GiB wrap the
+# 32-bit address space, so rv32 booted to nothing. Each lease's root carves the manifest's
+# agent quota, 1 MiB, from alice's home, so her home's quota is 18 MiB (sixteen and her files);
+# with agent's 4 MiB and bob's 8 MiB the homes take 30 MiB of the data volume's 33,537,024
+# bytes, init's home-quota check.
+memory_mib = 1536
+# Test builds only: the trace ring, its large form, and its dump at the reset (the audits the
+# oracle subtracts, and its rank checks).
+kernel_features = ["sched-trace-large"]
+# The deadline notice is judged at two harts here and at one in steward-latency; both hart counts
+# boot so the page's two-against-one comparison is one case's.
+smp = { rv64 = [1, 2], rv32 = [1, 2] }
+timeout_secs = 10800
+# The two-hart deadline notice is judged; at one hart it is recorded (judged in steward-latency),
+# and every other measure has no bound here.
+post_check = "sched_oracle deadline_notice_p99_us=40000 record=rv64:1:N=1:deadline_notice:p99 record=rv64:1:N=2:deadline_notice:p99 record=rv64:1:N=3:deadline_notice:p99 record=rv32:1:N=1:deadline_notice:p99 record=rv32:1:N=2:deadline_notice:p99 record=rv32:1:N=3:deadline_notice:p99"
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+    'target missed',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=1 deadline_notice 16$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=1 decision_wake 16$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=2 deadline_notice 16$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=2 decision_wake 16$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=3 deadline_notice 16$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=3 decision_wake 16$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-END [0-9]+$',
+    '^\[con [0-9a-f]{16}\] steward: latency-probe: the case is done, exiting for the reboot$',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: rebooting: steward was restarted 5 times within 60 seconds$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+
+# steward-latency's session and round function (its comment says how a round runs, and why one
+# lease at a time), with this case's deadline leases, derived as that case derives its own from
+# the launches measured here, on the host's clock: the worst `LATENCY-LAUNCH` window of each round
+# over both widths at one and two harts in the runs the page states, 0.50 s at N = 1, 0.48 s at
+# N = 2 and 0.60 s at N = 3 (rv32 at two harts each), twice that rounded up to a second: 1, 1 and
+# 2 s, so the deadline falls on a running VM, as there. N = 1's lease is exactly twice its worst
+# launch, with no margin beyond the rule: a launch longer than the lease is never a late notice
+# but a lease dead in its launch, as steward-latency says, with no notice to sample (the round's
+# count never comes and its expect times out) or, at two harts, the forbidden `a step failed`. The sleep after each is the lease + 1 s, the margin over R10's destroy.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"spin\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "start = fn us -> {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, us, Redoubt.Wire.Client.launch_timeout()); l end; round = fn n, d, r -> spinners = for _ <- 1..n//1, do: start.(600_000_000); Process.sleep(5000); for _ <- 1..d, do: (start.(9_000_000); Process.sleep(1500)); ls = case n do 0 -> 1; 1 -> 1; _ -> 2 end; for _ <- 1..d, do: (start.(ls * 1_000_000); Process.sleep((ls + 1) * 1000)); Enum.each(spinners, &Redoubt.Wire.Client.Steward.end_lease(c, &1)); File.write(\"/home/alice/latency-round-#{r}\", \"round over\"); Process.sleep(3000); {:round, r, :done} end; round.(0, 16, 1)\n" },
+    { expect = '\{:round, 1, :done\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "round.(1, 16, 2)\n" },
+    { expect = '\{:round, 2, :done\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "round.(2, 16, 3)\n" },
+    { expect = '\{:round, 3, :done\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:marker, File.write(\"/home/alice/latency-done\", \"the case is done\")}\n" },
+    { expect = '\{:marker, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/steward/latency.manifest.json" }
+verity = "image/userland.toml"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
