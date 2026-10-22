@@ -634,10 +634,11 @@ its sessions and they re-bind ([steward](steward.md#failure-and-restart)). A res
 
 ### Restarts and reboots
 
-<details><summary>Status: built · partly tested: the machine shows a fault blamed through `init`'s own badge and taken by the steward, three of them reaching the lockout, and the steward's connection at the restarted server handed over; the timeouts' outcomes are decided on the host; a restarted `consoled`'s attach is read from the code, not attacked · tested (20)</summary>
+<details><summary>Status: built · partly tested: the machine shows a fault blamed through `init`'s own badge and taken by the steward, three of them reaching the lockout, and the steward's connection at the restarted server handed over; the timeouts' outcomes are decided on the host; a restarted `consoled`'s attach is read from the code, not attacked · tested (21)</summary>
 
 - bench:steward-blame-lockout
 - bench:steward-server-restart
+- bench:init-restart-mux
 - host:redoubt-init::a_blame_goes_to_the_steward_only_for_a_named_account_while_the_steward_runs
 - host:redoubt-init::a_blame_the_steward_does_not_take_in_time_is_lost_and_said
 - host:redoubt-init::a_blame_taken_a_dead_steward_and_a_refusal_are_told_apart
@@ -662,9 +663,13 @@ its sessions and they re-bind ([steward](steward.md#failure-and-restart)). A res
 - **Restart.** A server that exits is restarted on the same endpoint. Calls it had taken get
   `Dead` ([R4b (a server dies)](../kernel/ipc.md#r4b-a-server-dies)), and clients see the error
   and retry; senders still waiting on the endpoint are served by the restarted server. The new
-  instance gets the same manifest name, arguments and receive endpoint, but a new startup block:
-  `init`, as its launcher, disconnects the dead instance's connections at every server
-  ([releasing grants](wire.md#a-launcher-releases-its-childs-grants)) and mints new ones. The
+  instance gets the same manifest name, arguments and receive endpoint, but a new startup block.
+  `init`, as its launcher, disconnects the connections it made for the dead instance: its console
+  connection, and the steward's fresh connections
+  ([releasing grants](wire.md#a-launcher-releases-its-childs-grants)), and makes new ones. A root
+  badge the entry is handed is minted again with the same number, so what the dead instance held
+  at that server under it goes at its successor's `Tversion`
+  ([the end](serving.md#multiplexed-connections)). The
   server's own tables start empty, with a newly drawn first badge
   ([R27 (badge allocation)](serving.md#r27-badge-allocation)), so a client's old connection ids
   are dead.

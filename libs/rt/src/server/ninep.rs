@@ -71,7 +71,8 @@
 //!   `Tremove`, and on the directory for `Tcreate`.
 //!
 //! **Protocol corners.** `Tversion` is accepted at any time and clunks every fid of the
-//! connection; it is not required first, since the msize is fixed. `Tauth` is refused (access
+//! connection and ends its multiplexed session ([`mux`]); it is not required first, since the
+//! msize is fixed. `Tauth` is refused (access
 //! is by capability). `Twstat` is refused. `Tflush` is answered at once: requests are handled one
 //! at a time, so none is ever in flight to flush.
 //!
@@ -736,11 +737,13 @@ impl<S: FileServer> NineServer<S> {
         let key = self.conn_key(caller);
         match body {
             Body::Tversion { msize, version } => {
-                // A new session on this connection: every fid on it goes (intro(5), version).
-                if let Some(i) = self.conn(&key) {
-                    let conn = self.conns.swap_remove(i);
+                // A new session on this connection: everything it holds goes, every fid
+                // (intro(5), version) and its multiplexed session, whose parked call is answered
+                // ended (servers/serving.md, "The end").
+                if let Some(conn) = self.conn(&key).map(|i| self.conns.swap_remove(i)) {
                     self.drop_fids(conn);
                 }
+                self.mux.end_where(&mut self.admission, |k| *k == key);
                 // A version we do not speak is answered "unknown" (intro(5), version).
                 let version = if version.starts_with(VERSION) { VERSION } else { "unknown" };
                 Ok(Body::Rversion { msize: msize.min(MSIZE as u32), version })
@@ -1016,7 +1019,7 @@ impl<S: FileServer> NineServer<S> {
         mux: &mut mux::Mux,
         gone: super::minted::Entry<(S::Node, Qid)>,
     ) {
-        mux.end_badge(admission, gone.badge);
+        mux.end_where(admission, |k| k.badge == gone.badge);
         while let Some(i) = conns.iter().position(|c| c.key.badge == gone.badge) {
             let conn = conns.swap_remove(i);
             for (_, fid) in conn.fids {

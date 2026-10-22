@@ -186,9 +186,11 @@ paths = ["servers/littlefsd/src"]
 max_lines = 1142
 
 [[crate]]
+# Includes the test-only feature session-count (src/bin/walfsd.rs, its module and its one use),
+# off in every default build.
 name = "servers/walfsd"
 paths = ["servers/walfsd/src"]
-max_lines = 901
+max_lines = 930
 
 [[crate]]
 name = "servers/verityd"

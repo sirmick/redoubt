@@ -272,10 +272,11 @@ stateDiagram-v2
 
 ### Multiplexed connections
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two`, and packs one send at `bootfsd` in `session-mux-flood` · tested (20)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two`, packs one send at `bootfsd` in `session-mux-flood`, and restarts a client holding a session at `walfsd` in `init-restart-mux` · tested (22)</summary>
 
 - bench:aio-many-reads
 - bench:aio-many-reads-two
+- bench:init-restart-mux
 - bench:session-mux-flood
 - host:redoubt-rt::a_sends_pages_count_once_and_go_back_with_its_last_request
 - host:redoubt-rt::a_parked_read_sent_in_a_page_leaves_the_page_to_a_write
@@ -287,6 +288,7 @@ stateDiagram-v2
 - host:redoubt-rt::a_request_late_in_a_hold_leaves_the_session_its_whole_bound
 - host:redoubt-rt::a_fill_longer_than_the_bound_leaves_the_session_its_whole_bound_from_the_answer
 - host:redoubt-rt::a_session_answered_after_a_slow_fill_in_the_same_pass_has_its_whole_bound
+- host:redoubt-rt::a_tversion_by_one_call_ends_the_keys_session
 - host:redoubt-rt::a_flush_racing_a_completion_answers_once
 - host:redoubt-rt::a_flood_of_sends_at_wait_cap_never_blocks_the_server
 - host:redoubt-rt::a_reused_or_out_of_range_tag_ends_the_connection
@@ -364,21 +366,21 @@ connection; the client half is the client library's hub
   batched page whose requests are partly refused is held only by those admitted.
 - **The end.** The session ends when its completion call is abandoned (its client died or gave up:
   [R3 (lends and abandoned calls)](../kernel/ipc.md#r3-lends-and-abandoned-calls)), when a reply
-  to it reaches nobody, at a protocol error, at the connection's `disconnect`, and when no
-  completion call has been parked for the session bound since the last returned. A call returns
-  with its answer, so the bound runs from the answer however long serving into it took (a
+  to it reaches nobody, at a protocol error, at the connection's `disconnect`, at a `Tversion` by
+  one call, and when no completion call has been parked for the session bound since the last
+  returned. A call returns with its answer, so the bound runs from the answer however long
+  serving into it took (a
   file server away on its device past the bound does not end the session it is answering).
   Every request goes with it, its admission released, and a parked completion call is answered
   status 4. So a client that dies between two completion calls is found at the session bound,
   and a live client keeps a completion call parked whenever it has requests outstanding.
   Deadlines are judged at the loop's turn, so a session or a held request may be judged late by
   the work before it in that turn, never early.
-  A restarted entry on the same badge meets its predecessor's multiplexed session: it lasts the
-  session bound with no call parked, and every completion call the successor makes is parked on
-  it and answered with what the predecessor left pending, or empty, resetting the bound, so a
-  successor that retries its connect faster than the bound never gets a session; the
-  predecessor's `InFlight`, `Requests` and `Pages` stay held until the session ends. Its fids go
-  at the successor's `Tversion`; the session does not.
+  A `Tversion` by one call starts the connection afresh: it clunks every fid of the connection
+  and ends its session (one sent multiplexed is a protocol error, above). So a restarted entry,
+  handed the same badge as its predecessor ([init](init.md#restarts-and-reboots)), meets nothing
+  the predecessor held there: a client sends a `Tversion` before it attaches, and its first
+  completion call opens a session of its own and collects nothing the predecessor left pending.
 - **Crash blame.** Requests are served with the completion call as the thread's current call, so
   a crash while serving them blames their client
   ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
@@ -509,10 +511,11 @@ with a 9P call are closed unread.
   read are left out); `Write` on the node for `Twrite`, opening for writing, `OTRUNC` and
   `Tremove`, and on the directory for `Tcreate`.
 
-**Protocol corners.** `Tversion` is accepted at any time and clunks every fid of the connection;
-the `msize` is fixed. `Tauth` and `Twstat` are refused: access is by capability. `Tflush` on a
-call is answered at once, since a call's request is handled whole; on a multiplexed connection it
-drops the request it names ([multiplexed connections](#multiplexed-connections)). An `Rerror`
+**Protocol corners.** `Tversion` is accepted at any time and starts the connection afresh
+([the end](#multiplexed-connections) says what goes); the `msize` is fixed.
+`Tauth` and `Twstat` are refused: access is by capability. `Tflush` on a call is answered at
+once, since a call's request is handled whole; on a multiplexed connection it drops the request
+it names ([multiplexed connections](#multiplexed-connections)). An `Rerror`
 carries one of a fixed set of texts, so a hostile request cannot choose it. Every allocation a
 request makes fails cleanly with an `Rerror`, never by killing the server.
 
@@ -815,7 +818,7 @@ a read with nothing coming ends at `ipd`'s deadline, and the connection still wo
 
 ### R77 (multiplexed requests)
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; no boot floods a real server with requests held, though one packs a send at `bootfsd` (`session-mux-flood`) · tested (12)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; no boot floods a real server with requests held, though one packs a send at `bootfsd` (`session-mux-flood`) · tested (13)</summary>
 
 - bench:session-mux-flood
 - host:redoubt-rt::a_never_polling_client_holds_only_its_share
@@ -829,6 +832,7 @@ a read with nothing coming ends at `ipd`'s deadline, and the connection still wo
 - host:redoubt-rt::a_second_completion_call_is_refused
 - host:redoubt-rt::a_sends_messages_cost_the_servers_heap_nothing_each
 - host:redoubt-rt::a_send_that_ends_its_session_part_way_leaves_nothing_held
+- host:redoubt-rt::a_tversion_by_one_call_ends_the_keys_session
 
 </details>
 
@@ -838,7 +842,7 @@ client that floods requests, or never collects their answers, holds no more of a
 share, and its excess is answered `busy`, never queued without bound; nor does a send cost the
 server's heap more than the requests it admits, however many messages it packs. A session ends,
 freeing every request it held, when its completion call is abandoned (the client died or gave
-up), or when no completion call has been parked for the session bound: the server's longest wait
+up), at a `Tversion` by one call ([the end](#multiplexed-connections)), or when no completion call has been parked for the session bound: the server's longest wait
 or `COLLECT_WAIT` (10 s), whichever is shorter. A flushed request is answered at most once, before
 its `Rflush`, never after.
 
@@ -863,7 +867,9 @@ its `Rflush`, never after.
 - **A client dies** holding connections or parked calls: its parked calls come back as
   abandoned-call notices and are freed, and so does a session's completion call, which ends the
   session and frees its requests. Its connections stay until its launcher disconnects them
-  ([servers](README.md#cleaning-up-after-a-child)).
+  ([servers](README.md#cleaning-up-after-a-child)). A root badge `init` handed it is minted again
+  for its successor ([init](init.md#restarts-and-reboots)), whose `Tversion` clears it
+  ([the end](#multiplexed-connections)).
 - **The server restarts.** It keeps nothing: its tables start empty and its first badge is drawn
   again (R27). A client's old handle names no connection until it asks for a new one.
 
