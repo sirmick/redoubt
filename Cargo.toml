@@ -19,6 +19,7 @@ members = [
   "libs/signing",
   "libs/stride",
   "libs/ticket",
+  "libs/runs",
   "libs/steward",
   "libs/steward/gen",
   "libs/steward/trace",

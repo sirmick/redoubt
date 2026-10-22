@@ -54,6 +54,11 @@ paths = ["libs/ticket/src"]
 max_lines = 63
 
 [[crate]]
+name = "libs/runs"
+paths = ["libs/runs/src"]
+max_lines = 200
+
+[[crate]]
 name = "libs/ipclist"
 paths = ["libs/ipclist/src"]
 max_lines = 532
