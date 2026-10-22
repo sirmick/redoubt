@@ -236,18 +236,28 @@ pub fn set_idle(idle: bool) { this().idle.store(usize::from(idle), Ordering::Rel
 /// does an idle hart zero frames in flight (R81, `arch::idle`).
 pub fn all_idle() -> bool { HART_BLOCKS[..started()].iter().all(|b| b.idle.load(Ordering::Relaxed) != 0) }
 
-/// A wake made a budget runnable: send the reschedule interrupt to one idle hart, if any, so it
-/// picks. Called holding the kernel lock; the hart takes it once it holds the lock itself.
-pub fn wake_idle() {
+/// The boot index of a started hart other than this one that idles, none woken since
+/// ([`wake_idle`] clears the mark, so a hart told to pick is not one): where the device interrupts
+/// go when this hart stops taking them (`intc_plic::running`).
+pub fn idle_other() -> Option<usize> {
     let me = index();
-    for (i, block) in HART_BLOCKS[..started()].iter().enumerate() {
-        if i != me && block.idle.swap(0, Ordering::Relaxed) != 0 {
-            let id = block.id.load(Ordering::Relaxed);
-            let _ = sbi_rt::send_ipi(sbi_rt::HartMask::from_mask_base(1, id));
-            #[cfg(debug_assertions)]
-            hop(0);
-            return;
-        }
+    (0..started()).find(|&i| i != me && HART_BLOCKS[i].idle.load(Ordering::Relaxed) != 0)
+}
+
+/// A wake made a budget runnable: send the reschedule interrupt to one idle hart, if any, so it
+/// picks. Called holding the kernel lock; the hart takes it once it holds the lock itself. The
+/// idle hart that takes device interrupts is woken last, so that they stay where they land
+/// (`intc_plic::running`).
+pub fn wake_idle() {
+    let (me, taker) = (index(), super::irq::taker());
+    let others = (0..started()).filter(|&i| Some(i) != taker);
+    if let Some(i) =
+        others.chain(taker).find(|&i| i != me && HART_BLOCKS[i].idle.swap(0, Ordering::Relaxed) != 0)
+    {
+        let id = HART_BLOCKS[i].id.load(Ordering::Relaxed);
+        let _ = sbi_rt::send_ipi(sbi_rt::HartMask::from_mask_base(1, id));
+        #[cfg(debug_assertions)]
+        hop(0);
     }
 }
 
@@ -535,8 +545,8 @@ extern "C" fn hart_main(id: usize) -> ! {
     // for the lock wakes it with that interrupt (`halt_for_lock`).
     super::irq::timer::init_hart();
     crate::cell::KERNEL_LOCK.acquire();
-    // Device interrupts on its own PLIC context, taken from user mode and in `idle` as on the boot
-    // hart (`intc_plic.rs`).
+    // Device interrupts on its own PLIC context, open or closed as the other harts' are now: taken
+    // in user mode and in `idle` while it is open (`intc_plic.rs`).
     super::irq::online();
     // R11 and R24: `_hart_land` wrote them as `_start` does on the boot hart.
     assert_eq!(riscv::register::senvcfg::read().bits(), 0, "senvcfg is not 0 on hart {} (R11)", id);

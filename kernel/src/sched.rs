@@ -891,6 +891,10 @@ pub fn leave(pid: Pid) {
                         crate::arch::hart::wake_idle();
                     }
                 }
+                // A hart that runs a thread does not take device interrupts while another idles.
+                if next.is_some() {
+                    crate::arch::irq::running();
+                }
                 next.is_some()
             })
         })

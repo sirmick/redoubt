@@ -56,6 +56,27 @@ pub fn online() {
     intc::online();
 }
 
+/// This hart idles: while a hart idles, one idle hart takes device interrupts (`intc_plic.rs`).
+pub fn idling() {
+    #[cfg(feature = "plic")]
+    intc::idling();
+}
+
+/// This hart leaves the kernel for a thread: if it took device interrupts, another idle hart takes
+/// them, or with none idle every hart does.
+pub fn running() {
+    #[cfg(feature = "plic")]
+    intc::running();
+}
+
+/// The boot index of the hart that alone takes device interrupts, if one does.
+pub fn taker() -> Option<usize> {
+    #[cfg(feature = "plic")]
+    return intc::taker();
+    #[cfg(not(feature = "plic"))]
+    None
+}
+
 /// A checked build's account of the claims at `system_reset` (`hart::report`).
 #[cfg(debug_assertions)]
 pub fn report() {
