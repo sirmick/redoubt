@@ -192,8 +192,8 @@ pub struct Account {
     /// The DMA registry slots it has mapped with `map_device` (`dma.rs`): half of the
     /// set its death must reset. Zero again for a new process in the same PID.
     pub dma_mapped: u16,
-    /// No thread of this process has a timeout earlier than this (`message::collect_due`): only
-    /// ever early, so expiry walks just the processes it might be due in.
+    /// Its threads' earliest timeout, the first of its timed waits (`message::untime`), so expiry
+    /// walks just the processes something is due in (`message::collect_due`).
     pub earliest_timeout: u64,
 }
 

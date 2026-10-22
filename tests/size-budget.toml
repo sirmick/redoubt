@@ -6,7 +6,7 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 11048
+max_lines = 11095
 
 [[crate]]
 name = "loader"
@@ -61,7 +61,7 @@ max_lines = 200
 [[crate]]
 name = "libs/ipclist"
 paths = ["libs/ipclist/src"]
-max_lines = 532
+max_lines = 544
 
 [[crate]]
 name = "libs/signing"

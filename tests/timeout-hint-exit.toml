@@ -1,0 +1,24 @@
+description = "A process's exit recomputes the timer's hint once, however many of its waits held it, so its kernel time does not grow with the processes that exist (kernel/timer.md, \"The hart timer\"; R12, kernel/scheduling.md): a child with MAX_THREADS threads exits, all but its first thread waiting with deadlines rising by thread, each earliest in the system in turn as the exit ends them, once on an empty system and again with every other PID holding a child waiting with a later timeout; the second exit's kernel lock section, net of the checked build's audits, is within the first's plus two slices (virtual time, checked build, `hold-trace`)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["timeout-hint-exit"]
+# Test builds only: each kernel lock section with its cause and its audits (never in a default
+# kernel), so the post-check reads each exit's own kernel time.
+kernel_features = ["hold-trace"]
+post_check = "sched_oracle"
+# One hart: under `icount` a lock section on several harts counts the other hart's instructions
+# too, so an exit's section would read other turns, not the exit (as `call-bounds`).
+keep_smp = true
+memory_mib = 1024
+timeout_secs = 300
+expect = [
+    '^\[timeout-hint-exit\] 508 fillers of \d+ pages$',
+    '^\[timeout-hint-exit\] ok: 254 threads waited, each deadline still to come at both exits \(0, 0\)$',
+    '^EXIT-SECTIONS \d+ \d+ \d+ \d+ \d+$',
+    '^TIMEOUT-HINT-EXIT TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[timeout-hint-exit\] FAIL', 'PROGRAM HALT', 'PANIC']
+poweroff = true

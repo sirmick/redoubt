@@ -439,15 +439,17 @@ expiry it charges only the budget it found last, an expired item's or a wait's t
 its timeout, and with neither, only the budget it interrupted, when it ends that budget's slice.
 Against 30 sleepers a microsecond apart, the same with 64 staggered budget deadlines, and two
 waits answered at once 15 ms before their timeouts, the victim gets 473, 473 and 477 of 1000 net
-on rv64 and 468, 469 and 481 on rv32, and no timer interrupt is nobody's. The last case requires
-interrupts that found the attacker's waits ended early inside the victim's window, so the check
-cannot pass for want of them: 73 on rv64 and 19 to 20 on rv32. Its attacker holds no other
-timed wait that times out within the window: one due at every expiry walk of its process would
-reset the timer's hint each slice, and a hint 15 ms ahead would never come. A sleep of a
-microsecond has passed before its call would block, so it arms nothing; when every call armed
-the timer, each such sleep made an interrupt that found nothing. With the rest of each timer
-interrupt billed to the budget it interrupted (`timer-tail-billed`, the recorded negative run),
-the check fails on both widths: the victim pays for the attacker's waits that ended early.
+on rv64 and 468, 469 and 481 on rv32, and no timer interrupt is nobody's. In the last case a wait
+that ends early takes its hint with it ([the hart timer](timer.md#the-hart-timer)): the case
+requires that no timer interrupt inside the victim's window finds a wait ended early (none on
+either width), its program checking that the waits were answered early, so the check cannot pass
+for want of them. Its attacker holds no other timed wait that times out within the window: one
+due at every expiry walk of its process would recompute the timer's hint each slice, and a hint
+left 15 ms ahead would never come. A sleep of a microsecond has passed before its call would
+block, so it arms nothing; when every call armed the timer, each such sleep made an interrupt
+that found nothing. With the rest of each timer interrupt billed to the budget it interrupted
+(`timer-tail-billed`, the recorded negative run, recorded with each wait that ended early leaving
+its hint early), the check fails on both widths: the victim pays for the attacker's timer work.
 
 A server that works for a caller spends its own budget's CPU: no time is donated
 ([Residual risks](#residual-risks)). CPU charging is separate from page charging
@@ -1316,7 +1318,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (69)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`), and for a `process_exit` ending 254 waits that each hold the timer's hint, within two slices of the same exit on an empty system (`bench:timeout-hint-exit`) · tested (70)</summary>
 
 - bench:sched-share
 - bench:steward-latency
@@ -1345,6 +1347,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - bench:map-anon-search-bound
 - bench:scan-bounds
 - bench:call-bounds
+- bench:timeout-hint-exit
 - bench:worst-walk
 - host:redoubt-stride::the_crate_and_the_model_agree
 - host:redoubt-stride::a_broken_model_disagrees
@@ -1404,7 +1407,13 @@ budgets, or arming timeouts and deadlines gets it more. The rule's parts are the
 free weight, the preemption points, the wake rule and ranks, charging and inheritance. A slice is
 the picked thread's user time: it starts when the thread returns to user mode, so the kernel's
 work between the pick and that return, however long, never uses it up, and a picked thread runs
-its slice unless a budget deadline fires at the return.
+its slice unless a budget deadline fires at the return. A timer interrupt's expiry inside a slice
+does count against it, though billed to the payers of what it ends: bounded by the waits it ends
+and the next of each process ([timer](timer.md#residual-risks)), not by the process's other timed
+waits, but not removed: a deadline that ends 250 waits at once at full occupancy walks 26.8 ms on
+rv64 and 28.9 ms on rv32 (`bench:worst-walk`), many slices of the thread it interrupted. A slice
+that is the thread's own time, its end moved by kernel work billed to another payer, is the
+remedy.
 
 A system call's kernel time is bounded by a constant plus a term linear in the objects it names
 and in the pages it maps, at most `MAX_RANGE_PAGES` pages a call, a constant: a range call's

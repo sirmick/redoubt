@@ -1,13 +1,14 @@
 //! Timer interrupts an attacker arms cost the attacker, not a victim (R12, billing): 30 threads
 //! sleeping a microsecond each, staggered and re-armed, a variant that also creates budgets whose
 //! deadlines fall a microsecond apart, and two threads whose waits, timed out 15 ms ahead, a
-//! sibling ends at once, so the timer they armed comes early in the victim's slice, leave an
-//! equal-weight victim at least its share of the harts, judged by the post-check on the kernel's
-//! charges net of lock waits (`HART-SHARE`). (A wait ends early only while the attacker runs, and a
-//! block hands the CPU on, so the timeouts outlive a slice: hundreds of microseconds ahead, every
-//! wait timed out for real. The attacker's first thread waits out the window in one timed wait: a
-//! nap timed out each millisecond would be due at every expiry walk of its process, which resets
-//! the timer's hint from the waits still blocked, and no early timer would come.)
+//! sibling ends at once, which raises the timer's hint so that no early timer comes in the victim's
+//! slice, leave an equal-weight victim at least its share of the harts, judged by the post-check on
+//! the kernel's charges net of lock waits (`HART-SHARE`). (A wait ends early only while the
+//! attacker runs, and a block hands the CPU on, so the timeouts outlive a slice: hundreds of
+//! microseconds ahead, every wait timed out for real. The attacker's first thread waits out the
+//! window in one timed wait: a nap timed out each millisecond would be due at every expiry walk of
+//! its process, which recomputes the timer's hint from the waits still blocked, and an early timer
+//! the kernel left would not come.)
 
 #![no_std]
 #![no_main]

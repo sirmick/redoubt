@@ -136,6 +136,7 @@ bin = [
     { name = "thread-limit", test = false },
     { name = "thread-stack-guard", test = false },
     { name = "thread-stack-overflow", test = false },
+    { name = "timeout-hint-exit", test = false },
     { name = "timeouts", test = false },
     { name = "timer-flood-at-rest", test = false },
     { name = "touch-beyond-ram", test = false },

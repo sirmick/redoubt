@@ -290,7 +290,7 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 187 of the 355 run under `icount`: 180 so, six with a disk
+something in it waits on the host, and 188 of the 356 run under `icount`: 181 so, six with a disk
 at `icount = "shift=3"` (the rule for a disk is above), and `bench-qemu-early-exit`, whose `icount`
 is one QEMU refuses. What keeps the other 168 on the host's clock, a case counted under each it
 has: a disk or a userland disk (141 cases); host sockets, a `forward`, a `poke`, a peer or a dial
@@ -787,7 +787,7 @@ oracles alone. The case's log says what the build and the scripts each took.
 
 ## Checked builds
 
-<details><summary>Status: built · tested (20)</summary>
+<details><summary>Status: built · tested (21)</summary>
 
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
@@ -799,6 +799,7 @@ oracles alone. The case's log says what the build and the scripts each took.
 - bench:timer-flood-at-rest
 - bench:sched-exit-churn-mttcg
 - bench:sched-timer-flood
+- bench:timeout-hint-exit
 - bench:sched-carve-return
 - bench:deadline-flood-billed-traced
 - bench:deadline-flood-billed-traced-mttcg
@@ -912,8 +913,20 @@ envelope. The other cases keep the whole-stamp subtraction above. The same trace
 timer interrupt from user mode with every charge inside it, and `sched_oracle` checks that the
 budget it interrupted pays only for its own items or its slice's end
 ([charging](kernel/scheduling.md#charging)); a kernel built with `timer-tail-billed`, which keeps
-the old billing, fails that check in a recorded negative run. It records each device interrupt
-from user mode the same way (`x`), with its claim (`c`: the source, or 0 when another hart claimed
+the old billing, fails that check in a recorded negative run. With `no_stale_waits_in=<share>` it
+requires that no timer interrupt inside that share's window found a process's cached earliest
+timeout come with none of its waits due: a cache left early. That is the only fault of an exact
+timeouts' hint the trace shows. A hint left early while every cache is exact makes an interrupt
+whose walk skips every process, which the trace does not tell from one that found nothing to do;
+only the checked kernel's audit catches it, asserting at an entry's end that the hint is the
+caches' earliest ([the hart timer](kernel/timer.md#the-hart-timer)). What keeping the hint exact
+costs is `timeout-hint-exit`'s, with `hold-trace`: its program prints two windows and a margin
+(`EXIT-SECTIONS`), each holding the same exit of a process whose 254 waits each hold the hint in
+turn, the first on an empty system and the second with every other PID holding a later timeout,
+and the check holds the second's longest `process_exit` section, net of audits, to the first's
+plus the margin, two slices: the hint is recomputed once in a call however many waits it ends,
+not once a wait. It records each device
+interrupt from user mode the same way (`x`), with its claim (`c`: the source, or 0 when another hart claimed
 it first), and checks that one that claims nothing is billed as a timer interrupt that ends no
 slice: after its expiry, to the budget the expiry billed last or to nobody, never to the budget it
 interrupted; one a deadline answered at its entry preempted before its claim (a destruction

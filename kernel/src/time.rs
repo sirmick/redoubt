@@ -28,15 +28,20 @@
 //! expiry would have found nothing.
 //!
 //! # Hints
-//! Finding what is due means reading the timed waits of each process whose cached earliest
-//! timeout has come (`message::collect_due`) and walking the list of budgets with a deadline
-//! (`budget.rs`). Both are skipped while the cached earliest deadlines are still in the future. A
-//! hint is only ever early: a thread that blocks with a timeout or a new budget lowers it, and a
-//! wait that ends before its timeout or a destroyed budget leaves it where it was, which costs at
-//! most one early interrupt and a walk that recomputes it. So nothing is missed. A call answered at
-//! once, or whose timeout has already passed, never blocks and lowers nothing. The walk that finds
-//! an ended wait is its thread's budget's, as is the rest of an entry that found nothing else; a
-//! destroyed budget's early walk of the deadline list is nobody's.
+//! Finding what is due means reading the timed waits of each process whose cached earliest timeout
+//! has come (`message::collect_due`) and walking the list of budgets with a deadline (`budget.rs`).
+//! Both are skipped while the cached earliest deadlines are still in the future. A thread that
+//! blocks with a timeout or a new budget lowers its hint. The timeouts' hint is exact: a process
+//! keeps its timed waits by deadline, so a wait that ends before its timeout and held its process's
+//! earliest raises that cache to the next wait's, and a wait whose deadline was the hint marks the
+//! hint for recomputing from the caches ([`timeout_ended`]), once in the entry however many waits
+//! it ends, before anything reads the hint and at the entry's end ([`settle_timeouts`]): no expiry
+//! walk is left for it, and a re-arm comes by the next item, not it (a hart already armed for it
+//! that does not pass a re-arm first still takes that interrupt, which finds nothing). The
+//! deadlines' hint is only ever early: a
+//! destroyed budget leaves it where it was, which costs at most one early interrupt and a walk that
+//! recomputes it, nobody's. So nothing is missed. A call answered at once, or whose timeout has
+//! already passed, never blocks and lowers nothing.
 //!
 //! Microseconds are the ABI's unit (kernel/timer.md, "Time"): deadlines are kept in them, and
 //! converted to timer ticks rounding up, so an interrupt never comes before its deadline.
@@ -57,6 +62,9 @@ struct Timer {
     /// No thread's timeout is earlier than this, and the budget that pays for it (the blocked
     /// thread's), which decides the hart whose timer comes by it ([`rearm`]).
     threads: Hint,
+    /// A wait whose deadline was `threads` has ended since it was set: it is recomputed before it
+    /// is read ([`settle_timeouts`]).
+    ended: bool,
     /// No budget's deadline is earlier than this, and its payer (the dying budget's parent).
     budgets: Hint,
     /// When each hart's running thread's slice ends (`sched.rs`), by boot index; `NEVER` while
@@ -68,6 +76,7 @@ struct Timer {
 
 static TIMER: KernelCell<Timer> = KernelCell::new(Timer {
     threads: Hint::NONE,
+    ended: false,
     budgets: Hint::NONE,
     slice: [NEVER; MAX_HARTS],
     armed: [NEVER; MAX_HARTS],
@@ -81,6 +90,27 @@ pub fn now_us() -> u64 { timer::now_us() }
 pub fn note_timeout(deadline: u64, payer: Option<u64>) {
     TIMER.with(|t| t.threads = t.threads.lowered(deadline, payer));
 }
+
+/// A wait with `deadline` ended, and its process's cache moved with it (`message::untime`): if it
+/// was the hint, the hint is marked for recomputing ([`settle_timeouts`]). Only marked, so a call
+/// or an expiry that ends many such waits (an exit, a destruction, the pumps) recomputes once.
+pub fn timeout_ended(deadline: u64) { TIMER.with(|t| t.ended |= t.threads.at == deadline) }
+
+/// If a wait that held the timeouts' hint has ended ([`timeout_ended`]), recompute the hint from
+/// every process's cache, one read each, so no timer comes early for it. At the end of each
+/// outermost entry (`message::audit`), and first wherever the hint is read ([`rearm`], [`due`],
+/// [`expire_due`]), so nothing reads it stale; the re-arm is the entry's return's, as for any
+/// change. Once at most for each expiry, call or interrupt's delivery, billed as the rest of it.
+pub fn settle_timeouts(mm: &MemoryManager) {
+    if TIMER.with(|t| core::mem::take(&mut t.ended)) {
+        let next = crate::message::earliest_timeouts(mm);
+        TIMER.with(|t| t.threads = next);
+    }
+}
+
+/// The timeouts' hint, for the checked build's audit that it is exact (`message::audit`).
+#[cfg(debug_assertions)]
+pub fn timeout_hint() -> u64 { TIMER.with(|t| t.threads.at) }
 
 /// A budget was created with `deadline` under the budget `payer` (its parent's id): make sure a
 /// timer comes by then (at once, for one already past). Only recorded, as a timeout is.
@@ -103,6 +133,7 @@ pub fn slice_end() -> u64 { TIMER.with(|t| t.slice[hart::index()]) }
 /// they are now (`sched::runner_ids`): at the
 /// return to user mode, after the switch, and before `kmain` idles (module docs).
 pub fn rearm() {
+    MemoryManager::with(settle_timeouts);
     let h = hart::index();
     let runners = crate::sched::runner_ids();
     TIMER.with(|t| {
@@ -123,6 +154,7 @@ pub fn rearm() {
 /// `kmain`'s expiry would answer before its pick ([`expire_due`]'s first test), so a slice's end
 /// picks where it is only when there is none (`sched::repick`).
 pub fn due() -> bool {
+    MemoryManager::with(settle_timeouts);
     let now = now_us();
     TIMER.with(|t| t.threads.at <= now || t.budgets.at <= now)
 }
@@ -167,6 +199,7 @@ pub struct Expired {
 /// budget billed last's billing (`sched::bill_from`), which the entry's next payer closes. No part
 /// of the expiry falls between two intervals, to nobody.
 pub fn expire_due(ss: &mut ProcessTable) -> Expired {
+    MemoryManager::with(settle_timeouts);
     let now = now_us();
     if TIMER.with(|t| t.threads.at > now && t.budgets.at > now) {
         return Expired { destroyed: false, last: None };
@@ -181,6 +214,9 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
         let _walk = crate::sched::trace::walk(crate::sched::trace::EXPIRY);
         MemoryManager::with_mut(|mm| crate::message::collect_due(mm, now))
     };
+    // The timeouts' hint is the walk's at once, so a wait a pump below ends early, not due, marks
+    // it as at any entry (`message::untime`).
+    TIMER.with(|t| t.threads = walk.next);
     let (mut pool, share, mut first) = match walk.count {
         0 => (0, 0, 0),
         n => {
@@ -252,7 +288,6 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
         })
     });
     TIMER.with(|t| {
-        t.threads = walk.next;
         t.budgets = next_budget;
         // This hart's timer fired (or will, for what just passed); armed afresh at the return.
         t.armed[hart::index()] = 0;
