@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 243
+revision = 254
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -3023,8 +3023,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["K35"]
   body = "Ruled by the Architect on arch-k35-after-measure (rulings file 'K35 after the measurement'). K35's naming (.wash/local/K35-report.md 'Naming'): of 10-11 lock hand-offs a keep-alive probe costs an idle 4-hart box, about 5 are send/reply/receive-shaped (netd reply 1.0-1.7, netd send 1.0-2.7, ipd receive of a queued send 1.0-2.8): the sender continues to user, so its leave wakes an idle hart, and it blocks in its next entry anyway. scheduling.md's rule (a) reaches only an entry that readies and blocks in one (call). Shape: a reply that also receives (the server's turn), and a receive or wait_irq that sends first (netd's rx thread forwards then waits), each one entry, so the readied thread is this hart's own pick (rule (a)); the surface is the implementer's choice with reason (a flag on receive naming a reply or a send, or two calls). Constraints: R13 one outcome per call: the combined call's result is whole (the reply's disposition and the received record, or the error that stopped it, with what was done stated: a failed send after a delivered reply is one outcome, named); R4b/R3 unchanged; the rt's serving loop is the one consumer that changes (every server through it); model, fake and libs/sys follow; no new RNG draws. Acceptance: launch-idle-probes (K35's case) red on main for the send/reply-shaped hops: hand-offs per probe down by the named ~5, interrupts and SBI calls re-derived down and asserted at 2x the measured worst alone; ipc-client's 1000 lend round trips at two harts within 1 % of one hart (2.07 s against 2.02 s today, scheduling.md residual 'A call within one budget crosses harts', rewritten); sched-latency, sched-irq-wake, sched-wake-no-preempt(-harts) keep their counts; idle ceilings do not move. Tier A (kernel, rt, model), size M; kernel-red + simplifier + editor. Includes netd forwarding last (K35's (b), dropped there as net zero without this call)."
-  state = "todo"
-  revision = 197
+  state = "reported"
+  revision = 254
 
 [[node]]
   id = "K38"
@@ -3061,8 +3061,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["B103"]
   body = "Ruled by the Architect on arch-n4-n16 (rulings file 'B109: the companions follow B103'). B103 (rulings 'B103: the two-hart deadline notice is judged where the harts run at once') found that under icount the other hart's turns are counted inside the steward's lease_ended send, so the two-hart deadline-notice p99 is an artefact there, and judged it in steward-latency-mttcg; its item 1 says a pass with artefact margin is no judgement. The companions still judge it under icount: scheduling.md's real-steward table has N=4 at 27.2 and N=16 at 29.9 ms on rv64 at two harts. Same shape as B103, two twins, since the trace ring is per boot and N=4/16 fit no boot with N=1-3: steward-latency-n4-mttcg (rv64 at [1,2]; rv32 at [1] as the companion is) and steward-latency-n16-mttcg (rv64 at [1,2]), no icount, host time, --quiet class, judging the deadline notice's p99 at 40 ms net, every other figure recorded (one case judges each cell); lease lengths from the twins' own measured launches; the icount companions record their two-hart deadline-notice cells with the turns reason. The negative question is inherited, not redone: if B103 built a negative the twins run it once; if B103 stated why none is cheap, B109 cites it and states the twins' sensitivity. Before landing: three alone runs per twin per width, N=16's host-time cost measured and stated (the companion's icount round is long; host time should be shorter, say so with the number). Pages: scheduling.md's real-steward table and the QEMU-turns residual (the companions' cells beside B103's), testbench.md's host-clock list. No target moves. Not Tier A: cases and pages; size S-M."
-  state = "active"
-  revision = 233
+  state = "done"
+  revision = 249
 
 [[node]]
   id = "B110"
@@ -3080,5 +3080,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["K35"]
   body = "Ruled by the Architect on arch-k35-expiry-starvation (rulings file 'K35 round 2: the expiry's time and the interrupted slice'). Found by K35's timeout-hint-exit on main (.wash/local/K35-report.md 'Red P2'): a waiter ran 19 us a turn and never progressed, 6,128 of 6,128 slice decisions over, because the timer interrupt's expiry (1,327 us median on main, reading all 253 of a sibling's timed waits) ran inside its slice and sched::slice_over compares now after the expiry with the slice's end. Billing is as designed (K20/R12: the interrupted budget pays none of it), but the slice is time, and the page is silent on kernel work in an interrupt inside a slice; K24 already excludes the pick's exit work. K35 bounds the expiry to the due waits plus the next (5 us median, 537 us max there), so the window narrows but stays: a deadline ending many waits at once (worst-walk: 250 due, about 8 ms) still takes the interrupted thread's slice, self-limited only by the attacker's share for re-arming. Rule: a slice is the thread's own time, its user time and its own calls; kernel work inside it billed to another payer extends the slice's end by that work (slice_end moves by the interval billed elsewhere), so the interrupted thread resumes with what it had; only a deadline due now preempts (R12 unchanged); nothing is charged twice. Pages: scheduling.md preemption points and the slice paragraph (K24's), R12 status, timer.md's expiry residual; the model if it holds slices as ticks (implementer states). Acceptance: a case, red on main and on K35's head: a sibling process with many timed waits due each slice beside a victim thread polling at 1 ms, the victim's progress count bounded below by its share; sched-* and smp-* counts kept; nobody-share figures re-recorded if they move, no target moves. Tier A (kernel), size S-M; kernel-red + simplifier + editor. After K35; rank against K37/K38 the orchestrator's."
-  state = "todo"
-  revision = 239
+  state = "done"
+  revision = 251
