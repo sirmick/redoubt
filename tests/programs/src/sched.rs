@@ -155,6 +155,13 @@ pub enum Role {
     /// The section [`Role::RangeHammer`] holds the kernel for, alone: [`ALONE`] of its range calls'
     /// `map_fixed`s, each timed and unmapped; report the p50 and the longest.
     SectionAlone = 36,
+    /// p0 threads (at most 31) waiting on one shared deadline: the first to run after it passed sets
+    /// the next, p1 µs from then, and every thread re-arms to it, so their waits fall due at once,
+    /// inside the slice of whatever runs after them; report how many deadlines it set.
+    DueWaits = 37,
+    /// Two threads of this process counting until the window ends, each reporting its own count
+    /// (`[lo, hi, thread, 0]`, the main thread 0).
+    CountPair = 38,
 }
 
 /// The resumptions a [`Role::RoundRobin`] thread reports.
@@ -199,6 +206,8 @@ impl Role {
             RoundRobin,
             RangeHammer,
             SectionAlone,
+            DueWaits,
+            CountPair,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -522,6 +531,41 @@ extern "C" fn flood_answerer(waiters: usize) -> ! {
         }
     }
     DONE.fetch_add(1, SeqCst);
+    rd::thread_exit().ok();
+    crate::park()
+}
+
+/// [`Role::DueWaits`]' shared deadline, `time_now` µs (they fit a word for over an hour).
+static DUE: AtomicUsize = AtomicUsize::new(0);
+
+/// A [`Role::DueWaits`] thread: wait until the shared deadline, setting the next one first if it
+/// has passed, over the window. Adds the deadlines it set to the total.
+extern "C" fn due_waiter(_: usize) -> ! {
+    let (lead, end) = (param(1) as usize, end_ticks());
+    let mut set = 0;
+    while ticks() < end {
+        let now = rd::time_now().unwrap_or(0) as usize;
+        let due = DUE.load(SeqCst);
+        if due <= now && DUE.compare_exchange(due, now + lead, SeqCst, SeqCst).is_ok() {
+            set += 1;
+        }
+        let _ = rd::receive(None, DUE.load(SeqCst).saturating_sub(now).max(1) as u64, 0);
+    }
+    TOTAL.fetch_add(set, SeqCst);
+    DONE.fetch_add(1, SeqCst);
+    rd::thread_exit().ok();
+    crate::park()
+}
+
+/// A [`Role::CountPair`] thread, `k` 0 or 1: count until the window ends and report it.
+extern "C" fn pair_thread(k: usize) -> ! {
+    let [lo, hi] = halves(spin_until(end_ticks()));
+    let _ = rd::send(1, &rd::body([lo, hi, k, 0]), None, rd::FOREVER);
+    DONE.fetch_add(1, SeqCst);
+    if k == 0 {
+        await_done(2);
+        rd::process_exit(0)
+    }
     rd::thread_exit().ok();
     crate::park()
 }
@@ -923,6 +967,19 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
         Some(Role::RoundRobin) => {
             thread(round_robin_thread, 1);
             round_robin_thread(0)
+        }
+        Some(Role::CountPair) => {
+            thread(pair_thread, 1);
+            pair_thread(0)
+        }
+        Some(Role::DueWaits) => {
+            let threads = param(0).clamp(1, 31) as usize;
+            for _ in 0..threads {
+                thread(due_waiter, 0);
+            }
+            sleep_until(end, tpu);
+            await_done(threads);
+            TOTAL.load(SeqCst) as u64
         }
         Some(Role::SpinThreads) => {
             let (first, more) = (param(0).max(1) as usize, param(1) as usize);

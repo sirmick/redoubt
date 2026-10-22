@@ -74,7 +74,7 @@ no dependencies.
 
 ### Preemption points
 
-<details><summary>Status: built · tested (14)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - bench:sched-wake-no-preempt
 - bench:sched-wake-no-preempt-harts
@@ -90,17 +90,60 @@ no dependencies.
 - mutation:R12PreemptOnWake
 - mutation:R12TimeoutWakePreempts
 - mutation:R12SliceCountsExitWork
+- bench:sched-slice-own-time
+- mutation:R12SliceCountsTimerWork
 
 </details>
 
 The running thread keeps the CPU until one of these:
-- its slice ends: `SLICE_US` (1,000 µs) from its return to user mode after the pick;
+- its slice ends: `SLICE_US` (1,000 µs) of its own time from its return to user mode after the
+  pick, its user time and its own calls (below);
 - it blocks, exits, faults or is killed;
 - a budget deadline fires.
 
 Nothing else takes the CPU. A timeout expiring or an interrupt firing only makes a thread
 runnable; it runs when the queue next picks it. The hart timer is always armed for the earliest
 of the slice end, the next timeout and the next budget deadline ([timer](timer.md)).
+
+**A slice is the thread's own time.** At every entry from user mode, once its user time is
+accrued, the running thread's slice pauses (`sched::pause_slice`), and it resumes with what it had
+left (`sched::resume_slice`): a call or an exception right after the expiry its entry answers
+first, so the call's own handling counts as its time; an interrupt, a timer's, a device's or
+another hart's, at its return, before the timer is armed for the slice's end. No part of an
+interrupt is the thread's doing, whoever pays for it: an expiry for another thread's waits,
+however many it ends, a device's handling, a timer interrupt that found nothing. So is the claim
+and return of a device interrupt, billed to the budget it interrupted ([charging](#charging)),
+which leaves that budget's slice too. A timer interrupt decides from the pause: the slice is over
+if its end had come when the thread entered the kernel, so the expiry before the decision never
+ends it. A slice that ended meanwhile (a pick at its end, a block, a deadline) is not resumed, and a
+checked build's audit inside a pause moves nothing twice. Billing is unchanged: each interval has
+its one payer, and only the slice's end moves. Only a deadline due now preempts. A budget extends a
+thread's slice only by kernel work billed to it, its own timeouts' expiry, or to `system`, a
+device's: stride charges both, and R12's bound on each entry's kernel time limits them, so no
+share is gained by it, and the threads waiting for the hart wait for work its payer is charged
+for. The kernel work no one pays for that a slice also pauses for is bounded too: a timer
+interrupt that finds nothing comes only for something armed on its hart (the slice's own end, a
+timeout, a deadline), and another hart's interrupt only for that hart's work, a shootdown its
+call or destruction sends, inside that call's or destruction's bound. What still counts against a slice is the return's own steps from the resumption, the timer's
+arming among them: 6.6 µs on rv64 and 11.9 µs on rv32 a return in the checked build (at most 6.7
+and 12.6), about one per cent of a slice per interrupt.
+
+`sched-slice-own-time` puts a sibling process's 31 waits, due at once, in one thread's slice
+every round: one budget's two counting threads, T and C, beside a sibling whose threads all wait
+on one deadline, set 1.2 ms ahead by the first to run after it passed. The round-robin in (pid,
+tid) order runs T after the sibling's threads, so the deadline falls early in T's slice each time,
+at least 60 times inside the budget's time (127 on rv64 and 164 on rv32 at timer interrupts, the
+rest at the threads' own calls). The case requires T's share of the two counts to be its
+round-robin share, half, less 20 of 1000, twice the most it fell short at any deadline lead from 0.8
+to 2.5 ms: 494 on rv64 and 495 on rv32. A slice that an expiry could end would end there, and
+the cursor would move on to C for a whole slice, every round. The sibling is in the victim's
+budget because across budgets stride evens such a loss: a slice cut short is charged only what it
+ran, so its budget stays first in the queue, and the waits fall on whichever of its threads the
+queue's turn order gives, not on one. In one budget the oracle cannot tell the
+sibling's expiries from the victim's bills, so its check that each timer interrupt bills only the
+budgets of what it found stands in for "the sibling pays for every expiry". The model's
+`R12SliceCountsTimerWork` takes a timer's expiry out of the interrupted thread's slice, and its
+contracts catch it.
 
 On several harts a timeout is answered at whichever kernel entry first comes after it is due, on
 any hart: a timer interrupt, another budget's call, or `kmain`'s own. That entry deschedules no
@@ -113,8 +156,9 @@ twenty wakes answered where they could have preempted, mid-slice or at another b
 to 101 at a call on rv64 and 65 to 74 on rv32, five runs a width alone and three with the timer's
 placement, whose one hart armed for a sleeper's timeout moves where a wake is answered run to
 run; the floor is a third of the least). Whether a slice ended at a timer interrupt the oracle
-decides itself, from the decision's inputs the trace records (its end and now), so a slice that
-ends during the entry's own expiry counts as ended, as the kernel ends it. Under `icount` a wake
+decides itself, from the decision's inputs the trace records (its end and the entry's time, when
+the slice paused), so a slice whose end falls during the entry's own expiry has not ended, as the
+kernel decides it (below). Under `icount` a wake
 comes mid-slice on rv64 (1 to 61 across runs; 26 to 35 before the placement) but at most four
 times on rv32 (0 to 4), whose armed hart takes its interrupt only at its next turn, after the
 other hart's call has answered the timeout; so `sched-wake-no-preempt-harts-mttcg`, the same
@@ -1331,7 +1375,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`), and for a `process_exit` ending 254 waits that each hold the timer's hint, within two slices of the same exit on an empty system (`bench:timeout-hint-exit`) · tested (70)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`), and for a `process_exit` ending 254 waits that each hold the timer's hint, within two slices of the same exit on an empty system (`bench:timeout-hint-exit`) · tested (72)</summary>
 
 - bench:sched-share
 - bench:steward-latency
@@ -1362,6 +1406,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - bench:call-bounds
 - bench:timeout-hint-exit
 - bench:worst-walk
+- bench:sched-slice-own-time
 - host:redoubt-stride::the_crate_and_the_model_agree
 - host:redoubt-stride::a_broken_model_disagrees
 - host:redoubt-stride::a_slice_end_reads_no_more_states_for_a_longer_queue
@@ -1392,6 +1437,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - mutation:R12RescaleOnlyOnReturn
 - mutation:R12SliceCountsExitWork
 - mutation:R12TimerWorkUnbilled
+- mutation:R12SliceCountsTimerWork
 - mutation:R12SwitchBilledToPrevious
 - mutation:R12CappedHoldsFloor
 - mutation:R12CapOnce
@@ -1418,15 +1464,13 @@ there is a share of the machine's instructions. No
 pattern of spinning, sleeping and waking, exiting or faulting, creating, carving and destroying
 budgets, or arming timeouts and deadlines gets it more. The rule's parts are the sections above:
 free weight, the preemption points, the wake rule and ranks, charging and inheritance. A slice is
-the picked thread's user time: it starts when the thread returns to user mode, so the kernel's
+the picked thread's own time: it starts when the thread returns to user mode, so the kernel's
 work between the pick and that return, however long, never uses it up, and a picked thread runs
-its slice unless a budget deadline fires at the return. A timer interrupt's expiry inside a slice
-does count against it, though billed to the payers of what it ends: bounded by the waits it ends
-and the next of each process ([timer](timer.md#residual-risks)), not by the process's other timed
-waits, but not removed: a deadline that ends 250 waits at once at full occupancy walks 26.8 ms on
-rv64 and 28.9 ms on rv32 (`bench:worst-walk`), many slices of the thread it interrupted. A slice
-that is the thread's own time, its end moved by kernel work billed to another payer, is the
-remedy.
+its slice unless a budget deadline fires at the return. Nor does the kernel's work inside a slice
+for anyone else: the slice pauses for every interrupt and for the expiry a call answers first
+([preemption points](#preemption-points)), so a deadline that ends 250 waits at once at full
+occupancy, a walk of 26.8 ms on rv64 and 28.9 ms on rv32 (`bench:worst-walk`), leaves the thread it
+interrupted the rest of its slice.
 
 A system call's kernel time is bounded by a constant plus a term linear in the objects it names
 and in the pages it maps, at most `MAX_RANGE_PAGES` pages a call, a constant: a range call's
@@ -1758,12 +1802,14 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   leave to nobody (a walk that finds nothing, a pick of nothing, a timer interrupt that ends no
   slice), as a share of its time net of audits (`nobody N of 1000`,
   [checked builds](../testbench.md#checked-builds)); an interrupt's bill leaves out an audit its
-  handling runs, as billing does. Of 1000, rv64 then rv32: 14 and 26 in `sched-exit-churn`, which
+  handling runs, as billing does. Of 1000, rv64 then rv32: 35 and 61 in `sched-exit-churn`, which
   has neither an interrupt's bill nor a deadline's destruction, so that is all time the rules
-  leave to nobody; 27 and 44 in `sched-latency`, which can also show the interrupt's gap; and 17
-  and 35 in `sched-timer-flood`, 29 and 47 in `sched-budget-churn` and 61 and 84 in
-  `kernel-containment`, which can also show the destruction's. The two gaps are at most that. The
-  counters read the billing's clock and decide nothing: like the audits, they move no schedule.
+  leave to nobody; 76 and 117 in `sched-latency` at one hart, which can also show the interrupt's
+  gap; and 29 and 61 in `sched-timer-flood`, 71 and 110 in `sched-budget-churn` and 116 and 162 in
+  `kernel-containment`, which can also show the destruction's. The two gaps are at most that. An
+  expiry inside a slice never ends it ([preemption points](#preemption-points)), so a slice's end
+  takes a timer interrupt of its own, whose walk finds nothing, nobody's. The counters read the
+  billing's clock and decide nothing: like the audits, they move no schedule.
 - **Server work is paid by the server's weight.** Work a server does for a user is paid by the
   server's weight, not the requester's; the steward's work, by the steward. No time is donated, so
   a user who floods a server takes that server's share away from the server's other callers,

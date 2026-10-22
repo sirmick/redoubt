@@ -60,7 +60,9 @@ a time never fires before `time_now` reaches it.
 The kernel keeps three times (`kernel/src/time.rs`) and arms the hardware for the earliest:
 - the **slice end** of each hart's running thread: set to the time plus `SLICE_US` (1,000 µs) when a
   thread `kmain` picked returns to user mode, and to never while `kmain` itself runs and from a
-  pick until that return ([R12 (scheduling)](scheduling.md#r12-scheduling));
+  pick until that return; it moves later by the thread's pauses, every interrupt and the expiry a
+  call answers first, so the slice is the thread's own time ([R12 (scheduling)](scheduling.md#r12-scheduling),
+  [preemption points](scheduling.md#preemption-points));
 - the **earliest timeout** of any blocked thread;
 - the **earliest deadline** of any budget.
 
@@ -326,8 +328,9 @@ timer ([the hart timer](#the-hart-timer)): its cache's rise is one read, and the
 recomputation one read per live process, once in the call or expiry that ended it however many such
 waits it ended, and so that one's payer's; the walk to a wait's place among its process's timed
 waits is the blocking call's own. An expiry reads a process's waits due and the next, not every
-timed wait, so its time is the waits it ends; it falls inside the slice of the thread the timer
-interrupted, though billed to the payers ([scheduling](scheduling.md#r12-scheduling)). The rest of
+timed wait, so its time is the waits it ends; the slice of the thread the timer interrupted pauses
+for it, as for the whole interrupt, so none of it uses up that slice
+([preemption points](scheduling.md#preemption-points)). The rest of
 the entry, the timer's own handling, goes to the budget whose item it found last, so the budget the
 timer interrupted pays for none of it. Each bill closes its interval at the tick that opens the
 next, and the last opens the rest of the entry's, so a timeout's bill never leaves its own handling
@@ -460,7 +463,7 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
   threads or their waits not yet due, plus the deadline list. So a process's timed waits still to
   come cost an expiry one read: with 253 of one process's waits pending and every PID in use, a
   timer interrupt's expiry takes 5 µs median and 537 µs at most before its slice decision on rv64 in
-  a checked build (`bench:timeout-hint-exit`'s fill), where reading every timed wait of the process
+  a checked build, none of it the interrupted thread's slice (`bench:timeout-hint-exit`'s fill), where reading every timed wait of the process
   takes 1,327 µs median; the exact caches it rests on are what `bench:sched-timer-flood` checks,
   with no timer interrupt finding a wait ended early. One walk finds every wait due and orders them
   by deadline, so a deadline that ends many waits at once walks once, and ordering its R waits takes

@@ -106,6 +106,9 @@ struct Billing {
     /// The hart's running thread was preempted ([`preempt`]) and stays ready: the switch that takes
     /// its budget off requeues its own thread, no wait for the cap set; a block is not.
     preempted: bool,
+    /// The running thread's slice, paused at the entry from user mode ([`pause_slice`]): its end
+    /// and the entry's time, in µs, until it resumes with what it had left ([`resume_slice`]).
+    paused_slice: Option<(u64, u64)>,
     /// Who pays for zeroing the frames this hart retired and has not yet zeroed (R81): each payer
     /// and how many frames, in retiring order, the last entry taking any overflow ([`retiring`]).
     /// Kept until the frames are zeroed, by this hart idle ([`bill_zeroing`]) or by an allocation
@@ -140,6 +143,7 @@ static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
         #[cfg(debug_assertions)]
         excused: 0,
         preempted: false,
+        paused_slice: None,
         zeroing: [(None, 0); ZEROING_PAYERS],
         zeroing_payer: None,
     }; MAX_HARTS],
@@ -453,6 +457,26 @@ pub fn from_user() {
     }
 }
 
+/// An entry from user mode, its user time accrued ([`from_user`]): the running thread's slice
+/// pauses, since a slice is the thread's own time, its user time and its own calls. A call or an
+/// exception resumes it after the entry's expiry; an interrupt, never the thread's doing whoever
+/// pays for it, at its return ([`leave`]). A timer interrupt decides from the pause whether the
+/// slice had ended ([`slice_over`]).
+pub fn pause_slice() {
+    let end = Some(crate::time::slice_end()).filter(|e| *e != crate::time::NEVER);
+    SCHED.with(|s| s.b().paused_slice = end.map(|e| (e, crate::time::now_us())));
+}
+
+/// The paused slice resumes with what it had left when it paused, unless it ended meanwhile (a
+/// slice's end picked, or the hart left for `kmain`). An audit's move of its end during the pause
+/// is inside the pause already, so it is not counted twice.
+pub fn resume_slice() {
+    let paused = SCHED.with(|s| s.b().paused_slice.take());
+    if let Some((end, at)) = paused.filter(|_| crate::time::slice_end() != crate::time::NEVER) {
+        crate::time::set_slice_end(crate::time::now_us().saturating_add(end.saturating_sub(at)));
+    }
+}
+
 /// This hart retired `frames` frames (R81): who pays for their zeroing outside the lock, the
 /// budget paying for this kernel time now, or a destruction's payer ([`zeroing_payer`]); nobody
 /// for `kmain`'s own work. Once a walk, not once a frame: a destruction retires thousands.
@@ -752,8 +776,10 @@ pub const AUDIT_INDEXES: u64 = 5;
 /// A checked build runs the audit `which`: `check`, which a release build does not have. Its time
 /// is charged to no budget, and the running slice's end and the start of the kernel time being
 /// billed both move forward by its length, so the thread that ran it is picked and preempted as
-/// in a release build. A traced build also stamps it, so the latency targets leave it out of
-/// every window (kernel/scheduling.md, "Responsiveness").
+/// in a release build. Inside a pause ([`pause_slice`]) the resume sets the end, so it moves once;
+/// outside one, in a call's own handling or at its return, this move keeps the audit out of it. A
+/// traced build also stamps it, so the latency targets leave it out of every window
+/// (kernel/scheduling.md, "Responsiveness").
 #[cfg(debug_assertions)]
 pub fn audit(which: u64, check: impl FnOnce()) {
     // At boot the budget tree is built before the timer runs (`kmain`): there is no clock to stamp
@@ -872,6 +898,9 @@ pub fn leave(pid: Pid) {
     if SCHED.with(|s| s.marks.audit_due(crate::time::now_us(), SLICE_US, false)) {
         ProcessTable::with(|ss| MemoryManager::with(|mm| audit_marks(ss, mm)));
     }
+    // An interrupt's paused slice resumes here, before the timer is armed for its end; the rest of
+    // the return, the arming included, is the thread's.
+    resume_slice();
     if pid.get() == 1 {
         crate::time::set_slice_end(crate::time::NEVER);
     } else if to_user && crate::time::slice_end() == crate::time::NEVER {
@@ -1003,13 +1032,17 @@ pub fn destroy(mm: &mut MemoryManager, frame: BudgetFrame, weight_returned: bool
     });
 }
 
-/// Whether the running thread's slice is over (`time.rs` arms for its end). A traced build records
-/// the decision's inputs, its end and now, so the oracle decides it again from them.
+/// Whether the running thread's slice is over (`time.rs` arms for its end): whether it had ended
+/// when the thread entered the kernel ([`pause_slice`]), so the entry's expiry before the decision
+/// never ends it. A traced build records the decision's inputs, its end and the entry's time, so
+/// the oracle decides it again from them.
 pub fn slice_over() -> bool {
-    let (end, now) = (crate::time::slice_end(), crate::time::now_us());
+    let (end, at) = SCHED
+        .with(|s| s.b().paused_slice)
+        .unwrap_or_else(|| (crate::time::slice_end(), crate::time::now_us()));
     #[cfg(feature = "sched-trace")]
-    trace::slice_decided(end, now);
-    end <= now
+    trace::slice_decided(end, at);
+    end <= at
 }
 
 /// The running thread is preempted (its slice ended, or a budget deadline fired): it stays ready,
@@ -1393,8 +1426,9 @@ pub mod trace {
     pub const EXPIRED: u8 = b'E';
     pub const RETURN: u8 = b'O';
     /// A timer interrupt from user mode decided whether its runner's slice is over, after its expiry
-    /// (`=`: the slice's end in µs in the id, `NEVER` for none, and now in µs in the pass field):
-    /// it is over if its end is not after now. Its `O` says the same, and the oracle checks it.
+    /// (`=`: the slice's end in µs in the id, `NEVER` for none, and the entry's time in µs, when the
+    /// slice paused, in the pass field): it is over if its end is not after the entry. Its `O` says
+    /// the same, and the oracle checks it.
     pub const DECIDED: u8 = b'=';
     /// A device interrupt from user mode began (`x`), recorded as `I` is and followed by the same
     /// records, and its claim (`c`: the source in the id field, 0 if another hart claimed it
@@ -1412,12 +1446,12 @@ pub mod trace {
         record(TIMER_ENTRY, cur.map_or(0, |b| b.id), u128::from(now));
     }
 
-    /// The slice's end was decided (`super::slice_over`), its end `end` against `now`: inside an
-    /// interrupt from user mode, recorded (`=`), and its return says the same.
-    pub fn slice_decided(end: u64, now: u64) {
+    /// The slice's end was decided (`super::slice_over`), its end `end` against the entry's time
+    /// `at`: inside an interrupt from user mode, recorded (`=`), and its return says the same.
+    pub fn slice_decided(end: u64, at: u64) {
         if RING.with(|r| r.interrupt) {
-            RING.with(|r| r.slice_over = end <= now);
-            record(DECIDED, end, u128::from(now));
+            RING.with(|r| r.slice_over = end <= at);
+            record(DECIDED, end, u128::from(at));
         }
     }
 

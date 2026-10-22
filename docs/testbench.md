@@ -290,7 +290,7 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 188 of the 357 run under `icount`: 181 so, six with a disk
+something in it waits on the host, and 189 of the 358 run under `icount`: 182 so, six with a disk
 at `icount = "shift=3"` (the rule for a disk is above), and `bench-qemu-early-exit`, whose `icount`
 is one QEMU refuses. What keeps the other 169 on the host's clock, a case counted under each it
 has: a disk or a userland disk (142 cases); host sockets, a `forward`, a `poke`, a peer or a dial
@@ -952,9 +952,12 @@ interrupt's return (`O`) says where it goes: 1 to user mode with the interrupted
 running, 0 the slice ended at this entry (to `kmain`, or in place to user mode, where the return
 is recorded as the entry's handling ends), 2 to `kmain` without, a preemption. Whether the slice
 is over the oracle decides itself: the kernel records its decision's inputs after the entry's
-expiry (`=`: the slice's end and now, µs), the slice is over if its end is not after now, and a
-return that says otherwise fails, as does a decision outside a timer interrupt on its hart or a
-second one. With
+expiry (`=`: the slice's end and the entry's time, µs, when the slice paused), the slice is over if
+its end is not after the entry, and a return that says otherwise fails, as does a decision outside
+a timer interrupt on its hart or a second one. With `expiries_in=<mark>:<N>` it requires at least
+N timer interrupts whose expiry ended an item inside the time of the budget of mark weight
+`<mark>`, the witness that a case's due waits fell in that budget's slices
+([preemption points](kernel/scheduling.md#preemption-points)). With
 `wake_no_preempt=N` the oracle proves a timeout only wakes: at one hart N naps each against the
 slice that follows it; on several, each wake of the one budget that woke N times or more at the
 entry that made it, a return to user mode or a call its runner goes on from counting as a witness

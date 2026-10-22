@@ -219,6 +219,9 @@ pub extern "C" fn trap_handler(
     );
     if from_user {
         crate::sched::from_user();
+        // The slice is the thread's own time: it pauses here, and a call or an exception resumes
+        // it after the expiry below; an interrupt, at its return (kernel/scheduling.md, R12).
+        crate::sched::pause_slice();
         #[cfg(feature = "sched-trace")]
         if timer {
             crate::sched::trace::timer_entry();
@@ -250,6 +253,9 @@ pub extern "C" fn trap_handler(
         if from_user && expired.destroyed {
             preempt();
         }
+    }
+    if from_user && !sc.is_interrupt() {
+        crate::sched::resume_slice();
     }
     // From here, kernel time is the running budget's: a system call's is its caller's. A timer
     // interrupt's is not (below). Debug only, never in a bench build but one recorded negative run

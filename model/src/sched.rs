@@ -401,8 +401,13 @@ impl Scheduler {
 
     /// A timer interrupt spent `work` expiring `payer`'s timeouts: all of it, the bills' own
     /// handling included, is billed to `payer`, never to the budget it interrupted nor to no one
-    /// (kernel/scheduling.md, "Charging").
+    /// (kernel/scheduling.md, "Charging"). Nor does it come out of the interrupted thread's slice,
+    /// which is its own time (R12): it resumes with what it had.
     pub fn bill_timer(&mut self, payer: u64, work: u64) {
+        let counted = self.broken(Mutation::R12SliceCountsTimerWork);
+        if let Some(c) = self.current.as_mut().filter(|_| counted) {
+            c.slice_left = c.slice_left.saturating_sub(work);
+        }
         if self.broken(Mutation::R12TimerWorkUnbilled) {
             return;
         }

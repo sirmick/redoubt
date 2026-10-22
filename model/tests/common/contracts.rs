@@ -907,6 +907,23 @@ pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
             "the exit work after a pick came out of its slice",
         )?;
     }
+    // A slice is the thread's own time: a timer interrupt's expiry inside it, billed to another
+    // budget's timeouts, here three slices of it, comes out of none of it, so the interrupted
+    // thread resumes with what it had rather than losing its turn (R12).
+    {
+        let mut s = redoubt_model::sched::Scheduler { mutation, ..Default::default() };
+        s.add_budget(1, None, 100);
+        s.add_budget(2, None, 100);
+        s.thread_runnable(1, (1, 0));
+        s.reconcile();
+        expect(s.pick().is_some_and(|c| c.budget == 1), "budget 1's thread is picked")?;
+        s.run(SLICE / 2);
+        s.bill_timer(2, 3 * SLICE);
+        expect(
+            s.current.is_some_and(|c| c.slice_left == SLICE / 2),
+            "the expiry of another budget's timeouts came out of the interrupted slice",
+        )?;
+    }
     // At an equal instant, a timeout goes before a budget deadline: a caller whose call its
     // server took gets Timeout (the lend consumed), not Dead from the server's death.
     expiry_order(mutation)?;

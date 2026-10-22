@@ -76,9 +76,11 @@
 //! timer work in the judged budget's time, judged on two harts or more (kernel/timer.md, "R12
 //! (scheduling) for timer work"). An expiry's charge outside an interrupt, at a call's entry or
 //! `kmain`'s (`$`: the payer, the ticks and the time), is reported beside, never judged: a passed
-//! item is served by the first entry anywhere. Whether the interrupt ended
-//! the slice this check decides itself: the kernel records the decision's inputs after the
-//! expiry (`=`: the slice's end and now, µs), the slice is over if its end is not after now, and
+//! item is served by the first entry anywhere; a case requires at least N interrupts whose expiry
+//! ended an item inside a marked budget's time (`expiries_in=<mark>:<N>`, [`expiries_in`]).
+//! Whether the interrupt ended the slice this check decides itself: the kernel records the
+//! decision's inputs after the expiry (`=`: the slice's end and the entry's time, µs, when the
+//! slice paused), the slice is over if its end is not after the entry, and
 //! the return (`O`: 1 to user mode with the slice running, 0 the slice ended at this entry: to
 //! `kmain`, or in place to user mode, 2 a preemption) must say the same. A slice's end that picks
 //! and switches where the trap is writes `I ... = R b K n O 0 J H n`, the pick inside the
@@ -314,11 +316,10 @@ pub struct Summary {
     /// Each destruction's time in its threads' ending, µs (`T` to `t` inside its `X` and `Y`), in
     /// trace order.
     pub r10_threads_us: Vec<u64>,
-    /// Timer interrupts from user mode checked, those whose expiry billed someone, those that
-    /// found a wait ended before its timeout, and those that found neither and ended the
-    /// interrupted budget's slice.
+    /// Timer interrupts from user mode checked, those that found a wait ended before its timeout,
+    /// and those that found neither and ended the interrupted budget's slice (those whose expiry
+    /// billed someone are [`Summary::timer_expiring_in`]).
     pub timer_entries: usize,
-    pub timer_expiring: usize,
     pub timer_stale: usize,
     pub timer_slice_ends: usize,
     /// Ticks charged after expiry to the budget billed last, over every timer interrupt.
@@ -341,6 +342,9 @@ pub struct Summary {
     pub timer_empty: Vec<u64>,
     /// When each timer interrupt that found a wait ended early came, µs.
     pub timer_stale_at: Vec<u64>,
+    /// The budget each timer interrupt whose expiry ended an item interrupted (`expiries_in`): as
+    /// many as those interrupts.
+    pub timer_expiring_in: Vec<Option<u64>>,
     /// Device interrupts from user mode checked; those that claimed nothing (another hart claimed
     /// the source first); and those a deadline answered at their entry preempted before their
     /// claim.
@@ -453,7 +457,7 @@ fn check_timer_entry(e: &TimerEntry, to_user: bool, sum: &mut Summary) -> Result
     match e.expired {
         Some((last, what @ (1 | 2))) => {
             if what == 1 {
-                sum.timer_expiring += 1;
+                sum.timer_expiring_in.push(e.interrupted);
             } else {
                 sum.timer_stale += 1;
                 sum.timer_stale_at.push(e.at);
@@ -3388,6 +3392,29 @@ fn foreign_timer(
     )
 }
 
+/// The timer interrupts from user mode whose expiry ended an item while they interrupted the budget
+/// of mark weight `w` or one lifted into it, at least `bound` (`expiries_in`): the witness that a
+/// case's due waits fell inside the marked budget's slices, so its share cannot pass for want of
+/// them (kernel/scheduling.md, "Preemption points"). The budget never marked is a construction
+/// error, not a verdict.
+fn expiries_in(records: &[Record], sum: &Summary, w: u64, bound: usize) -> Result<(String, bool), String> {
+    let what = "expiries in a slice";
+    let (parent, marked) = lifts(records);
+    let b = mark(&marked, w, what)?;
+    let n = sum
+        .timer_expiring_in
+        .iter()
+        .filter(|i| i.is_some_and(|i| root_of(&[b], &parent, i).is_some()))
+        .count();
+    Ok((
+        format!(
+            "{what}: {n} timer interrupts ended items inside budget {b}'s time: target {} (>= {bound})",
+            if n >= bound { "met" } else { "missed" }
+        ),
+        n >= bound,
+    ))
+}
+
 /// The kernel sections (`h`, with `hold-trace`) a hart entered from the idle (its runner `None`,
 /// after its `H 0`) and left with no record of its own but a checked build's audits (`U`, `V`):
 /// a lock take that found nothing due and nothing runnable, counted from the first run of the
@@ -3756,7 +3783,8 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
 /// `hart_shares_from=N`, the shares across harts are recorded, not judged, on a trace of fewer than
 /// N harts. With `hold-trace` too, `idle_sections_max=<mark>:<N>` bounds the kernel sections
 /// entered from the idle that found nothing to do, from the first run of the budget of mark weight
-/// `mark` on ([`idle_sections_that_found_nothing`]).
+/// `mark` on ([`idle_sections_that_found_nothing`]). `expiries_in=<mark>:<N>` requires at least N
+/// timer interrupts whose expiry ended an item inside the marked budget's time ([`expiries_in`]).
 /// `round` requires the budget the program marks to run before any other budget is picked twice
 /// ([`check_round`]). `irq_wake_no_preempt=N` needs N device interrupts that woke a budget and
 /// returned to their runner, which ran to its slice's end ([`check_irq_wake_no_preempt`]);
@@ -3805,6 +3833,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     // The mark weight and bound of the idle sections that found nothing, from the marked budget's
     // first run on.
     let mut idle_sections: Option<(u64, usize)> = None;
+    let mut expiries: Vec<(u64, usize)> = Vec::new();
     let mut wake_no_preempt = None;
     let mut cluster = false;
     let mut cluster_old_control = false;
@@ -3874,6 +3903,14 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
                 .and_then(|(s, b)| Some((s, b.parse::<u64>().ok()?)))
                 .ok_or_else(|| format!("malformed foreign_timer_in {arg:?}"))?;
             foreign_in.push((share, bound));
+            continue;
+        }
+        if let Some(spec) = arg.strip_prefix("expiries_in=") {
+            expiries.push(
+                spec.split_once(':')
+                    .and_then(|(w, b)| Some((w.parse::<u64>().ok()?, b.parse::<usize>().ok()?)))
+                    .ok_or_else(|| format!("malformed expiries_in {arg:?}"))?,
+            );
             continue;
         }
         if let Some(spec) = arg.strip_prefix("idle_sections_max=") {
@@ -4189,6 +4226,11 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         missed |= !met;
         lines.push(line);
     }
+    for (w, bound) in expiries {
+        let (line, met) = expiries_in(&records, &sum, w, bound)?;
+        missed |= !met;
+        lines.push(line);
+    }
     let mut lease_end = String::new();
     if let Some(bound) = bounds.get("lease_end_p99_us") {
         let wake =
@@ -4231,7 +4273,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         sum.r10_frames,
         sum.audits.len(),
         sum.timer_entries,
-        sum.timer_expiring,
+        sum.timer_expiring_in.len(),
         sum.timer_stale,
         sum.timer_tail_ticks,
         sum.timer_slice_ends,
@@ -7284,6 +7326,47 @@ mod tests {
             assert!(v.as_ref().is_err_and(|e| e.contains("malformed idle_sections_max")), "{bad}: {v:?}");
         }
         assert!(run(&log, "idle_sections_max=9:2").is_err_and(|e| e.contains("mark weight 9")));
+    }
+
+    /// The timer interrupts whose expiry ended an item inside the marked budget's time are counted
+    /// against a floor (`expiries_in=<mark>:<N>`): one that interrupted another budget, or ended
+    /// no item, does not count.
+    #[test]
+    fn expiries_inside_a_budgets_time_have_a_floor() {
+        // Budget 44 (mark weight 2): after the third slice's return, two interrupts of 44 expire
+        // items (its own, then 9's), one of 44 finds nothing, and one of 9 expires 9's.
+        let (t, _) = round_robin(&[(44, 100), (9, 300)], 40, true, None);
+        let at = t.iter().enumerate().filter(|(_, r)| r.1 == 'O').nth(2).unwrap().0 + 1;
+        let e = t[at - 1].0;
+        let mut t = t.clone();
+        let extra = [
+            &[('I', 44, 125), ('E', 44, 1), ('B', 44, 50), ('O', 0, 1)][..],
+            &[('I', 44, 126), ('E', 9, 1), ('B', 9, 50), ('O', 0, 1)],
+            &[('I', 44, 127), ('E', 0, 0), ('O', 0, 1)],
+            &[('I', 9, 128), ('E', 9, 1), ('B', 9, 50), ('O', 0, 1)],
+        ]
+        .concat();
+        t.splice(at..at, extra.iter().map(|&(kind, id, pass)| (e, kind, id, pass)));
+        let log = on_harts(&t, &[], 1);
+        let v = run(&log, "expiries_in=2:3");
+        assert!(
+            v.as_ref().is_err_and(|e| e.contains(
+                "expiries in a slice: 2 timer interrupts ended items inside budget 44's time: target missed (>= 3)"
+            )),
+            "{v:?}"
+        );
+        let v = run(&log, "expiries_in=2:2");
+        assert!(
+            v.as_ref()
+                .is_ok_and(|s| s
+                    .contains("2 timer interrupts ended items inside budget 44's time: target met (>= 2)")),
+            "{v:?}"
+        );
+        for bad in ["expiries_in=2", "expiries_in=:2", "expiries_in=2:x"] {
+            let v = run(&log, bad);
+            assert!(v.as_ref().is_err_and(|e| e.contains("malformed expiries_in")), "{bad}: {v:?}");
+        }
+        assert!(run(&log, "expiries_in=9:2").is_err_and(|e| e.contains("mark weight 9")));
     }
 
     #[test]
