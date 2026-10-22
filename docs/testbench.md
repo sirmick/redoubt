@@ -290,20 +290,22 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 188 of the 357 run under `icount`: 181 so, six with a disk
+something in it waits on the host, and 188 of the 359 run under `icount`: 181 so, six with a disk
 at `icount = "shift=3"` (the rule for a disk is above), and `bench-qemu-early-exit`, whose `icount`
-is one QEMU refuses. What keeps the other 169 on the host's clock, a case counted under each it
-has: a disk or a userland disk (142 cases); host sockets, a `forward`, a `poke`, a peer or a dial
-(73); input the host types on the console, `[[input]]` (28; under `icount` the rv32 UART lost a
+is one QEMU refuses. What keeps the other 171 on the host's clock, a case counted under each it
+has: a disk or a userland disk (144 cases); host sockets, a `forward`, a `poke`, a peer or a dial
+(75); input the host types on the console, `[[input]]` (28; under `icount` the rv32 UART lost a
 burst of it); and, for 13 of the 15 with none of these, a run whose purpose is the host's time
 (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `console-one-writer`,
-`deadline-placement` and every case named `-mttcg` but `beamlet-schedulers-mttcg` and
-`steward-latency-mttcg`, which need QEMU's multi-threaded TCG, as do those two, the first with a
-disk and input too, the second with a disk and a `forward`; `beamlet-schedulers-mttcg`'s one-hart
-twin `beamlet-schedulers-one-hart` runs in guest time, since on one hart what it measures is the
-instructions two schedulers' switching costs, and `steward-latency-mttcg` judges the deadline
-notice at two harts that its guest-time twin `steward-latency` records, QEMU's turns moving it
-there ([QEMU's turns](kernel/scheduling.md#residual-risks))). Several harts do not keep a case on the host's
+`deadline-placement` and every case named `-mttcg` but `beamlet-schedulers-mttcg` and the three
+`steward-latency` twins (`steward-latency-mttcg`, `steward-latency-n4-mttcg` and
+`steward-latency-n16-mttcg`), which need QEMU's multi-threaded TCG, as do those four, the first
+with a disk and input too, the twins with a disk and a `forward`; `beamlet-schedulers-mttcg`'s
+one-hart twin `beamlet-schedulers-one-hart` runs in guest time, since on one hart what it
+measures is the instructions two schedulers' switching costs, and each `steward-latency` twin
+judges the deadline notice at two harts that its guest-time case (`steward-latency`,
+`steward-latency-n4`, `steward-latency-n16`) records, QEMU's turns moving it there
+([QEMU's turns](kernel/scheduling.md#residual-risks))). Several harts do not keep a case on the host's
 clock: under `icount` QEMU runs the harts in turn on one host thread, and a hart waiting for the
 kernel lock halts rather than spending its turn
 ([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry)). Of the other two,
@@ -322,7 +324,7 @@ the host's load does not move a guest time, so its pass, and a failure the guest
 reports, are verdicts whatever ran beside it (a pinned seed adds only that the run repeats
 exactly). Its one exposure to the host's clock is `timeout_secs`, the bench's deadline for the
 boot: a case that only ran out of that deadline beside other work has no verdict, and is rerun
-alone. A boot case without `icount` (169 of them) keeps the host's clock in the guest, so load
+alone. A boot case without `icount` (171 of them) keeps the host's clock in the guest, so load
 lengthens every wait it makes: its pass is a verdict unless what it expects is a timeout or a
 bound on a time, and a failure beside other work has no verdict until it fails alone. Every
 bound a case states on a time, a step's, a probe's or a notice's, is the box's under one
