@@ -1,4 +1,4 @@
-description = "A guard on what one keep-alive probe costs the launched system at rest (servers/ipd.md, \"The `/net` tree\"): launch-idle's machine, alice logged in over SSH and her prompt left alone for 60 s, with ipd built with its test-only feature keep-alive-probes so that her silent socket probes every 2 s, about thirty probes in the window. From QEMU's own log the bench counts the network card's answer frames, one a probe, and every hart's interrupts, the kernel's calls to the firmware (SBI) and the system calls from user mode, and judges each per frame, the window's background included, against idle ceilings: the most measured alone plus the rounds' spread. The user-ecall ceiling fails a server's turn made two calls again; the interrupt and SBI ceilings fail hand-offs across harts added back. The measures are QEMU's, not the guest's"
+description = "A guard on what one keep-alive probe costs the launched system at rest (servers/ipd.md, \"The `/net` tree\"): launch-idle's machine, alice logged in over SSH and her prompt left alone for 60 s, with ipd built with its test-only feature keep-alive-probes so that her silent socket probes every 2 s, about thirty probes in the window. From QEMU's own log the bench counts the network card's answer frames, one a probe, and every hart's interrupts, the kernel's calls to the firmware (SBI) and the system calls from user mode, and judges each per frame, the window's background included, over the span of exactly 30 frames, from the first frame's first trap to the 31st's (a 64 s window holds 31 or more), against idle ceilings: the most measured alone plus the rounds' spread. The user-ecall ceiling fails a server's turn made two calls again; the interrupt and SBI ceilings fail hand-offs across harts added back. The measures are QEMU's, not the guest's"
 arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
@@ -38,28 +38,30 @@ user = "alice"
 pty = true
 steps = [
     { expect = '\([0-9]+\)> ' },
-    { idle = 60 },
+    { idle = 64 },
     { send = "\"still-\" <> \"here\"\n" },
     { expect = '"still-here"' },
 ]
 
-# Idle ceilings, per frame the card answered, every hart's and the window's background included;
-# not the per-probe cost, which is this window less launch-idle's over the frames between them
-# (servers/ipd.md, "The `/net` tree"; docs/testbench.md, "The machine at rest"). Measured alone on
-# the quiet cores, three rounds a width alternating with launch-idle, 30 frames every window:
-# interrupts 22.4 to 25.9 a frame on rv64 and 20.1 to 25.7 on rv32, SBI calls 31.3 to 34.5 and 29.4
-# to 34.4, user ecalls 29.9 to 30.1. Each ceiling is the most plus the spread, the wider width's,
-# rounded up: 25.7 + 5.6, 34.4 + 5.0 and 30.1 + 0.2. Which check catches what: user ecalls are
-# exact to a tenth, and netd's reply and receive, and its forward and wait, made two calls each
-# again add two a probe, about 31 to 32 a frame; interrupts and SBI calls fail a hand-off across
-# harts added back to a probe's turns, a kernel whose turns are two entries reading 34 to 40
-# interrupts and 45 to 51 SBI calls a frame. A server's turn's own hand-offs are counted exactly
-# by ipc-turns.
+# Idle ceilings, per frame the card answered, every hart's and the window's background included,
+# over exactly 30 frames' span: about 17 of a frame's ecalls are background that runs with time, so
+# a figure over the window's own count would move by a frame's worth with each frame more or
+# fewer. A window without a 31st frame fails. Not the per-probe cost, which is a window less
+# launch-idle's over the frames between them (servers/ipd.md, "The `/net` tree"; docs/testbench.md,
+# "The machine at rest"). Measured alone on the quiet cores, three rounds a width, read over the
+# span of 29 frames (those windows held 30): interrupts 22.7 to 26.1 a frame on rv64 and 20.2 to
+# 26.0 on rv32, SBI calls 31.7 to 34.8 and 29.6 to 34.7, user ecalls 29.9 to 30.0. Each ceiling is
+# the most plus the spread, the wider width's, rounded up: 26.0 + 5.8, 34.7 + 5.1 and 30.0 + 0.1.
+# Which check catches what: user ecalls are exact to a tenth, and netd's reply and receive, and its
+# forward and wait, made two calls each again add two a probe, 31.8 to 32.0 a frame; interrupts
+# and SBI calls fail a hand-off across harts added back to a probe's turns, a kernel whose turns
+# are two entries reading 34.8 to 40.2 interrupts and 46.2 to 51.3 SBI calls a frame. A server's
+# turn's own hand-offs are counted exactly by ipc-turns.
 [idle]
-min_frames = 25
+frames = 30
 interrupts_per_frame = 32
 sbi_calls_per_frame = 40
-user_ecalls_per_frame = 30.3
+user_ecalls_per_frame = 30.1
 
 [userland]
 recipe = "image/userland.toml"

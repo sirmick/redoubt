@@ -1564,7 +1564,7 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
 - host:testbench::a_drain_that_never_ends_fails_at_the_bound
 - host:testbench::no_drain_seen_fails_at_the_bound
 - host:testbench::only_the_kernel_s_lines_open_a_drain_and_one_inside_is_named
-- host:testbench::answer_frames_are_counted_and_judged_per_frame
+- host:testbench::answer_frames_are_counted_and_judged_over_their_span
 - host:testbench::recipe_features_reach_only_the_named_program
 - host:testbench::only_launch_idle_probes_builds_the_fast_keep_alive
 
@@ -1638,23 +1638,28 @@ that would take the kernel's own trace, which prints only at a reset. `launch-id
 host-clock case, run in the quiet class.
 
 `launch-idle-probes` is the same machine with `ipd` built with its test-only `keep-alive-probes`, a
-silent socket probed every 2 s, so about 30 of the card's answer frames fall in the window. A
-recipe case's `recipe_features` gives some of its recipe's programs test-only features by package;
-the image's recipes name none, and only this case names this one. The bench counts the card's
-interrupts as answer frames, those within six traps of each other being one frame taken on several
-harts, and judges the window per frame (`[idle]`'s `min_frames`, `interrupts_per_frame`,
-`sbi_calls_per_frame`, `user_ecalls_per_frame`), the window's background included. So it is a
-per-frame guard, not the per-probe cost ([what a probe costs](servers/ipd.md#the-net-tree)), which
-is this window less `launch-idle`'s: about 10 to 16 interrupts and 14 to 19 SBI calls a probe.
-Its ceilings are idle ceilings, tighter than `launch-idle`'s twice the most: the most per frame
+silent socket probed every 2 s, and a 64 s idle step, so 31 or more of the card's answer frames
+fall in the window. A recipe case's `recipe_features` gives some of its recipe's programs test-only
+features by package; the image's recipes name none, and only this case names this one. The bench
+counts the card's interrupts as answer frames: one within six traps of the last, or with no system
+call from user mode since it, is the same frame taken on another hart, since `netd` and `ipd` run
+for each frame before the next. It judges per frame (`[idle]`'s `frames`, `interrupts_per_frame`,
+`sbi_calls_per_frame`, `user_ecalls_per_frame`) over the span of exactly `frames` frames, from the
+first frame's first trap to the first trap of the frame after them, the background in that span
+included, and a window without that frame fails. About 19 of a frame's user ecalls are background
+that runs with time, so a count over however many frames the window happened to hold would move by
+a frame's worth with each one more or fewer; over a fixed span it does not. So it is a per-frame
+guard, not the per-probe cost ([what a probe costs](servers/ipd.md#the-net-tree)), which is a
+window less `launch-idle`'s: about 10 to 16 interrupts and 14 to 19 SBI calls a probe. Its
+ceilings are idle ceilings, tighter than `launch-idle`'s twice the most: the most per frame
 measured alone, three rounds a width, plus the rounds' spread, the wider width's, rounded up: 32
-interrupts and 40 SBI calls a frame (the most 25.9 and 34.5, spreads 5.6 and 5.0), so a timer armed
+interrupts and 40 SBI calls a frame (the most 26.0 and 34.7, spreads 5.8 and 5.1), so a timer armed
 only when its target changes ([the hart timer](kernel/timer.md#the-hart-timer)) is guarded at
-rest, and so is every hand-off across harts a probe's turns leave out; and 30.3 user ecalls (the
-most 30.1, spread 0.2: 11 a probe plus about 19 a frame of background, which moves with real
-time). A server's turn made two calls again adds two user ecalls a probe and fails that ceiling.
-It is kept so that `launch-idle`'s ceilings are not the only reading of a frame's cost. It is a
-host-clock case in the quiet class.
+rest, and so is every hand-off across harts a probe's turns leave out; and 30.1 user ecalls (the
+most 30.0, spread 0.1: 11 a probe plus about 19 a frame of background). A server's turn made two
+calls again adds two user ecalls a probe and fails that ceiling. It is kept so that
+`launch-idle`'s ceilings are not the only reading of a frame's cost. It is a host-clock case in the
+quiet class.
 
 ### Against Redoubt's sshd
 
