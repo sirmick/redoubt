@@ -1,6 +1,6 @@
 # Environment and rules for every member launched 2026-10-20
 
-Main is 2b60945b6 (train 96: SCHED5 range calls capped at 16 pages, map_anon places whole runs; INIT6 Tversion ends the mux session). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
+Main is 328bcecff (train 97: K34 per-process free-run summaries, +2 frames per process). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
 
 ## Shell
 
@@ -110,3 +110,10 @@ tests/data/boot-profile/manifest-unverified.json must equal image/manifest.json 
 verification (servers/init/tests/manifest.rs). Any edit to an image entry (heap, stack, args,
 weight) is made in that copy in the same commit, and `init-host-tests` is in the gate. Two trains
 failed on this.
+
+## Host work beside a quiet slot
+
+`q`'s quiet cores are 20-23: a quiet slot runs host-clock boots there. Host work you run outside
+`q` (cargo test, loops of a test binary) is pinned to the general cores only:
+`taskset -c 8-19 nice -n 10`. Never 8-23: that puts load on the quiet cores and spoils a slot's
+figures.

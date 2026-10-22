@@ -2260,3 +2260,24 @@ states it. (c) leaves the cell judged by nobody.
    the turns sentence, the residual "A hart waits for QEMU's turns" gaining the notice cell beside
    the share case; testbench.md's host-clock list; steward.md's Leases if it repeats the figure.
    No target moves. Not Tier A: a case and pages; the reviewer is the orchestrator's choice.
+
+### B109: the companions follow B103; the case counts become a check (architect-oct21, 2026-10-22)
+
+The red on B103 is right by B103's item 1: steward-latency-n4 and -n16 judge the two-hart
+deadline notice under icount on rv64 (27.2 and 29.9 ms against 40) by the same turns artefact.
+**A node, B109, after B103** (added, todo). Not an extension of steward-latency-mttcg: the
+companions exist because the trace ring is per boot and N = 4/16 fit no boot beside N = 1-3, and
+the twins meet the same ring, so they are two case files, as the companions are: n4-mttcg (rv64
+[1, 2]; rv32 [1] as its companion) and n16-mttcg (rv64 [1, 2]), host time, --quiet, the notice's
+p99 judged at 40 ms net, other figures recorded, leases from their own launches, the icount
+companions recording their two-hart cells with the turns reason. The negative question is
+inherited from B103's answer, not redone. Three alone runs per twin per width before landing;
+N = 16's host-time cost stated. Pages: the real-steward table, the QEMU-turns residual,
+testbench.md's host-clock list. No target moves.
+
+**The stale case counts (187 of 352 against 425 files): no objection to a small node, with a
+shape.** A hand recount goes stale again by the next train; the count belongs to the docs gate
+(redoubt-doccheck already holds C7 and C11): a rule that the counts testbench.md states equal the
+case files (total, boot cases, under icount), failing the docs case when they drift, as C7 fails a
+SECURITY row. The node recounts once and adds the check, so the number is never written by hand
+again. Not before AGENT0's chain; size S.

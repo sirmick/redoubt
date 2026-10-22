@@ -226,3 +226,57 @@ size-budget unsafe-budget"; set CASES="host-tests ipd-host-tests netd-host-tests
 
 Question sent to the orchestrator: the case can judge per answer frame only with the window's
 background included (32 user ecalls a frame), not the differential 15 a probe; options A/B/C.
+
+## Rebase and witness (2026-10-22)
+
+Rebased on main 328bcecff (trains 96, 97): one conflict, size-budget's kernel ceiling, set to
+11090 (main 11048 + 42; the case reads 11090 of 11090). Head after the fold:
+607573679 kernel exact timeout caches; 544b13edb docs rule (a) + residuals; 125fcc2e2 bench
+launch-idle-probes guard + ipd.md + testbench.md. servers/netd and servers/ipd's default build
+unchanged from main (ipd identical 4c2c063e8..328bcecff, so the predecessor's byte-identity holds).
+
+Witness (.tmp/K35/idle/w3, idle3.sh; witness.py from QEMU's int.log): 3 alternating rounds a
+width, one job at a time, order head probes, head launch-idle, main probes, main launch-idle;
+main = 328bcecff + the bench commit (wt-m), head = 96f75983b (wt-h; kernel identical to the final
+head). 27 jobs PASS. Round 1's mprobe/mbase rv64 and hprobe rv32 had B103 company (prebuilt,
+host-tests): rerun alone (idle/w3r), substituted; originals in idle/w3/company. Every window 30
+frames (base 4).
+
+Per frame, probes case (int / SBI / user):
+| | r1 | r2 | r3 |
+| --- | --- | --- | --- |
+| head rv64 | 37.1 / 48.1 / 32.1 | 40.7 / 51.6 / 32.1 | 38.8 / 49.7 / 32.1 |
+| main rv64 | 40.8 / 51.9 / 32.0 | 41.4 / 52.5 / 32.1 | 42.1 / 53.0 / 32.1 |
+| head rv32 | 39.8 / 51.2 / 32.1 | 37.7 / 48.9 / 32.0 | 38.6 / 49.9 / 32.0 |
+| main rv32 | 41.1 / 52.2 / 32.1 | 41.3 / 52.2 / 32.1 | 40.7 / 52.0 / 32.1 |
+
+Per probe ((probes - launch-idle) / 26 frames), int / SBI / user:
+| | r1 | r2 | r3 |
+| --- | --- | --- | --- |
+| head rv64 | 26.1 / 32.4 / 15.0 | 29.9 / 36.3 / 15.0 | 27.3 / 33.7 / 15.0 |
+| main rv64 | 29.2 / 35.8 / 14.9 | 28.8 / 35.5 / 14.6 | 31.0 / 37.3 / 15.0 |
+| head rv32 | 26.3 / 33.3 / 15.0 | 26.0 / 33.0 / 15.0 | 27.0 / 34.0 / 14.9 |
+| main rv32 | 29.4 / 36.1 / 15.0 | 28.7 / 35.2 / 15.0 | 28.4 / 35.5 / 15.0 |
+
+Item (4): no regression: head's lowest round is below main's highest on both widths. On rv32
+head is lower than main in every round (26.0-27.0 against 28.4-29.4 interrupts a probe); on rv64
+the rounds overlap (26.1-29.9 against 28.8-31.0). Per frame head reads below main in every round
+on both widths (rv64 by 0.1 at the closest). Reported, not claimed as stage 1's gain.
+
+Guard (ruling item 2 + option A + the Architect's condition): worst per frame alone across head
+and main: rv64 42.1 int, 53.0 SBI -> 85, 106; rv32 41.3, 52.2 -> 83, 105. The [idle] table has one
+ceiling for both widths (no per-width form), so the case carries rv64's, the larger, and its
+comment gives rv32's. User ecalls: worst 32.1, spread 0.1 (<= 1) -> 33.1. min_frames 25 kept.
+
+Gates on 125fcc2e2 (pinned 8-19), exit 0: docs (after one fix: a reflow had split an
+`R12 (scheduling)` citation, C5), formatting, size-budget, host-tests; earlier on the rebased
+tree: prebuilt (371/357, 0 failed), unsafe-budget, ipd-host-tests, netd-host-tests.
+
+Summaries checked: README.md, GETTING-STARTED.md, docs/README.md, docs/plan/*, docs/kernel and
+servers overviews: no claim on probe cost, stale hints or launch-idle (grep); no change.
+docs/servers/netd.md: no change ((b) dropped). Updated: docs/servers/ipd.md (/net tree "What a
+probe costs", status +bench:launch-idle-probes; residual "Probes scale with an account's
+sockets"), docs/testbench.md ("The machine at rest" status +4, the case's paragraph),
+docs/kernel/scheduling.md (rule (a); residuals "A server's turn crosses harts", "Every hart pays
+for each device interrupt"), docs/kernel/timer.md, docs/todo/kernel-attack-gaps.md.
+Docs name no plan nodes (doccheck forbids process references): K37/K38 appear as their remedies.
