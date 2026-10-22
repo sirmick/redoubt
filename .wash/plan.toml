@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 207
+revision = 225
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2976,8 +2976,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["SCHED5"]
   body = "Found by SCHED5 (thread SCHED5-cause; ruling .wash/local/wave-2026-10-18-rulings.md 'SCHED5: rv32 two harts gated'). steward-latency on rv32 at two harts, each boot alone, deadline notice p99 net at N = 1 / 2 / 3: SCHED5's head 43.4 / 45.3 / 56.5 ms, base d66839252 41.9 / 41.9 / 56.1, target 40 (the sponsor told: the steward's lease_ended send returned, less the deadline). Pre-existing: the cell was never judged on rv32 at two harts (smp rv32 = [1] until SCHED5), and the page's 13-14 ms there were taken at the dequeue, before the notice was re-measured at the send. SCHED5 gates rv32 at [1, 2] with this cell recorded (record=rv32:2:N=k:deadline_notice:p99, k = 1-3) and the finding on scheduling.md. Investigation-first, no tuning: trace one rv32 two-hart boot (block-trace, hold-trace), take the worst notices apart into the kernel's destruction at the deadline (R10), the exit notice's delivery, the steward's turn to dequeue it (its weight is 1,000 since WEIGHT1), the send to the session and its return; compare the same parts at one hart (meets) and on rv64 at two harts (meets); name the term that grows at two harts on rv32 (a lock wait behind another hart's section as in SCHED5, an audit, the send's rendezvous). Then a fix, or the finding stated with its parts if it is a bound of R78's shape, brought to the Architect. Acceptance: the record= removed and the cell judged at 40 ms, or the stated finding approved. No target moves. Tier A if a kernel or steward change follows, else a page edit; size S-M; reviewer kernel-red-4. Needs SCHED5 (the gate and the record form)."
-  state = "reported"
-  revision = 201
+  state = "done"
+  revision = 225
 
 [[node]]
   id = "B104"
@@ -3035,3 +3035,40 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Ruled by the Architect on arch-k35-after-measure (rulings file 'K35 after the measurement'). K35's naming: about 5 of a probe's 10-11 lock hand-offs are interrupt-shaped: the card's answer is taken on two harts (s_external claimed 1.0, claimed nothing 0.85 a frame), the second takes the lock for nothing, and the idle hart's leave wakes another. boot.md: every hart's context takes the source. scheduling.md's residual weighed routing against latency (at most three alarms ahead of a wake, 0.15 ms of a p99 of 4-12 ms) and declined it, naming the remedy 'sending each source to one idle hart (a busy hart's threshold above the sources' priority while one idles)'. The new evidence is cost at rest, paid by every packet of every idle session: reopened. Design, the Architect's, on boot.md and scheduling.md: a source is enabled in the contexts of idle harts and masked by threshold on busy ones, so one hart takes it; the rule says how the threshold moves at a pick and at idle, and what happens when no hart idles (every hart takes it, as today). Constraints: R78 unchanged; sched-irq-wake's proof (each device interrupt against the runner's slice that follows) and sched-lock-contention-4's counts keep; irq-boot-hart-only stays the negative control; latency stated against the residual's numbers, no target moves. Acceptance: claimed-nothing external interrupts per frame 0 (from 0.85) on launch-idle-probes, hand-offs per probe down by the named ~5, re-derived bounds asserted at 2x the measured worst alone; the idle ceilings do not move; bench-net classes and sched-irq-wake pass both widths. Tier A (kernel), size M; kernel-red + simplifier + editor."
   state = "todo"
   revision = 197
+
+[[node]]
+  id = "B107"
+  title = "The VM's natives B105 left unconverted still end the VM on a refused allocation: maps, ETS copies, binary_to_term, unicode, large-bignum integer_to_list"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by B105's red review (servers-red P1, round 1). B105 made heap growth, a collection's copy, binary construction and the natives sized by the process ask first, so a refusal kills the one process. docs/userland/beamlet.md's backstop paragraph names the natives it did not convert. Their Vec growth still goes through Heap::grow's exact reserve_exact, so a refusal there ends the VM: maps:to_list/keys/values/from_list; the ETS lookup, tab2list and match copies; unicode:characters_to_list; binary_to_term; get_keys and erase; integer_to_list of a large bignum; a native's list copy held aside (list_arg). Rule: convert each to B105's ask-first path (fallible try_reserve; collect and rerun; a second refusal kills the process as max_heap_size does), and narrow the backstop paragraph to what remains. Cases: vm/tests/allocation.rs host tests, one per native, each red on main (aborts the test binary); a boot case on both widths if one native reaches a size the VM's pages refuse. budget-flood moves if term_to_binary's buffer is converted (its comment says so). Tier B, size M. Reviewer: servers-red."
+  state = "done"
+  revision = 220
+
+[[node]]
+  id = "B108"
+  title = "client-host-tests' an_admission_refusal_of_the_moment_is_tried_again fails about one run in ten under load: the test races its holder"
+  template = "package"
+  parent = "AGENTS"
+  body = "Seen twice. B106's pinned run on 2026-10-21 failed in 0.08 s against 2.6 s normally ('a walk refused at least once', 5/5 alone). Train 97's whole bench failed it the same way (job log .tmp/train-97/rv64-client-host-tests.log), and it passed 3/3 alone. At libs/client/tests/file.rs:320-330 the test waits for the holder's open (calls >= 4) and then expects the shared connection's open to be refused at least once before it is served. Under load the holder can release before the open's first walk, so no refusal happens. Investigation-first: show the interleaving. Then make the test hold the place for certain (a barrier the holder releases only after the refusal is seen, or the fake's admission held by the test), or show it is the client's bug. No change to the client's admission rule unless one is shown. Witness: 50 runs under a parallel load, 0 failures. Tier B, size S."
+  state = "done"
+  revision = 214
+
+[[node]]
+  id = "B109"
+  title = "steward-latency-n4 and -n16 still judge the two-hart deadline notice under icount (rv64 27.2 and 29.9 ms against 40, the turns artefact B103 named): recorded there, judged in host-time twins"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["B103"]
+  body = "Ruled by the Architect on arch-n4-n16 (rulings file 'B109: the companions follow B103'). B103 (rulings 'B103: the two-hart deadline notice is judged where the harts run at once') found that under icount the other hart's turns are counted inside the steward's lease_ended send, so the two-hart deadline-notice p99 is an artefact there, and judged it in steward-latency-mttcg; its item 1 says a pass with artefact margin is no judgement. The companions still judge it under icount: scheduling.md's real-steward table has N=4 at 27.2 and N=16 at 29.9 ms on rv64 at two harts. Same shape as B103, two twins, since the trace ring is per boot and N=4/16 fit no boot with N=1-3: steward-latency-n4-mttcg (rv64 at [1,2]; rv32 at [1] as the companion is) and steward-latency-n16-mttcg (rv64 at [1,2]), no icount, host time, --quiet class, judging the deadline notice's p99 at 40 ms net, every other figure recorded (one case judges each cell); lease lengths from the twins' own measured launches; the icount companions record their two-hart deadline-notice cells with the turns reason. The negative question is inherited, not redone: if B103 built a negative the twins run it once; if B103 stated why none is cheap, B109 cites it and states the twins' sensitivity. Before landing: three alone runs per twin per width, N=16's host-time cost measured and stated (the companion's icount round is long; host time should be shorter, say so with the number). Pages: scheduling.md's real-steward table and the QEMU-turns residual (the companions' cells beside B103's), testbench.md's host-clock list. No target moves. Not Tier A: cases and pages; size S-M."
+  state = "todo"
+  revision = 223
+
+[[node]]
+  id = "B110"
+  title = "testbench.md's case counts are written by hand and drift: it says 187 of 352 where the bench has 425 case files; the docs gate checks them"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by B103's editor review (kernel-editor-2): testbench.md states the bench's case counts (total, boot cases, cases under icount, the host-clock list's count) by hand. They were stale on main before B103 (187 of 352 stated; 424 tests/*.toml at 328bcecff). Ruling: .wash/local/wave-2026-10-18-rulings.md, B109's section, 'Case counts': the count belongs to the docs gate. Build: one recount from the case files, and a redoubt-doccheck rule that testbench.md's stated counts equal the case files (total, boot, under icount, and host-clock if stated), failing the docs case when they drift, as C7 fails a SECURITY row. Fixture tests for the rule (a drifted count fails, the true count passes), red on the stale text. Not ahead of the kernel chain (K35, K37, K38). Tier B, size S. Reviewer: an editor."
+  state = "todo"
+  revision = 224
