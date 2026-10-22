@@ -37,7 +37,7 @@ a time never fires before `time_now` reaches it.
 
 ### The hart timer
 
-<details><summary>Status: built · partly tested: that a budget deadline's stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (15)</summary>
+<details><summary>Status: built · partly tested: that a budget deadline's stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (16)</summary>
 
 - bench:timeouts
 - bench:budget-deadline
@@ -47,6 +47,7 @@ a time never fires before `time_now` reaches it.
 - bench:sched-timer-entry
 - bench:deadline-placement
 - bench:timer-flood-at-rest
+- bench:launch-idle-probes
 - mutation:TimeoutIgnoredWhileOthersRun
 - host:redoubt-stride::a_hint_is_lowered_and_a_tie_of_payers_belongs_to_every_hart
 - host:redoubt-stride::each_item_is_armed_on_a_hart_that_runs_its_payer_or_on_one_hart
@@ -62,7 +63,8 @@ The kernel keeps three times (`kernel/src/time.rs`) and arms the hardware for th
   thread `kmain` picked returns to user mode, and to never while `kmain` itself runs and from a
   pick until that return; it moves later by the thread's pauses, every interrupt and the expiry a
   call answers first, so the slice is the thread's own time ([R12 (scheduling)](scheduling.md#r12-scheduling),
-  [preemption points](scheduling.md#preemption-points));
+  [preemption points](scheduling.md#preemption-points)), and a timer armed for an earlier end of
+  it stays armed, early (below);
 - the **earliest timeout** of any blocked thread;
 - the **earliest deadline** of any budget.
 
@@ -92,7 +94,18 @@ recomputes it; nothing is missed. The kernel re-arms only when the earliest time
 on its way to where a timer interrupt can be taken: the return to user mode, `kmain`'s idle, and a
 timer interrupt taken in that idle, which returns there. What changes the earliest time in between
 (a call that blocks with a timeout, a new deadline, a slice's end, the interrupt that fired) only
-records it. So a preemption arms the timer once, at the return to the thread `kmain` picks. Each
+records it. So a preemption arms the timer once, at the return to the thread `kmain` picks. A
+slice's end that only moves later is no change: the slice pauses at every entry from user mode and
+resumes with what it had left ([scheduling](scheduling.md#preemption-points)), so each call and
+each interrupt moves its end by the entry's time, and a timer armed for the old end stays armed
+(`time::move_slice_end`). Such a timer comes early, and only if the thread runs to that end: the
+decision there finds the slice not over and the return re-arms for the moved end. That arming can
+be overtaken in turn, by an entry after it, so the bound is one early interrupt an arming, each
+after an entry since that arming: within one slice their number falls geometrically with the
+share of the slice its pauses take. At rest the thread blocks first. In `bench:launch-idle-probes`'
+60 s window on rv64, 290 re-arms follow the 962 system calls (those whose target changed: a wait's
+timeout, a new slice) and none the device and inter-hart interrupts taken in user mode, 568 in all
+(553 on rv32), and three rounds a width read 45.2 to 50.3 SBI calls an answer frame. Each
 arming is one `ecall` to the firmware, through the SBI TIME extension
 (`kernel/src/arch/riscv/timer_sbi.rs`). With nothing due at all (the kernel idle, no timeouts, no
 deadlines) the timer is set to never.

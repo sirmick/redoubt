@@ -109,8 +109,12 @@ of the slice end, the next timeout and the next budget deadline ([timer](timer.m
 accrued, the running thread's slice pauses (`sched::pause_slice`), and it resumes with what it had
 left (`sched::resume_slice`): a call or an exception right after the expiry its entry answers
 first, so the call's own handling counts as its time; an interrupt, a timer's, a device's or
-another hart's, at its return, before the timer is armed for the slice's end. No part of an
-interrupt is the thread's doing, whoever pays for it: an expiry for another thread's waits,
+another hart's, at its return. A resumed slice ends later than it did, and a timer armed for its
+old end stays armed ([the hart timer](timer.md#the-hart-timer)): it comes early if the thread runs
+to that end, where the decision below finds the slice not over and the return re-arms, one early
+interrupt an arming, each after an entry since it. So a pause costs no `set_timer`: the box at rest
+makes 45 to 50 SBI calls an answer frame (`bench:launch-idle-probes`). No part of an interrupt is
+the thread's doing, whoever pays for it: an expiry for another thread's waits,
 however many it ends, a device's handling, a timer interrupt that found nothing. So is the claim
 and return of a device interrupt, billed to the budget it interrupted ([charging](#charging)),
 which leaves that budget's slice too. A timer interrupt decides from the pause: the slice is over
@@ -125,8 +129,9 @@ for. The kernel work no one pays for that a slice also pauses for is bounded too
 interrupt that finds nothing comes only for something armed on its hart (the slice's own end, a
 timeout, a deadline), and another hart's interrupt only for that hart's work, a shootdown its
 call or destruction sends, inside that call's or destruction's bound. What still counts against a slice is the return's own steps from the resumption, the timer's
-arming among them: 6.6 µs on rv64 and 11.9 µs on rv32 a return in the checked build (at most 6.7
-and 12.6), about one per cent of a slice per interrupt.
+arming among them where its target changed: 6.6 µs on rv64 and 11.9 µs on rv32 a return in the
+checked build with an arming at each (at most 6.7 and 12.6), about one per cent of a slice per
+interrupt.
 
 `sched-slice-own-time` puts a sibling process's 31 waits, due at once, in one thread's slice
 every round: one budget's two counting threads, T and C, beside a sibling whose threads all wait
@@ -1818,13 +1823,17 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   leave to nobody (a walk that finds nothing, a pick of nothing, a timer interrupt that ends no
   slice), as a share of its time net of audits (`nobody N of 1000`,
   [checked builds](../testbench.md#checked-builds)); an interrupt's bill leaves out an audit its
-  handling runs, as billing does. Of 1000, rv64 then rv32: 35 and 61 in `sched-exit-churn`, which
+  handling runs, as billing does. Of 1000, rv64 then rv32: 36 and 65 in `sched-exit-churn`, which
   has neither an interrupt's bill nor a deadline's destruction, so that is all time the rules
-  leave to nobody; 76 and 117 in `sched-latency` at one hart, which can also show the interrupt's
-  gap; and 29 and 61 in `sched-timer-flood`, 71 and 110 in `sched-budget-churn` and 116 and 162 in
+  leave to nobody; 79 and 122 in `sched-latency` at one hart, which can also show the interrupt's
+  gap; and 35 and 74 in `sched-timer-flood`, 73 and 116 in `sched-budget-churn` and 132 and 186 in
   `kernel-containment`, which can also show the destruction's. The two gaps are at most that. An
   expiry inside a slice never ends it ([preemption points](#preemption-points)), so a slice's end
-  takes a timer interrupt of its own, whose walk finds nothing, nobody's. The counters read the
+  takes a timer interrupt of its own, whose walk finds nothing, nobody's; and a timer left armed
+  for a slice's end that a pause moved ([the hart timer](timer.md#the-hart-timer)) comes early when
+  the thread runs to it, finding nothing too: one an arming, each after an entry since, so a slice
+  whose pauses take a larger share of it pays more of them, as the busy cases above do. The
+  counters read the
   billing's clock and decide nothing: like the audits, they move no schedule.
 - **Server work is paid by the server's weight.** Work a server does for a user is paid by the
   server's weight, not the requester's; the steward's work, by the steward. No time is donated, so
