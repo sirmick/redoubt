@@ -188,7 +188,11 @@ the readied thread, as for any other. The rule changes who picks, never what, an
 nobody: the waker's slice ended for its own reason. Every other readied thread's idle wake is
 sent in the entry that made it, never later: a `send` or a `reply` leaves its sender running, so
 the thread it readies is picked by an idle hart, and the two threads of one exchange then enter
-the kernel on two harts and wait for each other's sections ([R78](#r78-fair-kernel-entry)).
+the kernel on two harts and wait for each other's sections ([R78](#r78-fair-kernel-entry)). A
+server's turn made one entry, a `reply_receive` or a `send_receive` ([IPC](ipc.md#a-servers-turn)),
+blocks in the entry that readies when its receive blocks, so the thread it readies is then this
+hart's pick; with a message already queued for its receive it runs on, and the thread it readied
+is an idle hart's.
 
 A device interrupt only wakes too. `sched-irq-wake` runs a driver stand-in on the goldfish RTC's
 alarm beside an equal-weight spinner, so every alarm interrupts the spinner mid-slice, and the

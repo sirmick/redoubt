@@ -3,13 +3,14 @@
 
 use core::num::{NonZeroU64, NonZeroUsize};
 
+pub use redoubt_sys::FirstDone;
 pub use redoubt_sys::{
     Body, BudgetSpec, Call, Cause, DeviceInfo, Error, ExitNotice, FOREVER, Handle, Handles, Hold, Labels,
     MAX_HANDLES, MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_RANGE_PAGES, MAX_START_HANDLES,
     MemFlags, Message, MessageKind, MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind,
     Return, USER_AREA_END, Usage, WAIT_CAP, WORDS,
 };
-use redoubt_sys::{RECEIVED_SLOTS, USAGE_SLOTS};
+use redoubt_sys::{FirstHalf, RECEIVED_SLOTS, USAGE_SLOTS};
 
 /// Handles the kernel gives the loader's first program (kernel budget.rs, `boot_budgets`).
 pub const ROOT: u32 = 1;
@@ -374,6 +375,54 @@ pub fn reply(msg_id: u64, body: &Body) -> Result<(), Error> {
     let rec = body.encode();
     let id = NonZeroU64::new(msg_id).ok_or(Error::InvalidArgument)?;
     redoubt_sys::syscall(&Call::Reply { msg_id: id, body_rec: rec.as_ptr() as usize }).map(|_| ())
+}
+
+/// `reply_receive(h or none, timeout, max_transfer)` with the reply `body` to `msg_id`: what the
+/// reply did, and the receive half's record or error (kernel/ipc.md, "A server's turn").
+pub fn reply_receive(
+    msg_id: u64,
+    body: &Body,
+    from: Option<u32>,
+    timeout: u64,
+    max_transfer: usize,
+) -> Result<(FirstDone, Result<Received, Error>), Error> {
+    let id = NonZeroU64::new(msg_id).ok_or(Error::InvalidArgument)?;
+    let first = FirstHalf::Reply { msg_id: id, body: *body }.encode();
+    let mut rec = [0u64; RECEIVED_SLOTS];
+    let args = Call::ReplyReceive {
+        from: from.map(h),
+        timeout,
+        max_transfer,
+        received_rec: rec.as_mut_ptr() as usize,
+        first_rec: first.as_ptr() as usize,
+    };
+    let Return::Turn(turn) = redoubt_sys::syscall(&args)? else { return Err(Error::InvalidArgument) };
+    Ok((turn.first, turn.status.and_then(|()| Received::decode(&rec))))
+}
+
+/// `send_receive(h or none, timeout, max_transfer)` with the send of `body` and `transfer` to
+/// `endpoint` within `send_timeout`: what the send did, and the receive half's record or error.
+pub fn send_receive(
+    endpoint: u32,
+    body: &Body,
+    transfer: Option<Pages>,
+    send_timeout: u64,
+    from: Option<u32>,
+    timeout: u64,
+    max_transfer: usize,
+) -> Result<(FirstDone, Result<Received, Error>), Error> {
+    let first =
+        FirstHalf::Send { endpoint: h(endpoint), timeout: send_timeout, transfer, body: *body }.encode();
+    let mut rec = [0u64; RECEIVED_SLOTS];
+    let args = Call::SendReceive {
+        from: from.map(h),
+        timeout,
+        max_transfer,
+        received_rec: rec.as_mut_ptr() as usize,
+        first_rec: first.as_ptr() as usize,
+    };
+    let Return::Turn(turn) = redoubt_sys::syscall(&args)? else { return Err(Error::InvalidArgument) };
+    Ok((turn.first, turn.status.and_then(|()| Received::decode(&rec))))
 }
 
 /// `serve(msg_id)`.

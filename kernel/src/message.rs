@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Messages: `call`, `send`, `receive`, `reply`, `serve` and `mint` (kernel/ipc.md, R1-R4b,
-//! R10).
+//! Messages: `call`, `send`, `receive`, `reply`, `serve`, `mint` and the turns, `reply_receive`
+//! and `send_receive` (kernel/ipc.md, R1-R4b, R10, R13).
 //!
 //! # Where a message lives
 //! There is no message buffer anywhere. A message is queued exactly while its sender is blocked in
@@ -46,9 +46,10 @@ use redoubt_ipclist::{self as lists, List, Page, Words};
 use redoubt_layout::{KERNEL_PID, Pid};
 use redoubt_sys::PAGE_SIZE;
 use redoubt_sys::{
-    Body, CallOutcome, Error, Handle as AbiHandle, Labels, LendDisposition, MAX_LABELS, MAX_LEND_PAGES,
-    MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_THREADS, Message, MessageKind, MintSource, Pages, RECEIVED_SLOTS,
-    Received, ReceivedBody, ReceivedHandles, ReplyOutcome, Return, WAIT_CAP, WORDS, encode_result,
+    Body, CallOutcome, Error, FIRST_SLOTS, FirstDone, FirstHalf, Handle as AbiHandle, Labels,
+    LendDisposition, MAX_LABELS, MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_THREADS, Message,
+    MessageKind, MintSource, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome,
+    Return, TurnOutcome, WAIT_CAP, WORDS, encode_result,
 };
 
 use crate::arch::process::{MAX_PROCESS_COUNT, TID};
@@ -94,7 +95,17 @@ const W_NHANDLES: usize = W_WORDS + WORDS;
 const W_HANDLES: usize = W_NHANDLES + 1; // MAX_MSG_HANDLES * 4 words
 const W_NCALLS: usize = W_HANDLES + MAX_MSG_HANDLES * 4;
 const W_CURRENT: usize = W_NCALLS + 1; // open-call frame + 1
-const W_CALLS: usize = W_CURRENT + 1; // MAX_OPEN_CALLS frame numbers
+/// A turn's state ([`Then`]): 0 outside a turn.
+const W_THEN: usize = W_CURRENT + 1;
+/// A `send_receive`'s receive half while its send waits: what it will receive on, as a kernel
+/// reference (frame + 1 and id), never a handle, so a destruction finds the thread only as a
+/// sender; its timeout, its `max_transfer` and its record.
+const W_THEN_OBJECT: usize = W_THEN + 1;
+const W_THEN_ID: usize = W_THEN + 2;
+const W_THEN_TIMEOUT: usize = W_THEN + 3;
+const W_THEN_MAX: usize = W_THEN + 4;
+const W_THEN_REC: usize = W_THEN + 5;
+const W_CALLS: usize = W_THEN_REC + 1; // MAX_OPEN_CALLS frame numbers
 /// The lists' words (`redoubt-ipclist`): its links, its arrival, its group's node.
 const W_LISTS: usize = W_CALLS + MAX_OPEN_CALLS;
 const THREAD_WORDS: usize = W_LISTS + lists::THREAD_WORDS;
@@ -138,6 +149,107 @@ impl Wait {
 pub enum MsgKind {
     Call = 1,
     Send = 2,
+}
+
+/// What a `receive` waits on, its handle looked up ([`source`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Source {
+    /// No handle: asleep until the timeout (kernel/timer.md).
+    Sleep,
+    /// A badge-0 endpoint.
+    Endpoint(EndpointRef),
+    /// An IRQ (R5).
+    Irq(DeviceRef),
+}
+
+/// Where a thread is in a turn (kernel/ipc.md, "A server's turn"), in [`W_THEN`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Then {
+    /// Not in a turn.
+    None,
+    /// A `send_receive` whose message waits for a taker. Taken, the receive half begins on this
+    /// source ([`continue_turn`]); failed, the turn ends with nothing done.
+    Sending(Source),
+    /// The first half is done: every result of the receive half says what it did (R13).
+    Done(FirstDone),
+}
+
+// `W_THEN`: the state in bits 0-1; while sending, the source's kind in bits 2-3; once done, the
+// first half's disposition in bits 2-3 and a reply's installed-handle mask from bit 8.
+const THEN_SENDING: u64 = 1;
+const THEN_DONE: u64 = 2;
+
+/// `(pid, tid)`'s place in a turn.
+fn then(mm: &MemoryManager, pid: Pid, tid: TID) -> Then {
+    let word = tword(mm, pid, tid, W_THEN);
+    let (kind, at) = (word >> 2 & 3, || {
+        let frame = frame_of(tword(mm, pid, tid, W_THEN_OBJECT)).expect("I1: a turn's source has a frame");
+        (frame, tword(mm, pid, tid, W_THEN_ID))
+    });
+    match word & 3 {
+        0 => Then::None,
+        THEN_SENDING => Then::Sending(match kind {
+            0 => Source::Sleep,
+            1 => {
+                let (frame, id) = at();
+                Source::Endpoint(EndpointRef { frame, id })
+            }
+            _ => {
+                let (frame, id) = at();
+                Source::Irq(DeviceRef { frame, id })
+            }
+        }),
+        _ => Then::Done(match kind {
+            1 | 2 => FirstDone::Replied(ReplyOutcome { delivered: kind == 2, installed: (word >> 8) as u32 }),
+            _ => FirstDone::Sent,
+        }),
+    }
+}
+
+fn set_then(mm: &MemoryManager, pid: Pid, tid: TID, then: Then) {
+    let word = match then {
+        Then::None => 0,
+        Then::Sending(source) => {
+            let (kind, frame, id) = match source {
+                Source::Sleep => (0, 0, 0),
+                Source::Endpoint(e) => (1, frame_word(e.frame), e.id),
+                Source::Irq(d) => (2, frame_word(d.frame), d.id),
+            };
+            set_tword(mm, pid, tid, W_THEN_OBJECT, frame);
+            set_tword(mm, pid, tid, W_THEN_ID, id);
+            THEN_SENDING | kind << 2
+        }
+        Then::Done(first) => {
+            let (kind, mask) = match first {
+                FirstDone::Replied(reply) => (1 + u64::from(reply.delivered), u64::from(reply.installed)),
+                FirstDone::Sent => (3, 0),
+                FirstDone::Nothing => unreachable!("a turn is done only once its first half is"),
+            };
+            THEN_DONE | kind << 2 | mask << 8
+        }
+    };
+    set_tword(mm, pid, tid, W_THEN, word);
+}
+
+/// A turn's whole result (R13): the receive half's status with what the first half did; or, while
+/// a `send_receive`'s message still waited, the send's error with nothing done.
+fn turn_result(then: Then, result: Result<Return, Error>) -> Result<Return, Error> {
+    let status = result.map(|_| ());
+    let first = match then {
+        Then::Done(first) => first,
+        Then::None | Then::Sending(_) => FirstDone::Nothing,
+    };
+    // A checked build holds each result to its row of the turn's table (kernel/ipc.md).
+    debug_assert!(
+        match first {
+            FirstDone::Nothing => status.is_err(),
+            _ => matches!(status, Ok(()) | Err(Error::Timeout | Error::Dead | Error::InvalidArgument)),
+        },
+        "R13: a turn returned {:?} with {:?}",
+        status,
+        first
+    );
+    Ok(Return::Turn(TurnOutcome { status, first }))
 }
 
 /// The message a thread is sending while it waits (kernel/ipc.md, "Messages"). The account and
@@ -667,6 +779,14 @@ fn wake(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID, resul
     unlist(mm, pid, tid);
     untime(mm, pid, tid);
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
+    // A turn's result carries what its first half did; the turn ends here.
+    let result = match then(mm, pid, tid) {
+        Then::None => result,
+        turn => {
+            set_then(mm, pid, tid, Then::None);
+            turn_result(turn, result)
+        }
+    };
     if !is_running(ss, pid, tid) {
         // A waiting thread belongs to a live process, so this cannot fail.
         ss.ready_thread(pid, tid).expect("a waiting thread belongs to a live process");
@@ -908,9 +1028,37 @@ pub fn send(
 ) -> Result<Option<Return>, Error> {
     // Stage 1 finished in `redoubt-sys`; the body record is the rest of it.
     let body = Body::decode(&crate::redoubt::read_record(mm, body_rec, kind == MsgKind::Call)?)?;
-    // Stage 2, argument by argument.
+    let checked = check_send(mm, pid, kind, h, &body, buffer)?;
+    let node = permit_send(mm, pid, &checked)?;
+    queue_send(ss, mm, pid, tid, &checked, node, body_rec, timeout);
+    settle(ss, mm, pid, tid)
+}
+
+/// A message that passed the argument stage ([`check_send`]).
+struct Checked {
+    kind: MsgKind,
+    endpoint: EndpointRef,
+    /// The handle it goes through: its badge and stamp travel with it.
+    via: Handle,
+    words: [u64; WORDS],
+    handles: [Option<Handle>; MAX_MSG_HANDLES],
+    nhandles: usize,
+    buf_addr: usize,
+    buf_pages: usize,
+}
+
+/// Stage 2 of `call`'s and `send`'s rows, argument by argument: the endpoint, the body's handles,
+/// the buffer.
+fn check_send(
+    mm: &mut MemoryManager,
+    pid: Pid,
+    kind: MsgKind,
+    h: u32,
+    body: &Body,
+    buffer: Option<Pages>,
+) -> Result<Checked, Error> {
     let (endpoint, via) = mm.endpoint_handle(pid, h)?;
-    let (handles, nhandles) = lookup_handles(mm, pid, &body)?;
+    let (handles, nhandles) = lookup_handles(mm, pid, body)?;
     let (buf_addr, buf_pages) = match buffer {
         None => (0, 0),
         Some(pages) => {
@@ -921,46 +1069,67 @@ pub fn send(
             (pages.addr, pages.npages.get())
         }
     };
+    let mut words = [0; WORDS];
+    for (i, word) in words.iter_mut().enumerate() {
+        *word = body.words[i] as u64;
+    }
+    Ok(Checked { kind, endpoint, via, words, handles, nhandles, buf_addr, buf_pages })
+}
+
+/// Stages 3 and 4 of a checked message: R1, then R2's cap. Returns its group's node on the
+/// endpoint, if the group has one there.
+fn permit_send(mm: &MemoryManager, pid: Pid, c: &Checked) -> Result<Option<u64>, Error> {
     // Stage 3, R1: between two user budgets the label sets must be equal, and the receiving
     // side is the endpoint's *owner*, whoever ends up taking the message (I7).
-    let sender_frame = mm.budget_of(pid).ok_or(Error::NotPermitted)?;
-    let sender = mm.budget(sender_frame);
-    let owner = mm.budget_at(mm.endpoint_at(endpoint).owner);
+    let sender = mm.budget(mm.budget_of(pid).ok_or(Error::NotPermitted)?);
+    let owner = mm.budget_at(mm.endpoint_at(c.endpoint).owner);
     if sender.class == Class::User && owner.class == Class::User && sender.labels_of() != owner.labels_of() {
         return Err(Error::LabelDenied);
     }
     // Stage 4, R2: a group with `WAIT_CAP` messages already queued here gets `Busy`. Its node
     // counts them; finding it walks this endpoint's groups, at most one per sending budget.
     let group = Group::of(&sender);
-    let node = lists::find(&Frames(mm), endpoint.frame, |w, node| {
+    let node = lists::find(&Frames(mm), c.endpoint.frame, |w, node| {
         let (npid, ntid) = thread_of(node);
         group_of(w.0, npid, ntid) == group
     });
     if node.is_some_and(|node| lists::count(&Frames(mm), node) >= WAIT_CAP as u64) {
         return Err(Error::Busy);
     }
-    // Everything is checked: take the buffer out of the sender (I9) and record the message.
-    let mut words = [0; WORDS];
-    for (i, word) in words.iter_mut().enumerate() {
-        *word = body.words[i] as u64;
+    Ok(node)
+}
+
+/// Everything is checked: take the buffer out of the sender (I9), record the message, queue it
+/// and offer it to the endpoint's receivers. Nothing here fails.
+#[allow(clippy::too_many_arguments)]
+fn queue_send(
+    ss: &mut ProcessTable,
+    mm: &mut MemoryManager,
+    pid: Pid,
+    tid: TID,
+    c: &Checked,
+    node: Option<u64>,
+    body_rec: usize,
+    timeout: u64,
+) {
+    if c.buf_pages != 0 {
+        take_buffer(ss, pid, c.buf_addr, c.buf_pages);
     }
-    if buf_pages != 0 {
-        take_buffer(ss, pid, buf_addr, buf_pages);
-    }
+    let sender_frame = mm.budget_of(pid).expect("a sending process has a budget");
     let m = Msg {
-        kind,
-        badge: via.badge,
-        stamp: via.stamp,
-        sender_budget: BudgetRef { frame: sender_frame, id: sender.id },
-        buf_addr,
-        buf_pages,
-        words,
-        handles,
-        nhandles,
+        kind: c.kind,
+        badge: c.via.badge,
+        stamp: c.via.stamp,
+        sender_budget: BudgetRef { frame: sender_frame, id: mm.budget(sender_frame).id },
+        buf_addr: c.buf_addr,
+        buf_pages: c.buf_pages,
+        words: c.words,
+        handles: c.handles,
+        nhandles: c.nhandles,
     };
     store_msg(mm, pid, tid, &m);
-    set_tword(mm, pid, tid, W_OBJECT, frame_word(endpoint.frame));
-    set_tword(mm, pid, tid, W_OBJECT_ID, endpoint.id);
+    set_tword(mm, pid, tid, W_OBJECT, frame_word(c.endpoint.frame));
+    set_tword(mm, pid, tid, W_OBJECT_ID, c.endpoint.id);
     set_tword(mm, pid, tid, W_REC, body_rec as u64);
     // The sender is queued first, so a receiver taking the message right away finds it waiting
     // and simply answers it: one delivery path, whether a receiver was waiting or not. It goes in
@@ -968,10 +1137,9 @@ pub fn send(
     mark(mm, pid, tid, Wait::Send, timeout);
     let seq = mm.next_seq();
     let w = &mut Frames(mm);
-    lists::enqueue(w, endpoint.frame, node, tref(pid, tid), kind == MsgKind::Send, seq);
-    List::queued(via.stamp.frame).push_front(w, tref(pid, tid));
-    pump(ss, mm, endpoint);
-    settle(ss, mm, pid, tid)
+    lists::enqueue(w, c.endpoint.frame, node, tref(pid, tid), c.kind == MsgKind::Send, seq);
+    List::queued(c.via.stamp.frame).push_front(w, tref(pid, tid));
+    pump(ss, mm, c.endpoint);
 }
 
 /// The handles a body names, looked up in the caller's table in order (`BadHandle`).
@@ -1023,35 +1191,77 @@ fn take_buffer(ss: &ProcessTable, pid: Pid, addr: usize, npages: usize) {
 
 // --- `receive` -------------------------------------------------------------------------------------
 
-/// `receive(h(IRQ), timeout)` (R5). The source is unmasked when the receive begins, and the
-/// call returns as soon as `fired` is set, clearing it. There is no acknowledge call: the
-/// source stays masked from the moment it fires until the *next* receive, so a driver that is
-/// busy or gone cannot be stormed by its own device.
-fn receive_irq(
+/// `receive`'s handle at the argument stage (kernel/abi.md, `receive`'s row): `BadHandle`, then
+/// `WrongObject`. Beside it, whether stage 3 refuses it: a badged endpoint is no receive right
+/// (I4, `NotPermitted`). A device handle carries badge 0 always.
+fn source(mm: &MemoryManager, pid: Pid, from: Option<u32>) -> Result<(Source, bool), Error> {
+    let Some(h) = from else { return Ok((Source::Sleep, false)) };
+    let handle = mm.handle(pid, h)?;
+    match handle.object {
+        Object::Endpoint(e) => Ok((Source::Endpoint(e), handle.badge != 0)),
+        Object::Device(d) if mm.device_at(d).kind == crate::device::Kind::Irq => Ok((Source::Irq(d), false)),
+        _ => Err(Error::WrongObject),
+    }
+}
+
+/// The receive itself, every check passed: the thread waits on `source` from now until
+/// `timeout`, and takes what is there already. Its record was checked when its call began; each
+/// delivery checks it again. `nested`, inside a delivery ([`continue_turn`]): an endpoint is
+/// listed to be pumped once this pump is done, never pumped inside it.
+#[allow(clippy::too_many_arguments)]
+fn begin_receive(
     ss: &mut ProcessTable,
     mm: &mut MemoryManager,
     pid: Pid,
     tid: TID,
-    device: DeviceRef,
+    source: Source,
     timeout: u64,
+    max_transfer: usize,
     rec: usize,
-) -> Result<Option<Return>, Error> {
-    set_tword(mm, pid, tid, W_OBJECT, frame_word(device.frame));
-    set_tword(mm, pid, tid, W_OBJECT_ID, device.id);
-    set_tword(mm, pid, tid, W_REC, rec as u64);
-    mark(mm, pid, tid, Wait::Irq, timeout);
-    List::irq_waiters(device.frame).push_back(&mut Frames(mm), tref(pid, tid));
-    // Unmask first, then look at `fired`, in the order R5 states. Unmasking a source that is
-    // already asserted makes it fire again at once, which is what a level-triggered device
-    // wants: the kernel masks it again and the next receive is answered immediately.
-    let mut d = mm.device(device.frame);
-    if d.masked {
-        d.masked = false;
-        mm.store_device(device.frame, &d);
-        crate::arch::irq::enable_irq(d.irq as usize);
+    nested: bool,
+) {
+    match source {
+        Source::Sleep => mark(mm, pid, tid, Wait::Sleep, timeout),
+        // R5: the source is unmasked when the receive begins, and the call returns as soon as
+        // `fired` is set, clearing it. There is no acknowledge call: the source stays masked from
+        // the moment it fires until the *next* receive, so a driver that is busy or gone cannot
+        // be stormed by its own device.
+        Source::Irq(device) => {
+            set_tword(mm, pid, tid, W_OBJECT, frame_word(device.frame));
+            set_tword(mm, pid, tid, W_OBJECT_ID, device.id);
+            set_tword(mm, pid, tid, W_REC, rec as u64);
+            mark(mm, pid, tid, Wait::Irq, timeout);
+            List::irq_waiters(device.frame).push_back(&mut Frames(mm), tref(pid, tid));
+            // Unmask first, then look at `fired`, in the order R5 states. Unmasking a source that
+            // is already asserted makes it fire again at once, which is what a level-triggered
+            // device wants: the kernel masks it again and the next receive is answered at once.
+            let mut d = mm.device(device.frame);
+            if d.masked {
+                d.masked = false;
+                mm.store_device(device.frame, &d);
+                crate::arch::irq::enable_irq(d.irq as usize);
+            }
+            irq_ready(ss, mm, device.frame);
+        }
+        Source::Endpoint(endpoint) => {
+            set_tword(mm, pid, tid, W_OBJECT, frame_word(endpoint.frame));
+            set_tword(mm, pid, tid, W_OBJECT_ID, endpoint.id);
+            set_tword(mm, pid, tid, W_MAX_TRANSFER, max_transfer as u64);
+            set_tword(mm, pid, tid, W_REC, rec as u64);
+            mark(mm, pid, tid, Wait::Receive, timeout);
+            // Last among the endpoint's receivers, in the one order of arrivals: an abandoned-call
+            // notice goes to the holder that began to wait first.
+            let seq = mm.next_seq();
+            let w = &mut Frames(mm);
+            w.write(Page::Thread(tref(pid, tid)), lists::T_SEQ, seq);
+            List::receivers(endpoint.frame).push_back(w, tref(pid, tid));
+            if nested {
+                list_pump(mm, endpoint);
+            } else {
+                pump(ss, mm, endpoint);
+            }
+        }
     }
-    irq_ready(ss, mm, device.frame);
-    settle(ss, mm, pid, tid)
 }
 
 /// Hand the interrupt to a thread waiting in `receive` on device `frame`, if one is waiting
@@ -1115,39 +1325,116 @@ pub fn receive(
     set_tword(mm, pid, tid, W_CURRENT, 0);
     // The record must be the caller's own writable memory before anything else happens.
     crate::redoubt::check_record::<RECEIVED_SLOTS>(mm, rec)?;
-    let Some(h) = from else {
-        // No handle: sleep until the timeout (kernel/timer.md).
-        mark(mm, pid, tid, Wait::Sleep, timeout);
-        return settle(ss, mm, pid, tid);
-    };
-    // `receive` takes a badge-0 endpoint or an IRQ (kernel/abi.md, `receive`'s row:
-    // `BadHandle`, then `WrongObject`, then `NotPermitted`). A device handle carries badge 0
-    // always, so only the endpoint case can earn `NotPermitted`.
-    let handle = mm.handle(pid, h)?;
-    let endpoint = match handle.object {
-        Object::Endpoint(e) => e,
-        Object::Device(d) if mm.device_at(d).kind == crate::device::Kind::Irq => {
-            return receive_irq(ss, mm, pid, tid, d, timeout, rec);
-        }
-        _ => return Err(Error::WrongObject),
-    };
-    // I4: only a badge-0 handle is a receive right.
-    if handle.badge != 0 {
+    let (source, badged) = source(mm, pid, from)?;
+    if badged {
         return Err(Error::NotPermitted);
     }
-    set_tword(mm, pid, tid, W_OBJECT, frame_word(endpoint.frame));
-    set_tword(mm, pid, tid, W_OBJECT_ID, endpoint.id);
-    set_tword(mm, pid, tid, W_MAX_TRANSFER, max_transfer as u64);
-    set_tword(mm, pid, tid, W_REC, rec as u64);
-    mark(mm, pid, tid, Wait::Receive, timeout);
-    // Last among the endpoint's receivers, in the one order of arrivals: an abandoned-call notice
-    // goes to the holder that began to wait first.
-    let seq = mm.next_seq();
-    let w = &mut Frames(mm);
-    w.write(Page::Thread(tref(pid, tid)), lists::T_SEQ, seq);
-    List::receivers(endpoint.frame).push_back(w, tref(pid, tid));
-    pump(ss, mm, endpoint);
+    begin_receive(ss, mm, pid, tid, source, timeout, max_transfer, rec, false);
     settle(ss, mm, pid, tid)
+}
+
+// --- The turns: `reply_receive` and `send_receive` -------------------------------------------------
+
+/// `reply_receive(h or none, timeout, max_transfer, received_rec, first_rec)` (kernel/ipc.md, "A
+/// server's turn"): `reply`, then `receive`, in one entry, so the caller it readies is this
+/// hart's pick when the receive blocks (kernel/scheduling.md, "Preemption points"). Every error
+/// either half can earn before anything is done comes first, in the stages' order and by argument
+/// position within one (the receive's handle in `a1` before the reply's record in `a6`), and
+/// changes nothing: the call stays open, the current call stays (R21). After the reply only the
+/// receive half's delivery errors remain, each with what the reply did (R13).
+#[allow(clippy::too_many_arguments)]
+pub fn reply_receive(
+    ss: &mut ProcessTable,
+    mm: &mut MemoryManager,
+    pid: Pid,
+    tid: TID,
+    from: Option<u32>,
+    timeout: u64,
+    max_transfer: usize,
+    rec: usize,
+    first_rec: usize,
+) -> Result<Option<Return>, Error> {
+    // Stage 1: the records, in register order.
+    crate::redoubt::check_record::<RECEIVED_SLOTS>(mm, rec)?;
+    let first = crate::redoubt::read_record::<FIRST_SLOTS>(mm, first_rec, false)?;
+    let FirstHalf::Reply { msg_id, body } = FirstHalf::decode(false, &first)? else {
+        unreachable!("a reply's record decodes as a reply")
+    };
+    // Stage 2, then 3.
+    let (source, badged) = source(mm, pid, from)?;
+    let checked = check_reply(mm, pid, tid, msg_id.get(), &body)?;
+    if badged {
+        return Err(Error::NotPermitted);
+    }
+    let outcome = finish_reply(ss, mm, pid, tid, &checked, &body);
+    set_then(mm, pid, tid, Then::Done(FirstDone::Replied(outcome)));
+    set_tword(mm, pid, tid, W_CURRENT, 0);
+    begin_receive(ss, mm, pid, tid, source, timeout, max_transfer, rec, false);
+    settle(ss, mm, pid, tid)
+}
+
+/// `send_receive(h or none, timeout, max_transfer, received_rec, first_rec)` (kernel/ipc.md, "A
+/// server's turn"): `send`, then, once a receiver has taken the message, `receive`, in one call.
+/// The checks come first as [`reply_receive`]'s do, `send`'s in its row's order. The send may
+/// wait: taken, the thread is not woken but goes straight on to its receive half in the taker's
+/// entry ([`continue_turn`]); failed, the call ends with the send's error and its transfer back,
+/// nothing received.
+#[allow(clippy::too_many_arguments)]
+pub fn send_receive(
+    ss: &mut ProcessTable,
+    mm: &mut MemoryManager,
+    pid: Pid,
+    tid: TID,
+    from: Option<u32>,
+    timeout: u64,
+    max_transfer: usize,
+    rec: usize,
+    first_rec: usize,
+) -> Result<Option<Return>, Error> {
+    crate::redoubt::check_record::<RECEIVED_SLOTS>(mm, rec)?;
+    let first = crate::redoubt::read_record::<FIRST_SLOTS>(mm, first_rec, false)?;
+    let FirstHalf::Send { endpoint, timeout: send_timeout, transfer, body } =
+        FirstHalf::decode(true, &first)?
+    else {
+        unreachable!("a send's record decodes as a send")
+    };
+    let (source, badged) = source(mm, pid, from)?;
+    let checked = check_send(mm, pid, MsgKind::Send, endpoint.index(), &body, transfer)?;
+    if badged {
+        return Err(Error::NotPermitted);
+    }
+    let node = permit_send(mm, pid, &checked)?;
+    // The receive half waits with the message, its source a kernel reference.
+    set_then(mm, pid, tid, Then::Sending(source));
+    set_tword(mm, pid, tid, W_THEN_TIMEOUT, timeout);
+    set_tword(mm, pid, tid, W_THEN_MAX, max_transfer as u64);
+    set_tword(mm, pid, tid, W_THEN_REC, rec as u64);
+    queue_send(ss, mm, pid, tid, &checked, node, 0, send_timeout);
+    settle(ss, mm, pid, tid)
+}
+
+/// A `send_receive`'s message was taken by `deliver`: its send is done, and its receive half
+/// begins here, in the taker's entry, with no wake in between. Its timeout runs from now, a
+/// deadline of its own (I13), and it has no current call (R21). The source is checked by its
+/// reference: an endpoint or device destroyed while the send waited is the receive half's `Dead`.
+fn continue_turn(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID, source: Source) {
+    unlist(mm, pid, tid);
+    untime(mm, pid, tid);
+    set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
+    set_then(mm, pid, tid, Then::Done(FirstDone::Sent));
+    set_tword(mm, pid, tid, W_CURRENT, 0);
+    let live = match source {
+        Source::Sleep => true,
+        Source::Endpoint(e) => mm.is_live_endpoint(e),
+        Source::Irq(d) => mm.is_live_device(d),
+    };
+    if !live {
+        return wake(ss, mm, pid, tid, Err(Error::Dead));
+    }
+    let timeout = tword(mm, pid, tid, W_THEN_TIMEOUT);
+    let max_transfer = tword(mm, pid, tid, W_THEN_MAX) as usize;
+    let rec = tword(mm, pid, tid, W_THEN_REC) as usize;
+    begin_receive(ss, mm, pid, tid, source, timeout, max_transfer, rec, true);
 }
 
 // --- Exit notices (kernel/processes.md) ------------------------------------------------------------
@@ -1238,17 +1525,29 @@ pub fn pump_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointR
     if !mm.objects.deferring {
         return pump(ss, mm, e);
     }
+    list_pump(mm, e);
+}
+
+/// `e` is listed, once, to be pumped later ([`pump_listed`]): at a destruction's end, or, for a
+/// receiver a delivery made ([`continue_turn`]), once the pump that made it is done, never inside
+/// it, so pumps never nest (R12).
+fn list_pump(mm: &MemoryManager, e: EndpointRef) {
     let (w, r) = (&mut Frames(mm), frame_word(e.frame));
     if !List::pumps().contains(w, r) {
         List::pumps().push_back(w, r);
     }
 }
 
-/// The end of a destruction: pump each endpoint it listed, once, in the order listed. Every dying
-/// endpoint left the list at the end of the message reach (`budgets_dying`), and every frame is
-/// freed, so each is a survivor and nothing doomed is left to take anything. A pump here lists nothing,
-/// since the destruction is over.
+/// Whether [`pump_listed`] is running: a pump inside it leaves what it lists to that loop.
+static DRAINING: KernelCell<bool> = KernelCell::new(false);
+
+/// Pump each endpoint listed ([`list_pump`]), once, in the order listed, including any listed
+/// meanwhile: at the end of a destruction, and after each outermost pump. Every dying endpoint
+/// left the list at the end of a destruction's message reach (`budgets_dying`), and every frame is
+/// freed, so each is a survivor and nothing doomed is left to take anything; outside a
+/// destruction only a turn's receive half lists one.
 pub fn pump_listed(ss: &mut ProcessTable, mm: &mut MemoryManager) {
+    let outer = !DRAINING.with(|draining| core::mem::replace(draining, true));
     loop {
         let r = List::pumps().pop_front(&mut Frames(mm));
         let Some(frame) = frame_of(r) else { break };
@@ -1264,13 +1563,25 @@ pub fn pump_listed(ss: &mut ProcessTable, mm: &mut MemoryManager) {
         }
         pump(ss, mm, e);
     }
+    if outer {
+        DRAINING.with(|draining| *draining = false);
+    }
+}
+
+/// Match waiting receivers on `e` with what is pending there ([`deliver_all`]); then, outside a
+/// destruction and if this is the outermost pump, each endpoint a delivery listed ([`pump_listed`]).
+fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
+    deliver_all(ss, mm, e);
+    if !mm.objects.deferring && !DRAINING.with(|draining| *draining) {
+        pump_listed(ss, mm);
+    }
 }
 
 /// Match waiting receivers on `e` with what is pending there, until nothing more can be
 /// delivered. Notices come before messages (kernel/ipc.md, "What `receive` returns"). Each pick
 /// reads `e`'s own lists: its owed notices, its receivers from the first until one can take, and
 /// two group heads (R2), never another endpoint's or every thread.
-fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
+fn deliver_all(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
     debug_assert!(!mm.objects.deferring, "R10: a pump inside a destruction");
     #[cfg(feature = "walk-trace")]
     let _walk = crate::sched::trace::walk(crate::sched::trace::PUMP);
@@ -1406,8 +1717,12 @@ fn deliver(
         Ok(received) => {
             answer_record(ss, mm, rpid, rtid, &Received::Message(received).encode(), Ok(Return::Nothing));
             match kind {
-                // A `send` is done with; a `call` now waits for its reply, off the queue.
-                MsgKind::Send => wake(ss, mm, spid, stid, Ok(Return::Nothing)),
+                // A `send` is done with, and a turn's send goes on to its receive half; a `call`
+                // now waits for its reply, off the queue.
+                MsgKind::Send => match then(mm, spid, stid) {
+                    Then::Sending(source) => continue_turn(ss, mm, spid, stid, source),
+                    _ => wake(ss, mm, spid, stid, Ok(Return::Nothing)),
+                },
                 MsgKind::Call => {
                     unqueue(mm, e, spid, stid);
                     set_tword(mm, spid, stid, W_WAIT, Wait::Reply as u64);
@@ -1681,8 +1996,42 @@ pub fn reply(
     body_rec: usize,
 ) -> Result<ReplyOutcome, Error> {
     let body = Body::decode(&crate::redoubt::read_record(mm, body_rec, false)?)?;
+    let checked = check_reply(mm, pid, tid, msg_id, &body)?;
+    Ok(finish_reply(ss, mm, pid, tid, &checked, &body))
+}
+
+/// A reply that passed its argument stage ([`check_reply`]): its open call's frame and the body's
+/// handles, looked up.
+struct CheckedReply {
+    frame: u32,
+    handles: [Option<Handle>; MAX_MSG_HANDLES],
+    nhandles: usize,
+}
+
+/// `reply`'s argument stage: the open call `msg_id` names (`InvalidArgument`), then the body's
+/// handles. Nothing after these fails.
+fn check_reply(
+    mm: &MemoryManager,
+    pid: Pid,
+    tid: TID,
+    msg_id: u64,
+    body: &Body,
+) -> Result<CheckedReply, Error> {
     let frame = open_call_of(mm, pid, tid, msg_id).ok_or(Error::InvalidArgument)?;
-    let (handles, nhandles) = lookup_handles(mm, pid, &body)?;
+    let (handles, nhandles) = lookup_handles(mm, pid, body)?;
+    Ok(CheckedReply { frame, handles, nhandles })
+}
+
+/// The reply to the open call `checked` names, every check passed.
+fn finish_reply(
+    ss: &mut ProcessTable,
+    mm: &mut MemoryManager,
+    pid: Pid,
+    tid: TID,
+    checked: &CheckedReply,
+    body: &Body,
+) -> ReplyOutcome {
+    let (frame, handles) = (checked.frame, &checked.handles[..checked.nhandles]);
     let call = open_call_at(mm, frame);
     // The call leaves the thread whatever happens next (I15: an abandoned call stays open until
     // exactly this reply).
@@ -1702,13 +2051,13 @@ pub fn reply(
     close_call(mm, frame, &call);
     if call.flags & F_WAITING == 0 {
         poke_receivers(ss, mm, pid);
-        return Ok(ReplyOutcome { delivered: false, installed: 0 });
+        return ReplyOutcome { delivered: false, installed: 0 };
     }
     // R4: a reply is never refused. A handle that does not fit the caller -- its budget cannot
     // pay, or it is at `MAX_HANDLES` -- is dropped, 0 in its slot, and the `call` returns
     // `OutOfMemory` either way, the reply still delivered.
     let (cpid, ctid) = call.caller;
-    let (slots, dropped) = install_handles(mm, cpid, &handles[..nhandles]);
+    let (slots, dropped) = install_handles(mm, cpid, handles);
     let body = ReceivedBody { words: body.words, handles: slots };
     // The scheduler and memory-manager guards remain held through mapping validation, copy,
     // handle rollback and register publication. No mapping/lifecycle transition can interleave.
@@ -1736,7 +2085,7 @@ pub fn reply(
     };
     wake(ss, mm, cpid, ctid, call_result(status, call.lend_pages, false, delivered));
     poke_receivers(ss, mm, pid);
-    Ok(ReplyOutcome { delivered, installed })
+    ReplyOutcome { delivered, installed }
 }
 
 /// Give a lend back to the caller (R3: until the reply, it stayed mapped in the server).
@@ -1857,6 +2206,7 @@ fn end_thread(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID)
     }
     untime(mm, pid, tid);
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
+    set_then(mm, pid, tid, Then::None);
     // R4b: every call it holds open ends, its caller told.
     while slot(mm, pid, tid).ncalls > 0 {
         let frame = nth_call(mm, pid, tid, 0);

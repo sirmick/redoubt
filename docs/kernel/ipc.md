@@ -74,10 +74,11 @@ non-zero and never reused within the receiving process, which `reply` and `serve
 
 ### The calls
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (5)</summary>
 
 - bench:redoubt-ipc
 - bench:redoubt-ipc-attack
+- bench:turn-outcomes
 - host:redoubt-sys::every_call_round_trips
 - host:redoubt-sys::malformed_calls_are_refused
 
@@ -90,6 +91,8 @@ non-zero and never reused within the receiving process, which `reply` and `serve
 | `receive` | badge-0 endpoint, IRQ handle or none, timeout, `max_transfer` -> one record | Take the next message or notice. With no handle it sleeps until the timeout. |
 | `reply` | message id, body record -> delivered or discarded, installed-handle mask | Answer an open call and close it. |
 | `serve` | message id | Make an open call the thread's current call, the one a crash blames. |
+| `reply_receive` | `receive`'s arguments, first-half record (a reply) -> what the reply did, then `receive`'s result | `reply`, then `receive`, in one call ([a server's turn](#a-servers-turn)). |
+| `send_receive` | `receive`'s arguments, first-half record (a send) -> whether the send was taken, then `receive`'s result | `send`, then, once a receiver takes it, `receive`, in one call. |
 
 A server that holds a call without answering it yet **holds** it open: `receive` took it, and
 nothing forces a prompt `reply`. The thread may keep receiving. Each call it holds is an **open
@@ -234,6 +237,76 @@ sequenceDiagram
     K-->>S: delivered, mask
 ```
 *Figure: a call with a lend, from receive to reply.*
+
+### A server's turn
+
+<details><summary>Status: built · tested (7)</summary>
+
+- bench:turn-outcomes
+- bench:ipc-outcomes
+- host:redoubt-sys::turn_outcomes_round_trip_and_reject_impossible_combinations
+- host:redoubt-sys::first_half_layout
+- host:redoubt-model::ipc_completion_table_and_rollback
+- mutation:TurnReplyLost
+- mutation:TurnSendDispositionLies
+
+</details>
+
+A server's loop answers a call and then receives the next, and a driver forwards what it read
+and then waits for its device: two calls, each a kernel entry. `reply_receive` and
+`send_receive` make them one: the first half (a `reply`, or a `send`), then `receive`, in one
+entry. The thread the first half readies (the caller answered, or the receiver that takes the
+message) then runs on this hart when the receive blocks
+([scheduling](scheduling.md#preemption-points), rule (a)), rather than being woken on another.
+
+`receive`'s arguments are unchanged; the first half's go in one record, the **first-half record**
+([ABI](abi.md#layouts)). The result is `receive`'s, with what the first half did beside it in
+registers, on every return:
+
+| Call | `a0` | `a1`, the first half | `a2` |
+| --- | --- | --- | --- |
+| `reply_receive` | 0 or the error code | 0 not replied, 1 `discarded`, 2 `delivered` | installed-handle mask, as `reply`'s |
+| `send_receive` | 0 or the error code | 0 not sent, 1 taken | 0 |
+
+The checks of both halves come first, in the order of
+[the ABI's rows](abi.md#errors-and-the-order-of-checks), and any error they find returns with
+`a1` = 0 and nothing done: the call answered stays open, the thread's current call stays
+([R21 (crash blame)](processes.md#r21-crash-blame)), and no transfer is given up. Then the
+first half acts as `reply` or `send` does. A send may wait, and fail as a `send`
+fails, `Refused`, `Timeout` or `Dead` with `a1` = 0 and its transfer the sender's again. Once
+the first half is done only the receive half's own errors remain (`Timeout`, `Dead`, and
+`InvalidArgument` for a record gone bad), each returned with `a1` saying what was done, so "the
+reply was delivered, then the receive timed out" is one outcome
+([R13](#r13-one-outcome-per-call)):
+
+| What happened | Status | `a1` | Transfer |
+| --- | --- | --- | --- |
+| A check of either half failed | the error | 0 | the sender's |
+| The send failed: refused, timed out, or its endpoint destroyed while it waited | `Refused`, `Timeout` or `Dead` | 0 | the sender's again |
+| The first half done, then the receive took something | success, the record written | 1 or 2 (reply), 1 (send) | the taker's |
+| The first half done, then the receive failed | `Timeout`, `Dead` or `InvalidArgument` | 1 or 2 (reply), 1 (send) | the taker's |
+
+The receive half's timeout runs from the first half's completion, the taking for a send that
+waited: each wait has its own deadline (I13 (every blocking call returns by its timeout)).
+`Dead` is told apart by `a1`: the send's endpoint destroyed while the send waits is `Dead` with
+`a1` = 0 and the transfer back; the receive's endpoint gone when the receive half starts or while
+it waits is `Dead` with `a1` = 1. (A receive handle already dead when the call is made fails its
+check, with `a1` = 0.)
+
+A `send_receive` whose send waits is not woken when a receiver takes its message. Its receive
+half begins there, in the taker's entry: an interrupt that has already fired answers it at once;
+otherwise it waits with its own timeout among the endpoint's receivers, and the endpoint is
+listed for the pump that entry is running, never pumped inside it, so one entry still pumps once
+([R12 (scheduling)](scheduling.md#r12-scheduling)). What it will receive on is kept as the
+kernel's own reference to the object, checked live when the half begins, so a destruction
+meanwhile is that half's `Dead`, never a stop. A receive handle closed or revoked during the send
+does not end the turn: the receive half begins on the object it named, as a waiting `receive`
+goes on waiting.
+
+`redoubt_sys::decode_result` refuses any other combination: success with `a1` = 0; `a1` past 2
+on `reply_receive` or past 1 on `send_receive`; a mask bit unless `a1` = 2, or past the fourth
+handle; `a2` ≠ 0 on `send_receive`; and with `a1` ≠ 0, an error other than the receive half's
+three.
 
 ## Authority
 
@@ -452,14 +525,17 @@ What it would have taken stays for the next receiver outside the destruction.
 
 ### R13 (one outcome per call)
 
-<details><summary>Status: built · partly tested: completion races between harts are not attacked by a case · tested (6)</summary>
+<details><summary>Status: built · partly tested: completion races between harts are not attacked by a case · tested (9)</summary>
 
 - bench:ipc-outcomes
+- bench:turn-outcomes
 - bench:elixir-oracles
 - mutation:IpcWrongLend
 - mutation:IpcFalseDelivery
 - mutation:IpcSkipOutputCheck
 - mutation:IpcLeakRollback
+- mutation:TurnReplyLost
+- mutation:TurnSendDispositionLies
 
 </details>
 
@@ -473,6 +549,11 @@ caller gets `InvalidArgument`, its lend back and `absent`, and the server gets `
 Checking the record, copying, installing or rolling back handles and publishing the outcome are
 one step: the kernel runs with interrupts off and holds the memory manager's guard throughout,
 so no unmap, remap or teardown can fall between them.
+
+A turn ends in one row of [its table](#a-servers-turn) as well: every error its first half can
+earn is found before that half acts, so an error with `a1` = 0 means nothing was done, and an
+error with `a1` ≠ 0 is the receive half's, after a first half that is done and stays done. The
+disposition is never inferred from the status.
 
 The clients keep it above the kernel: the client library's typed call, and a session's generated
 Elixir client, return a reply's handles to the caller and keep none that an error reply, or one

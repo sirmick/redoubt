@@ -177,6 +177,73 @@ impl<H: Slot> BodyOf<H> {
     }
 }
 
+/// Slots in a [`FirstHalf`] record: the target, the send's timeout, the transfer (address, pages),
+/// then a [`Body`].
+pub const FIRST_SLOTS: usize = 4 + BODY_SLOTS;
+
+/// What `reply_receive` or `send_receive` does before it receives: its `first_rec`
+/// (kernel/abi.md, "Records"). A slot the call does not use is 0.
+///
+/// | Slot | `reply_receive` | `send_receive` |
+/// | --- | --- | --- |
+/// | 0 | the message id (non-zero) | the endpoint handle |
+/// | 1 | 0 | the send's timeout, relative µs |
+/// | 2-3 | 0 | the transfer's address and pages, (0, 0) for none |
+/// | 4-12 | the reply's body | the message's body |
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FirstHalf {
+    /// `reply(msg_id, body)`.
+    Reply { msg_id: NonZeroU64, body: Body },
+    /// `send(endpoint, body, transfer, timeout)`.
+    Send { endpoint: Handle, timeout: u64, transfer: Option<Pages>, body: Body },
+}
+
+impl FirstHalf {
+    pub fn encode(&self) -> [u64; FIRST_SLOTS] {
+        let mut slots = [0; FIRST_SLOTS];
+        let w = &mut Writer::record(&mut slots);
+        let body = match *self {
+            FirstHalf::Reply { msg_id, body } => {
+                w.u64(msg_id.get());
+                w.u64(0);
+                Pages::write(None, w);
+                body
+            }
+            FirstHalf::Send { endpoint, timeout, transfer, body } => {
+                w.u64(endpoint.to_raw());
+                w.u64(timeout);
+                Pages::write(transfer, w);
+                body
+            }
+        };
+        body.write(w);
+        slots
+    }
+
+    /// Kernel side, for `reply_receive` (`send` false) or `send_receive`: every malformed
+    /// record is an error, the first in slot order. A message id of 0 is `InvalidArgument`, an
+    /// endpoint of 0 or wider than 32 bits `BadHandle`, and a slot the call does not use
+    /// `InvalidArgument` when it is not 0.
+    pub fn decode(send: bool, slots: &[u64; FIRST_SLOTS]) -> Result<FirstHalf, Error> {
+        let mut r = Reader::record(slots);
+        let target = r.raw();
+        let half = if send {
+            let endpoint = Handle::from_raw(target)?;
+            let timeout = r.u64()?;
+            let transfer = Pages::read(&mut r)?;
+            FirstHalf::Send { endpoint, timeout, transfer, body: Body::read(&mut r)? }
+        } else {
+            let msg_id = NonZeroU64::new(target).ok_or(Error::InvalidArgument)?;
+            if (r.raw(), r.raw(), r.raw()) != (0, 0, 0) {
+                return Err(Error::InvalidArgument);
+            }
+            FirstHalf::Reply { msg_id, body: Body::read(&mut r)? }
+        };
+        r.finish()?;
+        Ok(half)
+    }
+}
+
 /// Slots in a [`Received`] record, one layout for every kind (kernel/abi.md, "The receive
 /// record"): kind, message id, badge, account, labels (count and `MAX_LABELS`), body (words,
 /// handle count, handles), buffer (address, pages).

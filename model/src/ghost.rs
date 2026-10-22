@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 
 use crate::kernel::{Endpoint, Handle, MsgKind};
 use crate::spec::{Cause, Class, Error};
-use crate::syscall::{Message, MintSource, Ret};
+use crate::syscall::{Message, MintSource, Ret, TurnFirst};
 
 /// R2's group: blocked senders are grouped, capped and served round-robin by (account, label set),
 /// and for account 0 by the sender's budget id as well (0 otherwise).
@@ -130,6 +130,9 @@ pub enum Flow {
     /// `device_info` by process `pid` on handle `h` (the raw argument) answered `got`
     /// (kernel/devices.md, `device_info`).
     DeviceInfo { pid: u64, h: u64, got: Result<Ret, Error> },
+    /// Thread `tid`'s turn ended reporting `first` beside `status` (R13); `done` is what the
+    /// ghost saw its first half do: the reply's commit, or its message taken.
+    Turn { tid: u64, first: TurnFirst, status: Result<(), Error>, done: Option<TurnFirst> },
 }
 
 /// I11: while a key's oldest message waits on an endpoint, how often each other key has been
@@ -195,6 +198,10 @@ pub struct Ghost {
     pub swept: BTreeSet<(u64, u64)>,
     /// Violations found while a step ran (the checks run after it).
     pub violations: Vec<String>,
+    /// Threads in a `send_receive` whose message is not yet taken.
+    pub turn_sending: BTreeSet<u64>,
+    /// What each thread's turn's first half did, as the ghost saw it, until the turn ends.
+    pub turns: BTreeMap<u64, TurnFirst>,
     /// Steps mapping calls have taken over their ranges, ever: one per page `tables_needed` walks
     /// and one per lookup `range_free` makes. R22's measure, so a test counts the work a refusal
     /// did rather than timing it.
@@ -235,8 +242,39 @@ impl Ghost {
         }
         *last = msg.msg_id;
         self.rids.insert((pid, msg.msg_id), id);
+        // A turn's message taken: its first half is done.
+        if let Some(s) = self.sent.get(&id).filter(|s| s.kind == MsgKind::Send) {
+            if self.turn_sending.remove(&s.sender_tid) {
+                self.turns.insert(s.sender_tid, TurnFirst::Sent);
+            }
+        }
         let via = self.receiving.remove(&tid);
         self.flows.push(Flow::Delivered { tid, id, msg: msg.clone(), via });
+    }
+
+    /// `tid`'s turn has replied, with the flows from `mark` on: what the reply's commit says
+    /// (`ReplyCompletion`: delivered if its output was valid, the slots the reply record holds),
+    /// or discarded for a call whose caller no longer waits.
+    pub fn turn_replied(&mut self, tid: u64, mark: usize) {
+        let first = self.flows[mark..]
+            .iter()
+            .find_map(|f| match f {
+                Flow::ReplyCompletion { output_valid, completion, .. } => Some(TurnFirst::Replied {
+                    delivered: *output_valid,
+                    installed_mask: completion.reply.as_ref().map_or(0, |r| {
+                        r.handles.iter().enumerate().fold(0, |m, (i, h)| m | (u8::from(*h != 0) << i))
+                    }),
+                }),
+                _ => None,
+            })
+            .unwrap_or(TurnFirst::Replied { delivered: false, installed_mask: 0 });
+        self.turns.insert(tid, first);
+    }
+
+    /// Thread `tid`'s turn ends: what the ghost saw its first half do, for the check.
+    pub fn turn_ended(&mut self, tid: u64) -> Option<TurnFirst> {
+        self.turn_sending.remove(&tid);
+        self.turns.remove(&tid)
     }
 
     /// `tid` began a `receive`: whatever it returns, it has no current call until it takes one.
@@ -305,6 +343,7 @@ impl Ghost {
     }
 
     pub fn thread_gone(&mut self, tid: u64) {
+        self.turn_ended(tid);
         self.served.remove(&tid);
         self.receiving.remove(&tid);
         self.current.remove(&tid);

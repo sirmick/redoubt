@@ -3,7 +3,8 @@
 //! Each fake process is a host thread with its own handle table, account and labels; they
 //! share the host's address space, so a lend is "mapped" into the server by passing its
 //! address, and records are read and written where the runtime put them. It models what the
-//! runtime and the echo pair use (endpoints, badges, `mint`, the four IPC calls, `serve`,
+//! runtime and the echo pair use (endpoints, badges, `mint`, the four IPC calls and the two turns,
+//! each a reply or send and then a receive in one call, `serve`,
 //! abandoned calls and their notices, `map_anon`, `map_fixed` (host pages at the address named,
 //! for a spawned thread's stack), `unmap`, `handle_close`, `time_now`, `random`,
 //! `process_exit`) and not the rest: no charging, no label check between user budgets (R1), no fair waiting
@@ -56,10 +57,10 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use redoubt_rt::abi::{
-    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Call, CallOutcome, Cause, Error, ExitNotice, FOREVER,
-    Handle, Handles, Hold, Labels, LendDisposition, MAX_RANGE_PAGES, MAX_START_HANDLES, MemFlags, Message,
-    MessageKind, MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles,
-    ReplyOutcome, Return, range_cap,
+    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Call, CallOutcome, Cause, Error, ExitNotice,
+    FIRST_SLOTS, FOREVER, FirstDone, FirstHalf, Handle, Handles, Hold, Labels, LendDisposition,
+    MAX_RANGE_PAGES, MAX_START_HANDLES, MemFlags, Message, MessageKind, MintSource, PAGE_SIZE, Pages,
+    RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome, Return, TurnOutcome, range_cap,
 };
 use redoubt_rt::ipc::{Request, Words};
 use redoubt_rt::server::typed::{Outcome, finish};
@@ -1061,6 +1062,44 @@ fn abandon(
     })
 }
 
+/// An error before anything is done, as `call` reports it: a `call`'s outcome with its lend
+/// returned and no reply, a turn's with nothing done, or the error.
+fn refused(call: &Call, error: Error) -> Result<Return, Error> {
+    match *call {
+        Call::Call { lend, .. } => Ok(Return::Call(CallOutcome {
+            status: Err(error),
+            lend: if lend.is_some() { LendDisposition::Returned } else { LendDisposition::None },
+            reply_present: false,
+        })),
+        Call::ReplyReceive { .. } | Call::SendReceive { .. } => {
+            Ok(Return::Turn(TurnOutcome { status: Err(error), first: FirstDone::Nothing }))
+        }
+        _ => Err(error),
+    }
+}
+
+/// A turn's records: its receive record not given up, and its first half's, read and decoded.
+fn read_first(s: &State, pid: usize, rec: usize, first_rec: usize, send: bool) -> Result<FirstHalf, Error> {
+    not_given_up(s, pid, rec, RECEIVED_SLOTS * 8)?;
+    not_given_up(s, pid, first_rec, FIRST_SLOTS * 8)?;
+    // SAFETY: the runtime passes the address of a live, 8-aligned `[u64; FIRST_SLOTS]` record it
+    // owns for the duration of the call (redoubt-rt `sys::Record`), in this address space.
+    let slots = unsafe { (first_rec as *const [u64; FIRST_SLOTS]).read() };
+    FirstHalf::decode(send, &slots)
+}
+
+/// A turn's receive handle, checked before anything is done: an IRQ, a badge-0 endpoint, or
+/// none.
+fn receive_source(s: &State, pid: usize, from: Option<Handle>) -> Result<(), Error> {
+    let Some(from) = from else { return Ok(()) };
+    match lookup(s, pid, from)? {
+        Object::Irq(_) => Ok(()),
+        Object::Endpoint(ep) if ep.badge != 0 => Err(Error::NotPermitted),
+        Object::Endpoint(_) => Ok(()),
+        _ => Err(Error::WrongObject),
+    }
+}
+
 fn read_body(addr: usize) -> Result<Body, Error> {
     // SAFETY: the runtime passes the address of a live, 8-aligned `[u64; BODY_SLOTS]` record
     // it owns for the duration of the call (redoubt-rt `sys::Record`), in this address space.
@@ -1085,34 +1124,14 @@ unsafe impl redoubt_rt::Transport for Fake {
             if let Some(i) = s.refusals.iter().position(|(p, c, _, _)| *p == pid && *c == name) {
                 if s.refusals[i].2 == 0 {
                     let error = s.refusals.remove(i).3;
-                    // A `call` refused before receipt is an outcome, as the kernel's `Busy` or
-                    // `Refused` is: its status the error, its lend returned, no reply.
-                    if let Call::Call { lend, .. } = call {
-                        return Ok(Return::Call(CallOutcome {
-                            status: Err(error),
-                            lend: if lend.is_some() {
-                                LendDisposition::Returned
-                            } else {
-                                LendDisposition::None
-                            },
-                            reply_present: false,
-                        }));
-                    }
-                    return Err(error);
+                    return refused(call, error);
                 }
                 s.refusals[i].2 -= 1;
             }
             // A killed process runs nothing on the machine; here its host thread runs on, and
             // every call but an exit fails `Dead`.
             if s.processes[pid].killed && !matches!(call, Call::ThreadExit | Call::ProcessExit { .. }) {
-                if let Call::Call { lend, .. } = call {
-                    return Ok(Return::Call(CallOutcome {
-                        status: Err(Error::Dead),
-                        lend: if lend.is_some() { LendDisposition::Returned } else { LendDisposition::None },
-                        reply_present: false,
-                    }));
-                }
-                return Err(Error::Dead);
+                return refused(call, Error::Dead);
             }
         }
         match *call {
@@ -1317,11 +1336,7 @@ unsafe impl redoubt_rt::Transport for Fake {
             Call::Call { endpoint, body_rec, lend, timeout } => {
                 match self.message(pid, endpoint, body_rec, lend, timeout, true) {
                     Ok(result) => Ok(result),
-                    Err(error) => Ok(Return::Call(CallOutcome {
-                        status: Err(error),
-                        lend: if lend.is_some() { LendDisposition::Returned } else { LendDisposition::None },
-                        reply_present: false,
-                    })),
+                    Err(error) => refused(call, error),
                 }
             }
             Call::Send { endpoint, body_rec, transfer, timeout } => {
@@ -1334,33 +1349,13 @@ unsafe impl redoubt_rt::Transport for Fake {
                 let mut s = self.lock();
                 not_given_up(&s, pid, body_rec, BODY_SLOTS * 8)?;
                 let body = read_body(body_rec)?;
-                match s.open.get(&msg_id.get()) {
-                    Some(&(receiver, ..)) if receiver == pid => {}
-                    _ => return Err(Error::InvalidArgument),
-                }
-                let handles = body
-                    .handles
-                    .as_slice()
-                    .iter()
-                    .map(|h| lookup(&s, pid, *h))
-                    .collect::<Result<Vec<_>, _>>()?;
-                s.open.remove(&msg_id.get());
-                // The lend is the caller's again (or, abandoned, the server's to free).
-                s.given_up.remove(&msg_id.get());
-                s.log.push((pid, "reply", msg_id.get()));
-                // An abandoned call's reply is discarded, and frees its lend (R3).
-                let abandoned = s.abandoned.remove(&msg_id.get());
-                if let Some(Some((addr, len))) = abandoned {
-                    s.processes[pid].mappings.remove(&addr);
-                    free(&mut s, addr, len, true);
-                }
-                let delivered = abandoned.is_none();
-                let installed = if delivered { (1 << handles.len()) - 1 } else { 0 };
-                if delivered {
-                    s.replies.insert(msg_id.get(), (body.words, handles));
-                }
-                self.change(&mut s);
-                Ok(Return::Reply(ReplyOutcome { delivered, installed }))
+                self.reply(&mut s, pid, msg_id, &body).map(Return::Reply)
+            }
+            Call::ReplyReceive { from, timeout, received_rec, first_rec, .. } => {
+                Ok(Return::Turn(self.reply_receive(pid, from, timeout, received_rec, first_rec)))
+            }
+            Call::SendReceive { from, timeout, received_rec, first_rec, .. } => {
+                Ok(Return::Turn(self.send_receive(pid, from, timeout, received_rec, first_rec)))
             }
             Call::TimeNow => Ok(Return::Time(self.now())),
             Call::Random => {
@@ -1560,6 +1555,100 @@ unsafe impl redoubt_rt::Transport for Fake {
 }
 
 impl Fake {
+    /// The reply to `msg_id`, an open call of `pid`'s: its handles checked, then made.
+    fn reply(
+        &self,
+        s: &mut MutexGuard<'_, State>,
+        pid: usize,
+        msg_id: NonZeroU64,
+        body: &Body,
+    ) -> Result<ReplyOutcome, Error> {
+        match s.open.get(&msg_id.get()) {
+            Some(&(receiver, ..)) if receiver == pid => {}
+            _ => return Err(Error::InvalidArgument),
+        }
+        let handles =
+            body.handles.as_slice().iter().map(|h| lookup(s, pid, *h)).collect::<Result<Vec<_>, _>>()?;
+        s.open.remove(&msg_id.get());
+        // The lend is the caller's again (or, abandoned, the server's to free).
+        s.given_up.remove(&msg_id.get());
+        s.log.push((pid, "reply", msg_id.get()));
+        // An abandoned call's reply is discarded, and frees its lend (R3).
+        let abandoned = s.abandoned.remove(&msg_id.get());
+        if let Some(Some((addr, len))) = abandoned {
+            s.processes[pid].mappings.remove(&addr);
+            free(s, addr, len, true);
+        }
+        let delivered = abandoned.is_none();
+        let installed = if delivered { (1 << handles.len()) - 1 } else { 0 };
+        if delivered {
+            s.replies.insert(msg_id.get(), (body.words, handles));
+        }
+        self.change(s);
+        Ok(ReplyOutcome { delivered, installed })
+    }
+
+    /// `reply_receive`: the receive's handle and the reply's checks first, nothing done if one
+    /// fails (the fake checks the receive's handle whole first, not stage by stage); then the
+    /// reply, then the receive.
+    fn reply_receive(
+        &self,
+        pid: usize,
+        from: Option<Handle>,
+        timeout: u64,
+        rec: usize,
+        first_rec: usize,
+    ) -> TurnOutcome {
+        let nothing = |error| TurnOutcome { status: Err(error), first: FirstDone::Nothing };
+        let replied = {
+            let mut s = self.lock();
+            let first = read_first(&s, pid, rec, first_rec, false).and_then(|first| {
+                receive_source(&s, pid, from)?;
+                Ok(first)
+            });
+            let reply = match first {
+                Ok(FirstHalf::Reply { msg_id, body }) => self.reply(&mut s, pid, msg_id, &body),
+                Ok(FirstHalf::Send { .. }) => unreachable!("a reply's record decodes as a reply"),
+                Err(error) => Err(error),
+            };
+            match reply {
+                Ok(outcome) => outcome,
+                Err(error) => return nothing(error),
+            }
+        };
+        let status = self.receive(pid, from, timeout, rec).map(|_| ());
+        TurnOutcome { status, first: FirstDone::Replied(replied) }
+    }
+
+    /// `send_receive`: the receive's handle and the send's checks first, nothing done if one
+    /// fails; then the send, which waits for its taker, then the receive.
+    fn send_receive(
+        &self,
+        pid: usize,
+        from: Option<Handle>,
+        timeout: u64,
+        rec: usize,
+        first_rec: usize,
+    ) -> TurnOutcome {
+        let nothing = |error| TurnOutcome { status: Err(error), first: FirstDone::Nothing };
+        let s = self.lock();
+        let first = read_first(&s, pid, rec, first_rec, true).and_then(|first| {
+            receive_source(&s, pid, from)?;
+            Ok(first)
+        });
+        let FirstHalf::Send { endpoint, timeout: send_timeout, transfer, body } = (match first {
+            Ok(first) => first,
+            Err(error) => return nothing(error),
+        }) else {
+            unreachable!("a send's record decodes as a send")
+        };
+        if let Err(error) = self.queue(s, pid, endpoint, body, transfer, send_timeout, None) {
+            return nothing(error);
+        }
+        let status = self.receive(pid, from, timeout, rec).map(|_| ());
+        TurnOutcome { status, first: FirstDone::Sent }
+    }
+
     /// `call` (`is_call`) or `send`: queue the message, then wait for the reply or the taking.
     fn message(
         &self,
@@ -1570,9 +1659,26 @@ impl Fake {
         timeout: u64,
         is_call: bool,
     ) -> Result<Return, Error> {
-        let mut s = self.lock();
+        let s = self.lock();
         not_given_up(&s, pid, body_rec, BODY_SLOTS * 8)?;
         let body = read_body(body_rec)?;
+        self.queue(s, pid, endpoint, body, pages, timeout, is_call.then_some(body_rec))
+    }
+
+    /// Queue a message, a call if it has a record for the reply (`reply_rec`), and wait for the
+    /// reply or the taking.
+    #[allow(clippy::too_many_arguments)]
+    fn queue(
+        &self,
+        mut s: MutexGuard<'_, State>,
+        pid: usize,
+        endpoint: Handle,
+        body: Body,
+        pages: Option<Pages>,
+        timeout: u64,
+        reply_rec: Option<usize>,
+    ) -> Result<Return, Error> {
+        let is_call = reply_rec.is_some();
         let ep = as_endpoint(&s, pid, endpoint)?;
         let handles =
             body.handles.as_slice().iter().map(|h| lookup(&s, pid, *h)).collect::<Result<Vec<_>, _>>()?;
@@ -1617,7 +1723,8 @@ impl Fake {
             if is_call {
                 if let Some((words, handles)) = s.replies.remove(&id.get()) {
                     let handles: Vec<Handle> = handles.into_iter().map(|e| install(s, pid, e)).collect();
-                    write_body(body_rec, &Body { words, handles: Handles::from_slice(&handles).unwrap() });
+                    let body = Body { words, handles: Handles::from_slice(&handles).unwrap() };
+                    write_body(reply_rec.expect("a call has its record"), &body);
                     break Ok(Return::Call(CallOutcome {
                         status: Ok(()),
                         lend: if pages.is_some() { LendDisposition::Returned } else { LendDisposition::None },

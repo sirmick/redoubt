@@ -362,4 +362,11 @@ calls! {
     /// caller holds it, the kernel's lines wait, whole, and go out when it is given back
     /// (kernel/devices.md, "The console's one writer").
     ConsoleHold = 29 "console_hold" { device: Handle, hold: Hold };
+    /// A server's turn in one entry (kernel/ipc.md, "A server's turn"): the reply `first_rec`
+    /// holds ([`FirstHalf::Reply`](crate::FirstHalf)), then `receive` with `receive`'s
+    /// arguments. -> `Turn`, whose first-half disposition is set on every return.
+    ReplyReceive = 30 "reply_receive" { from: Option<Handle>, timeout: u64, max_transfer: usize, received_rec: usize, first_rec: usize };
+    /// The send `first_rec` holds ([`FirstHalf::Send`](crate::FirstHalf)), then, once a
+    /// receiver has taken it, `receive` with `receive`'s arguments, in one call. -> `Turn`.
+    SendReceive = 31 "send_receive" { from: Option<Handle>, timeout: u64, max_transfer: usize, received_rec: usize, first_rec: usize };
 }

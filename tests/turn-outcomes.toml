@@ -1,0 +1,18 @@
+description = "A server's turn's outcomes (R13), checked by a trusted real-kernel checker: reply_receive and send_receive refused before anything is done change nothing (a1 = 0, the call open, the transfer the sender's); a delivered reply and the next call taken in one call; a failed receive half reported with the reply it follows; a reply to an abandoned call discarded; a failed send receives nothing and gets its transfer back; a taken send goes on to its receive, and its receive's endpoint destroyed meanwhile is Dead after the send"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+debug_assertions = true
+smp = [1, 2]
+programs = ["turn-outcomes"]
+timeout_secs = 20
+expect = [
+    '^\[pid 2\] turn-outcomes refusals before anything is done change nothing$',
+    '^\[pid 2\] turn-outcomes reply delivered and the next call taken in one call$',
+    '^\[pid 2\] turn-outcomes failed receive half reports the delivered reply$',
+    '^\[pid 2\] turn-outcomes reply to an abandoned call discarded$',
+    '^\[pid 2\] turn-outcomes failed send receives nothing; transfer back$',
+    '^\[pid 2\] turn-outcomes taken send continues to its receive; its endpoint gone is Dead after the send$',
+    '^\[pid 2\] turn-outcomes TURN OUTCOMES PASSED$',
+]
+forbid = ['turn-outcomes FAILED', 'PANIC']

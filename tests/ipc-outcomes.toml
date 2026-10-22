@@ -12,7 +12,7 @@ expect = [
     '^\[pid 2\] ipc-outcomes partial OOM reply preserves words, slots and installed mask$',
     '^\[pid 2\] ipc-outcomes both loan aliases protected; frame and charges preserved$',
     '^\[pid 2\] ipc-outcomes taken revocation consumed lend; server observed discard$',
-    '^\[pid 2\] ipc-outcomes send/reply/receive/process_start records at MMIO refused; device untouched$',
+    '^\[pid 2\] ipc-outcomes send/reply/receive/turn/process_start records at MMIO refused; device untouched$',
     '^\[pid 2\] ipc-outcomes server death returned lend without reply$',
     '^\[pid 2\] ipc-outcomes KERNEL OUTCOMES PASSED$',
 ]

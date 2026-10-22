@@ -120,7 +120,13 @@ minted into the principals' budgets, and a process in each budget. One sequence 
 this setup and starts from `init` alone. Then it picks operations
 from the model's state: a handle the actor holds, a page it has mapped, a message it serves.
 About one argument in ten is hostile instead (a handle index the actor lacks, an unaligned
-address, a list over its cap). `every_call_and_error_is_reached` checks over 5,000 seeds that
+address, a list over its cap). A reply to an odd message id, or a send whose first word is odd,
+followed by its own thread's `receive`, goes as one call, a server's turn (`reply_receive` or
+`send_receive`, [IPC](ipc.md#a-servers-turn)), when the turn would do what the pair does. The
+choice reads values already drawn and adds no draw: the op after the pair is drawn ahead, so a
+seed's sequence is the unfused one with each such pair as one call
+(`a_fused_sequence_is_the_unfused_one_with_each_pair_one_call`, over 5,000 seeds), and a seed's
+deadlines in `model-mutations` do not move. `every_call_and_error_is_reached` checks over 5,000 seeds that
 every call succeeds at least once, every error is returned by some call, and lends, transfers,
 each exit cause, interrupts and replies all happen, so no property holds only because nothing
 reached it.
@@ -321,7 +327,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 183 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 185 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -382,7 +388,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [R11 (memory)](memory.md#r11-memory) | `R11NoZeroing`, `R11SetFlagsAllowsWx`, `R11SetFlagsAllowsWriteOnly`, `R11LendStaysMapped`, `R11MapFixedSkipsOverlap`, `R11ExecOnDeviceMemory`, `R11ProcessMapSkipsFlags` | zeroing a frame free since boot, W^X per mapping and per frame, write without read, lends unmapped, `map_fixed` never replacing, `process_map`'s own flag check |
 | [R81 (frames in flight)](memory.md#r81-frames-in-flight) | `R81InFlightAllocatable`, `R81CommitUnzeroed` | no allocation of a frame in flight, caught by the frames' own check (a free frame not zero, or also in flight), not by a page read stale; a frame freed only zero |
 | [R12 (scheduling)](scheduling.md#r12-scheduling) | `R12PriorityById`, `R12IgnoreWeight`, `R12WakeBanksCredit`, `R12TieQueuedFirst`, `R12RequeueAhead`, `R12RequeueLifo`, `R12PreemptOnWake`, `R12TimeoutWakePreempts`, `R12NoFloorWhenIdle`, `R12ShortRunsFree`, `R12DropRemainder`, `R12ExitRunsFree`, `R12DestroyDropsDebt`, `R12CreateAtFloorOnly`, `R12LiftByMax`, `R12StrideWeightIsLimit`, `R12UnnormalizedLift`, `R12LiftCountsEntryWait`, `R12FoldAtNewWeight`, `R12NoMinimumCharge`, `R12DeadlineWorkUnbilled`, `R12RescaleOnlyOnReturn`, `R12SliceCountsExitWork`, `R12TimerWorkUnbilled`, `R12SliceCountsTimerWork`, `R12SwitchBilledToPrevious`, `R12CappedHoldsFloor`, `R12CapOnce`, `R12AllCappedHoldsFloor`, `R12UncapBanksCredit`, `R12UncapForfeitsWait`, `R12EmptyHoldsFloor`, `R12RequeueWaitsForCap`, `R12BlockLeavesAsRequeued`, `R12OneRunnerPerBudget`, `R12SpreadChargesOnce` | one flat queue, charging, the floor, ranks, preemption, the slice as the thread's own time, inheritance at create and destroy, the capped floor and the uncap lift across harts, a budget on several harts at once and each of its runners charged |
-| [R13 (one outcome per call)](ipc.md#r13-one-outcome-per-call) | `IpcWrongLend`, `IpcDropPartial`, `IpcFalseDelivery`, `IpcSkipOutputCheck`, `IpcLeakRollback` | the lend disposition, a partial reply, `delivered`, the completion-time record check, rollback |
+| [R13 (one outcome per call)](ipc.md#r13-one-outcome-per-call) | `IpcWrongLend`, `IpcDropPartial`, `IpcFalseDelivery`, `IpcSkipOutputCheck`, `IpcLeakRollback`, `TurnReplyLost`, `TurnSendDispositionLies` | the lend disposition, a partial reply, `delivered`, the completion-time record check, rollback, a turn's first half done as its `a1` says |
 | [R14 (unforgeable sender)](ipc.md#r14-unforgeable-sender) | `MsgNoLabels`, `MsgBadgeZero`, `MsgAccountZero`, `MsgIdsGlobal` | the attached labels, badge and account; message ids per receiving process |
 | [R18 (device authority)](devices.md#r18-device-authority) | `R18DeviceByNumber`, `DeviceInfoWrongKind` | a device reached only through a handle to it; `device_info` naming the device the handle names |
 | [R20 (PID reuse)](processes.md#r20-pid-reuse) | `R20NoticePidReused` | no PID reused while a notice names it |

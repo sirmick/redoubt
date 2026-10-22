@@ -94,6 +94,115 @@ pub fn completion(s: &Step) -> Result<&CallCompletion, String> {
         .ok_or("missing call completion".into())
 }
 
+/// A turn's result, `first` and the receive half's, from a step's wakes or its own outcome.
+fn turn_of(s: &Step, tid: u64) -> Option<(TurnFirst, Result<Ret, Error>)> {
+    let from = |r: &Result<Ret, Error>| match r {
+        Ok(Ret::Turn { first, half }) => Some((*first, (**half).clone())),
+        _ => None,
+    };
+    s.wakes.iter().filter(|w| w.tid == tid).find_map(|w| from(&w.result)).or(match &s.outcome {
+        Outcome::Done(r) => from(r),
+        _ => None,
+    })
+}
+
+/// A server's turn (kernel/ipc.md): one outcome each (R13). A reply that receives answers its
+/// caller at once and returns, with what it received or the receive's error, what the reply did;
+/// one refused before anything is done leaves the call open and current. A send that receives,
+/// once taken, goes on to its receive half without a wake and returns with `sent`; one whose send
+/// fails returns nothing done.
+fn turns(mutation: Option<Mutation>) -> Result<(), String> {
+    trace_roundtrip(&reply_turn(mutation)?, mutation)?;
+    trace_roundtrip(&send_turn(mutation)?, mutation)
+}
+
+/// The traces of [`turns`], for replay.
+pub fn turn_traces() -> Vec<String> {
+    [reply_turn(None), send_turn(None)]
+        .into_iter()
+        .map(|w| trace::record(&Boot::default(), &w.unwrap().ops, None).unwrap())
+        .collect()
+}
+
+fn reply_turn(mutation: Option<Mutation>) -> Result<World, String> {
+    let delivered = TurnFirst::Replied { delivered: true, installed_mask: 0 };
+    // The reply answers its caller in the turn's own step; the receive half then takes a call.
+    let mut w = World::new(mutation);
+    let (ep, h, server) = w.setup()?;
+    w.call(h, None, FOREVER)?;
+    let msg = w.take(ep, server)?;
+    let turn = |msg_id, timeout| Syscall::ReplyReceive {
+        h: Some(ep),
+        timeout,
+        max_transfer: 0,
+        msg_id,
+        words: [5; 4],
+        handles: vec![],
+    };
+    let s = w.sys(server, turn(msg.msg_id, FOREVER))?;
+    let c = completion(&s)?;
+    expect(c.status == Ok(()) && c.reply.as_ref().is_some_and(|r| r.words == [5; 4]), "turn: the reply")?;
+    expect(s.outcome == Outcome::Blocked, "turn: the receive half waits")?;
+    let s = w.call(h, None, FOREVER)?;
+    let (first, half) = turn_of(&s, server).ok_or("turn: no result")?;
+    expect(
+        first == delivered && matches!(half, Ok(Ret::Message(_))),
+        "turn: the call taken, the reply delivered",
+    )?;
+    let Ok(Ret::Message(next)) = half else { return Err("turn: not a message".into()) };
+    // Refused before anything is done: the call stays open and current.
+    let r = w.result(server, turn(next.msg_id + 9, FOREVER))?;
+    expect(
+        r == Ok(Ret::Turn { first: TurnFirst::Nothing, half: Box::new(Err(Error::InvalidArgument)) }),
+        "turn: a refused reply",
+    )?;
+    expect(w.k.threads[&server].current.is_some(), "turn: a refused reply keeps the current call")?;
+    // The receive half times out after a delivered reply: one outcome, with both.
+    w.sys(server, turn(next.msg_id, 1))?;
+    let s = w.op(Op::Tick { dt: 1 })?;
+    expect(turn_of(&s, server) == Some((delivered, Err(Error::Timeout))), "turn: a receive timing out")?;
+    Ok(w)
+}
+
+fn send_turn(mutation: Option<Mutation>) -> Result<World, String> {
+    // A send taken at once, then the receive half (a sleep) times out.
+    let mut w = World::new(mutation);
+    let (ep, h, server) = w.setup()?;
+    w.sys(server, Syscall::Receive { h: Some(ep), timeout: FOREVER, max_transfer: 0 })?;
+    let send = |timeout, send_timeout| Syscall::SendReceive {
+        h: None,
+        timeout,
+        max_transfer: 0,
+        endpoint: h,
+        words: [3; 4],
+        handles: vec![],
+        transfer: None,
+        send_timeout,
+    };
+    let s = w.sys(1, send(2, FOREVER))?;
+    expect(s.wakes.iter().any(|x| x.tid == server), "send turn: the receiver takes it")?;
+    expect(s.outcome == Outcome::Blocked, "send turn: the receive half waits")?;
+    let s = w.op(Op::Tick { dt: 2 })?;
+    expect(
+        turn_of(&s, 1) == Some((TurnFirst::Sent, Err(Error::Timeout))),
+        "send turn: sent, then the timeout",
+    )?;
+    // A send that waits is taken later: no wake then, and the receive half runs from there.
+    w.sys(1, send(3, FOREVER))?;
+    let s = w.sys(server, Syscall::Receive { h: Some(ep), timeout: FOREVER, max_transfer: 0 })?;
+    expect(!s.wakes.iter().any(|x| x.tid == 1), "send turn: taken later, no wake")?;
+    let s = w.op(Op::Tick { dt: 3 })?;
+    expect(turn_of(&s, 1) == Some((TurnFirst::Sent, Err(Error::Timeout))), "send turn: taken later")?;
+    // A send that fails: nothing done.
+    w.sys(1, send(FOREVER, 1))?;
+    let s = w.op(Op::Tick { dt: 1 })?;
+    expect(
+        turn_of(&s, 1) == Some((TurnFirst::Nothing, Err(Error::Timeout))),
+        "send turn: the send times out",
+    )?;
+    Ok(w)
+}
+
 /// A bad record takes nothing (kernel/ipc.md): a receiver whose record went bad while it waited
 /// gets `InvalidArgument`, and the abandoned-call notice or interrupt it would have taken arrives
 /// on its next `receive` with a good record.
@@ -476,6 +585,7 @@ fn endpoint_create_world(mutation: Option<Mutation>) -> Result<World, String> {
 
 /// Independent examples from the completion table, not kernel-derived expectations.
 pub fn ipc_contracts(mutation: Option<Mutation>) -> Result<(), String> {
+    turns(mutation)?;
     endpoint_create_owned(mutation)?;
     bad_record_takes_nothing(mutation)?;
     trace_roundtrip(&destruction_delivers_at_its_end(mutation)?, mutation)?;

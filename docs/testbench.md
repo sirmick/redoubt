@@ -290,7 +290,7 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 189 of the 360 run under `icount`: 182 so, six with a disk
+something in it waits on the host, and 190 of the 361 run under `icount`: 183 so, six with a disk
 at `icount = "shift=3"` (the rule for a disk is above), and `bench-qemu-early-exit`, whose `icount`
 is one QEMU refuses. What keeps the other 171 on the host's clock, a case counted under each it
 has: a disk or a userland disk (144 cases); host sockets, a `forward`, a `poke`, a peer or a dial

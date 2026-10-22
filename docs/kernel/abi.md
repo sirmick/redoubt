@@ -29,10 +29,11 @@ on it (I14 (no call panics the kernel)); and report the same first error that th
 
 A call is an `ecall` from user mode with `a0` = the call's number and its arguments in `a1`,
 `a2`, ... in the order its row lists them. The kernel answers in the same eight registers: `a0`
-= 0 and the result in `a1` onward, or `a0` = an error code and `a1`-`a7` = 0. `call` is the one
-exception: its lend and reply dispositions are in `a1` and `a2` on every return, errors
-included ([IPC](ipc.md#how-a-call-completes)). The kernel preserves every other register of the
-thread.
+= 0 and the result in `a1` onward, or `a0` = an error code and `a1`-`a7` = 0. `call` and the
+two turns are the exceptions: `call`'s lend and reply dispositions are in `a1` and `a2` on every
+return, errors included ([IPC](ipc.md#how-a-call-completes)), and so are a turn's first-half
+disposition and mask ([IPC](ipc.md#a-servers-turn)). The kernel preserves every other register
+of the thread.
 
 No register ever holds more than 32 bits or one `usize`, so rv32 carries every encoding and
 `redoubt-sys` has no width `cfg` in any of them. `USER_AREA_END`, the end of user space
@@ -72,7 +73,8 @@ machine `Ecall`, the `ecall` itself (the crate's only `unsafe` code), whose resu
 `redoubt_sys::decode_result` reads; the runtime takes whichever transport is installed, the
 `ecall` by default. `decode_result` refuses any result the kernel could not have produced: an
 unknown code, a non-zero register the result does not use, a value too wide for its field, and for
-`call` and `reply` a disposition that contradicts the status ([IPC](ipc.md#how-a-call-completes)).
+`call`, `reply` and the turns a disposition that contradicts the status
+([IPC](ipc.md#how-a-call-completes), [turns](ipc.md#a-servers-turn)).
 
 ## Call numbers and arguments
 
@@ -114,6 +116,8 @@ one. "(2)" marks a 64-bit value in two registers. A field named `..._rec` is the
 | 0x11b | `device_info` | device handle | kind (1 MMIO, 2 IRQ, 3 Reset), a (2), b (2), flags: the device's `Devs` entry | [devices](devices.md#device_info) |
 | 0x11c | `budget_reap` | budget handle | the children the budget still has, or does not return if the caller's own budget is in the reaped child's subtree, or its process object is charged there | [budgets](budgets.md#r10-destruction) |
 | 0x11d | `console_hold` | console MMIO device handle, hold (1 take, 2 give back, 3 give back with the caller's line unfinished) | a take: 1 if a kernel line ended the caller's unfinished line since it last gave the hold back, else 0; a give-back: 0 | [devices](devices.md#the-consoles-one-writer) |
+| 0x11e | `reply_receive` | `receive`'s five, then `first_rec` (a reply) | `a0` status; the reply: 0 not replied, 1 discarded, 2 delivered; its installed-handle mask; a [receive record](#the-receive-record) on success | [IPC](ipc.md#a-servers-turn) |
+| 0x11f | `send_receive` | `receive`'s five, then `first_rec` (a send) | `a0` status; the send: 0 not sent, 1 taken; 0; a receive record on success | [IPC](ipc.md#a-servers-turn) |
 
 `thread_create`'s and `process_start`'s argument reaches the new thread unchanged in its first
 argument register; the kernel does not check it, nor the entry or stack pointer. A `usize`
@@ -149,7 +153,8 @@ ones 0.
 | Record | Slots | Layout | Used by |
 | --- | --- | --- | --- |
 | body | 9 (`BODY_SLOTS`) | words 0-3; handle count (at most `MAX_MSG_HANDLES` (4)); handles 0-3 | `call` (request in, reply out), `send`, `reply` |
-| receive record | 32 (`RECEIVED_SLOTS`) | [below](#the-receive-record) | `receive` (out) |
+| receive record | 32 (`RECEIVED_SLOTS`) | [below](#the-receive-record) | `receive`, `reply_receive`, `send_receive` (out) |
+| first-half record | 13 (`FIRST_SLOTS`) | a reply's message id or a send's endpoint handle; the send's timeout; the transfer's address and pages; a body | `reply_receive`, `send_receive` (in) |
 | budget spec | 22 (`BUDGET_SPEC_SLOTS`) | pages; processes; weight; label count (at most `MAX_LABELS` (16)); labels 0-15; account; deadline | `budget_create` (in) |
 | usage | 6 (`USAGE_SLOTS`) | page limit; pages used; process limit; processes used; weight limit; weight carved to children | `budget_usage` (out) |
 | handle list | the call's count, at most `MAX_START_HANDLES` (128) | one handle per slot | `process_start` (in) |
@@ -175,6 +180,16 @@ handle the caller could not take ([R4 (delivery)](ipc.md#r4-delivery)).
 | | | 31 | buffer pages |
 *Table: record slot layout of a body and of the receive record, the same on rv32 and rv64. Slot n
 is at byte 8n, and every unused slot is 0.*
+
+| Slot | First-half record: `reply_receive` | `send_receive` |
+| --- | --- | --- |
+| 0 | message id (non-zero) | endpoint handle |
+| 1 | 0 | the send's timeout, relative µs (`FOREVER` allowed) |
+| 2, 3 | 0 | transfer address, pages ((0, 0) is none) |
+| 4 to 12 | the reply's body, as a body record's slots 0 to 8 | the message's body |
+*Table: the first-half record, the first half of a turn. Its slots are decoded in order: a
+message id of 0 or a non-zero unused slot is `InvalidArgument`, an endpoint of 0 or wider than 32
+bits `BadHandle`, and the body as a body record's.*
 
 ### The record check
 
@@ -325,6 +340,14 @@ argument position:
    `InvalidArgument` (its record can no longer be written). Decoding already refused records
    that were bad from the start; these cover memory that changed while the call waited.
 
+A turn (`reply_receive`, `send_receive`) runs both halves' stages 1 to 4 before either acts,
+stage by stage, and within a stage the receive half's first, by register: its record (`a5`),
+then `first_rec` (`a6`) and its slots; then the receive's handle, then the first half's
+arguments; then the receive handle's badge (`NotPermitted`), then the send's permission;
+then the send's `Busy`. An error there returns with the first half's disposition 0, nothing
+done. Stage 5 is the send's delivery, with the disposition 0, then the receive's, with the
+disposition saying what the first half did ([IPC](ipc.md#a-servers-turn)).
+
 Handle kinds are checked by use: no call reports a handle's kind, and the wrong kind is
 `WrongObject` at the first call that needs another. Two checks of stage 1 are made again by the
 code that acts on them, so neither rests on one check: W+X flags (by the mapping code,
@@ -353,6 +376,8 @@ list, in order.
 | `receive` | handle (0 is none): `BadHandle`; the record (written) | none given: sleep until `Timeout`; `BadHandle`, `WrongObject` (not an endpoint or an IRQ device), `NotPermitted` (badge not 0, I4 (only badge-0 handles receive)); at delivery: `Timeout`, `Dead` (endpoint destroyed), `InvalidArgument` (the record can no longer be written) |
 | `reply` | message id 0: `InvalidArgument`; body: the record (read), handle count `TooLarge`, each handle slot `BadHandle` | `InvalidArgument` (not an open call of the caller's thread, a `send`'s id included), `BadHandle` (each handle); nothing after these fails |
 | `serve` | message id 0: `InvalidArgument` | `InvalidArgument` (not an open call of the caller's thread) |
+| `reply_receive` | handle (0 is none): `BadHandle`; the receive record (written); `first_rec`: the record (read), message id 0 `InvalidArgument`, slots 1 to 3 non-zero `InvalidArgument`, the body as `reply`'s | `BadHandle`, `WrongObject` (receive handle: not an endpoint or an IRQ device); `InvalidArgument` (not an open call of the caller's thread), `BadHandle` (each reply handle); `NotPermitted` (receive handle's badge not 0); all with the disposition 0 and nothing done. Then the reply, which nothing fails, and the receive half: `Timeout`, `Dead`, `InvalidArgument` (the record can no longer be written), with the reply's disposition and mask |
+| `send_receive` | handle (0 is none): `BadHandle`; the receive record (written); `first_rec`: the record (read), endpoint `BadHandle`, the transfer as `send`'s, the body as `send`'s | `BadHandle`, `WrongObject` (receive handle); the send's arguments as `send`'s row; `NotPermitted` (receive handle's badge not 0), `LabelDenied` (R1); `Busy` (R2); all with the disposition 0 and nothing done. At the send's delivery: `Refused` (R4), `Timeout`, `Dead` (the send's endpoint), the disposition 0 and the transfer back. Taken: the receive half's `Timeout`, `Dead`, `InvalidArgument`, with the disposition 1 |
 | `handle_close` | handle: `BadHandle` | `BadHandle` |
 | `budget_create` | parent: `BadHandle`; spec: the record (read), then its slots: processes or weight wider than 32 bits `InvalidArgument`, label count over `MAX_LABELS` `TooLarge`, a label slot past the count non-zero `InvalidArgument` | `BadHandle`, `WrongObject`, `TooLarge` (the child would be at depth `MAX_DEPTH` (16)), `LabelDenied` (the labels, sorted and deduplicated, are not a superset of the parent's), `ClassDenied` (labels added by a caller not of class `system`), `OutOfMemory` (pages plus the budget's own page over the parent's free pages), `OutOfProcesses` (over the parent's free processes), `InvalidArgument` (weight over the parent's free weight, or all of it from a parent that holds a process; [R7 (carving)](budgets.md#r7-carving)), `OutOfMemory` (no free frame for the budget object), handle table |
 | `budget_destroy` | budget: `BadHandle` | `BadHandle`, `WrongObject` |
@@ -394,7 +419,7 @@ that are absent ([R22 (range cost)](memory.md#r22-range-cost)).
 
 </details>
 
-Every value of `a0` outside 0x101-0x11d is an unknown number: `InvalidArgument` in `a0` and 0 in
+Every value of `a0` outside 0x101-0x11f is an unknown number: `InvalidArgument` in `a0` and 0 in
 `a1`-`a7`. That includes 0, every number up to and including `NUMBER_BASE`, the first number
 past the table, and on rv64 a value with bit 32 or bit 63 set: the whole register is compared,
 never a truncated part of it. An unknown number carries no `call` dispositions, and nothing

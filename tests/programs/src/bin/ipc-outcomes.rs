@@ -6,6 +6,7 @@
 #![no_std]
 #![no_main]
 
+use core::num::NonZeroU64;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use redoubt_sys::{CallOutcome, LendDisposition, ReplyOutcome};
@@ -314,8 +315,8 @@ pub extern "C" fn _start() -> ! {
     assert_eq!(rd::usage(rd::ROOT).unwrap().pages_usage + 1, before_abandon);
     log!(logger, "ipc-outcomes taken revocation consumed lend; server observed discard");
 
-    // The other records at a device mapping: `send`'s body, `reply`'s body, `receive`'s output
-    // and `process_start`'s handle list. Each is refused with InvalidArgument, and the device
+    // The other records at a device mapping: `send`'s body, `reply`'s body, `receive`'s output,
+    // a turn's two and `process_start`'s handle list. Each is refused with InvalidArgument, and the device
     // sees no write: the canary in its scratch register and its line status stay as they were.
     // SAFETY: as `register`; the scratch register holds a byte for software and does nothing.
     unsafe { ((mmio + SCRATCH) as *mut u8).write_volatile(0x5a) };
@@ -336,6 +337,30 @@ pub extern "C" fn _start() -> ! {
         received_rec: mmio,
     });
     assert_eq!(received.map(|_| ()), bad, "receive record at MMIO");
+    // A turn's two records, its receive record and its first half's (read, so a read of the
+    // device's registers could take its input): each refused before anything is done.
+    let refused = Ok(Return::Turn(redoubt_sys::TurnOutcome { status: bad, first: rd::FirstDone::Nothing }));
+    let id = NonZeroU64::new(1).unwrap();
+    let reply = redoubt_sys::FirstHalf::Reply { msg_id: id, body: rd::body([0; 4]) }.encode();
+    let mut rec = [0u64; redoubt_sys::RECEIVED_SLOTS];
+    for (received_rec, first_rec) in [(mmio, reply.as_ptr() as usize), (rec.as_mut_ptr() as usize, mmio)] {
+        let turn = redoubt_sys::syscall(&rd::Call::ReplyReceive {
+            from: Some(rd::h(quiet)),
+            timeout: 0,
+            max_transfer: 0,
+            received_rec,
+            first_rec,
+        });
+        assert_eq!(turn, refused, "reply_receive records at MMIO");
+        let turn = redoubt_sys::syscall(&rd::Call::SendReceive {
+            from: Some(rd::h(quiet)),
+            timeout: 0,
+            max_transfer: 0,
+            received_rec,
+            first_rec,
+        });
+        assert_eq!(turn, refused, "send_receive records at MMIO");
+    }
     MMIO.store(mmio, Ordering::Release);
     let (out, _) = rd::call_outcome(endpoint, &rd::body([MMIO_REPLY, 0, 0, 0]), None, FOREVER).unwrap();
     assert_eq!(out, CallOutcome { status: Ok(()), lend: LendDisposition::None, reply_present: true });
@@ -347,7 +372,10 @@ pub extern "C" fn _start() -> ! {
     assert_eq!(TAKEN.load(Ordering::Acquire), 9, "the MMIO send was never delivered");
     assert_eq!(register(mmio, SCRATCH), 0x5a, "the scratch register kept its canary");
     assert_eq!(register(mmio, LINE_STATUS), line_status, "the line status is unchanged");
-    log!(logger, "ipc-outcomes send/reply/receive/process_start records at MMIO refused; device untouched");
+    log!(
+        logger,
+        "ipc-outcomes send/reply/receive/turn/process_start records at MMIO refused; device untouched"
+    );
 
     let returned = rd::page();
     rd::poke(returned, 0xfeed);

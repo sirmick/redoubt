@@ -1,6 +1,6 @@
 //! Results in registers. IPC call status does not erase ownership or reply validity
 //! (kernel/ipc.md, "How a call completes"); its status lives inside [`CallOutcome`], even when it
-//! is an error.
+//! is an error, and a turn's beside what its first half did ([`TurnOutcome`]).
 
 use crate::regs::{REGS, Reader, Writer};
 use crate::{Error, Handle, MAX_MSG_HANDLES, Number};
@@ -46,12 +46,37 @@ impl ReplyOutcome {
     }
 }
 
-/// A decoded result. `Call` includes its own status: outer `Ok` means the outcome decoded,
-/// not that the IPC succeeded. Other variants describe syscall success.
+/// What a turn's first half did (kernel/ipc.md, "A server's turn"): `a1`, with the reply's mask
+/// in `a2`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FirstDone {
+    /// Nothing: the call is still open, or the message was not sent and its transfer is the
+    /// sender's. The status is the error that stopped it. `a1` = 0.
+    Nothing,
+    /// `reply_receive`: the reply was made, as `reply`'s result says. `a1` = 1 discarded, 2
+    /// delivered.
+    Replied(ReplyOutcome),
+    /// `send_receive`: a receiver took the message. `a1` = 1.
+    Sent,
+}
+
+/// A turn's whole result, including on error (R13): what its first half did and the status. With
+/// the first half done, the status is the receive half's: success (the record is written),
+/// `Timeout`, `Dead` or `InvalidArgument`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TurnOutcome {
+    pub status: Result<(), Error>,
+    pub first: FirstDone,
+}
+
+/// A decoded result. `Call` and `Turn` include their own status: outer `Ok` means the outcome
+/// decoded, not that the IPC succeeded. Other variants describe syscall success.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Return {
     Call(CallOutcome),
     Reply(ReplyOutcome),
+    /// `reply_receive`, `send_receive`.
+    Turn(TurnOutcome),
     /// Calls with no value, and those whose result is in memory (`receive`,
     /// `budget_usage`).
     Nothing,
@@ -159,6 +184,14 @@ pub fn encode_result(result: &Result<Return, Error>) -> [u64; REGS] {
                     w.u32(u32::from(outcome.delivered));
                     w.u32(outcome.installed);
                 }
+                Return::Turn(outcome) => {
+                    regs[0] = outcome.status.err().map_or(0, |e| e as u64);
+                    (regs[1], regs[2]) = match outcome.first {
+                        FirstDone::Nothing => (0, 0),
+                        FirstDone::Replied(reply) => (1 + u64::from(reply.delivered), reply.installed.into()),
+                        FirstDone::Sent => (1, 0),
+                    };
+                }
                 Return::Nothing => {}
                 Return::Addr(addr) => w.usize(addr),
                 Return::Mapping { addr, len } => {
@@ -212,6 +245,31 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         }
         return Ok(Return::Call(CallOutcome { status, lend, reply_present }));
     }
+    if matches!(number, Number::ReplyReceive | Number::SendReceive) {
+        let status =
+            if code == 0 { Ok(()) } else { Err(Error::from_code(code).ok_or(Error::InvalidArgument)?) };
+        let first = match (number, r.u32()?) {
+            (_, 0) => FirstDone::Nothing,
+            (Number::SendReceive, 1) => FirstDone::Sent,
+            (Number::ReplyReceive, done @ (1 | 2)) => FirstDone::Replied(
+                ReplyOutcome { delivered: done == 2, installed: r.u32()? }.validate(MAX_MSG_HANDLES)?,
+            ),
+            _ => return Err(Error::InvalidArgument),
+        };
+        r.finish()?;
+        // Nothing done is an error, with no mask; once the first half is done, only the receive
+        // half's delivery errors remain.
+        let impossible = match first {
+            FirstDone::Nothing => status.is_ok(),
+            FirstDone::Replied(_) | FirstDone::Sent => {
+                !matches!(status, Ok(()) | Err(Error::Timeout | Error::Dead | Error::InvalidArgument))
+            }
+        };
+        if impossible {
+            return Err(Error::InvalidArgument);
+        }
+        return Ok(Return::Turn(TurnOutcome { status, first }));
+    }
     if code != 0 {
         let error = Error::from_code(code).ok_or(Error::InvalidArgument)?;
         r.finish()?;
@@ -257,7 +315,7 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         | Number::BudgetUsage
         | Number::SystemReset
         | Number::MapFixed => Return::Nothing,
-        Number::Call => unreachable!(),
+        Number::Call | Number::ReplyReceive | Number::SendReceive => unreachable!(),
     };
     r.finish()?;
     Ok(value)

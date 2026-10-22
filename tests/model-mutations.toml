@@ -3,7 +3,8 @@ kind = "host-tests"
 packages = ["redoubt-model"]
 tests = ["mutations"]
 profile = "release"
-# The longest job, R2NoWaitCap's, is 18.7 s on one core measured, and a third.
+# The longest job is R2NoWaitCap's: 15.0 s alone on one core, 20.8 s in the whole case beside the
+# other jobs, so the deadline leaves it a fifth.
 timeout_secs = 25
 
 # One core a job, so the jobs fit beside others on a shared machine.

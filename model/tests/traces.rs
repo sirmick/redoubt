@@ -81,6 +81,8 @@ fn a_rule_breaking_kernel_fails_replay() {
     texts.push(common::contracts::destruction_delivery_trace());
     // An endpoint named into a budget with a label its user-class creator lacks.
     texts.push(common::contracts::endpoint_create_trace());
+    // A server's turn, each kind: what its first half did beside what it received.
+    texts.extend(common::contracts::turn_traces());
     let mut missed = Vec::new();
     let invisible = |m: &Mutation| {
         m.is_policy()
