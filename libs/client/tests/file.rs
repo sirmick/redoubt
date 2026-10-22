@@ -294,8 +294,8 @@ fn an_rerror_keeps_its_name_not_found_against_the_rest() {
 /// `admit`): at a cap of three fids a lone connection holds its root, the fixed cost, and one
 /// working fid, the share of the two left; a second open while the first file is held is
 /// refused `too_many` by the server, and the library tries again at doubling waits, so once the
-/// first file closes within the bound the open succeeds; one held past the bound is the caller's
-/// `too_many` after the eight tries, 2.55 s.
+/// first file closes within the bound (here, once that refusal is seen) the open succeeds; one
+/// held past the bound is the caller's `too_many` after the eight tries, 2.55 s.
 #[test]
 fn an_admission_refusal_of_the_moment_is_tried_again() {
     let served = Served::start_with(3, |_, request| {
@@ -308,25 +308,27 @@ fn an_admission_refusal_of_the_moment_is_tried_again() {
         Arc::new(Connection::attach(Endpoint::from_handle(conn), &mut lend).unwrap())
     });
     let holder = Arc::clone(&shared);
+    let (holding, held_from) = std::sync::mpsc::channel();
     let held = fake().run(client, move || {
         let mut lend = Lend::new(1).unwrap();
         let file = holder.open(&mut lend, "home/a/note", mode::OREAD).unwrap();
-        // Past the first two tries (10 and 20 ms), inside the third.
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Its open is answered: the connection's one working fid is this file's. It lets it go
+        // only once the other open's walk is refused and its wait begun, the wait a `receive`.
+        let from = fake().calls(client).len();
+        holding.send(from).unwrap();
+        while !fake().calls(client)[from..].contains(&"receive") {
+            std::thread::yield_now();
+        }
         file.close(&mut lend).unwrap();
         0
     });
     fake().as_process(client, || {
         let mut lend = Lend::new(1).unwrap();
-        // Wait for the holder to hold: its open is the connection's one working fid.
-        while fake().calls(client).len() < 4 {
-            std::thread::yield_now();
-        }
-        let before = fake().calls(client).len();
+        let before = held_from.recv().unwrap();
         let file = shared.open(&mut lend, "home/b/secret", mode::OREAD).unwrap();
         assert!(
-            fake().calls(client).len() > before + 2,
-            "a walk refused at least once before the one served"
+            fake().calls(client)[before..].contains(&"receive"),
+            "a walk refused at least once, and tried again after a wait"
         );
         file.close(&mut lend).unwrap();
     });
