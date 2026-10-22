@@ -1686,9 +1686,11 @@ the last one's until the kernel says its caller is gone.
 `PROBE_EXIT`), off in every default build; the bench's `steward-restart` builds the steward with
 it. **The latency probe**, `latency-probe`, is the second such feature, built by `steward-latency`
 and its two companions, `steward-latency-n4` and `steward-latency-n16` (the rounds at N = 4 and
-N = 16, each on a trace ring of its own), by `steward-deadline-burst` and `steward-deadline-burst-16`
-(leases expiring together), and nothing else (the bench's host test
-`only_steward_latency_builds_the_latency_probe` holds it to those five):
+N = 16, each on a trace ring of its own), by their three twins where the harts run at once
+(`steward-latency-mttcg`, `steward-latency-n4-mttcg` and `steward-latency-n16-mttcg`), by
+`steward-deadline-burst` and `steward-deadline-burst-16` (leases expiring together), by
+`steward-launch-overlap` (a deadline inside another lease's launch), and nothing else (the
+bench's host test `only_steward_latency_builds_the_latency_probe` holds it to those nine):
 the steward prints a probe lease's start as a `reply_wait` sample (its answer to its next
 receive: its work after the reply, the call's records having gone before it), arms two timeouts there and ends that lease by its own
 `EndLease` at the second, prints its wake, deadline-notice (the sponsor's `lease_ended` send

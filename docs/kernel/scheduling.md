@@ -648,14 +648,16 @@ got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (27)</summary>
+<details><summary>Status: built · tested (29)</summary>
 
 - bench:sched-latency
 - bench:sched-range-hammer
 - bench:steward-latency
 - bench:steward-latency-mttcg
 - bench:steward-latency-n4
+- bench:steward-latency-n4-mttcg
 - bench:steward-latency-n16
+- bench:steward-latency-n16-mttcg
 - bench:steward-deadline-burst
 - bench:steward-deadline-burst-16
 - bench:steward-launch-overlap
@@ -797,7 +799,7 @@ stated margin. The sweep's seeds and worst case are recorded here with the targe
 | driver wake: the RTC's time when the driver runs, less the alarm it set | p50 <= 15 ms, p99 <= 50 ms |
 | steward timer wake: `time_now` when it runs, less its timeout's deadline | p50 <= 15 ms, p99 <= 50 ms |
 | steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 25 ms, p99 <= 95 ms (from the fourth sweep below; the third sweep set the same 25 and 95 ms) |
-| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 40 ms (back from 54 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)); at two harts the real steward's is recorded under `icount` on both widths (rv32 43 to 57 ms, rv64 25 to 32 ms, QEMU's turns) and judged where the harts run at once, in `steward-latency-mttcg` ([below](#responsiveness), [residual risks](#residual-risks)) |
+| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 40 ms (back from 54 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)); at two harts the real steward's is recorded under `icount` (rv32 43 to 57 ms at N = 1 to 3, rv64 25 to 35 ms at N = 1 to 16, QEMU's turns) and judged where the harts run at once, in `steward-latency-mttcg` and its companions' twins `steward-latency-n4-mttcg` and `steward-latency-n16-mttcg` ([below](#responsiveness), [residual risks](#residual-risks)) |
 | R10 kernel time of one destruction, from the trace | p99 <= 30 ms (back from 39 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)) |
 | a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 95 + 30 = 125 ms, asserted as one sum by the post-check |
 | `budget_destroy`, call to return | p99 <= 51 ms: one round at N = 16, R10's 30 ms plus (runnable budgets + 2) slices, 21 of 1 ms (`destroy_call_p99_us`, judged net of audits as the wakes are) |
@@ -955,7 +957,7 @@ such a destruction (subtracted, as every target is net):
 | --- | --- | --- | --- | --- |
 | steward timer wake (p50/p99) | 965/1944, 789/3472, 1227/2555, 821/5165, 599/1405 | 435/438, 552/555, 601/1231, 801/1507; N = 16 not run (a spinner dies, below) | 1761/5085, 2867/23003, 1901/4066, 2336/7692, 3592/5357 | 4751/5972, 4340/6680, 4311/11628, 3284/40940; N = 16 not run |
 | steward decision wake (p50/p99) | 1156/8292, 17425/20974, 645/2230, 965/2000, 736/1532 | 528/1029, 1072/1551, 1035/1549, 775/1888 | 3474/18540, 1696/21203, 9798/25163, 3265/25254, 14107/29787 | 3385/4950, 3131/5362, 3026/4860, 3112/41174 |
-| deadline notice (p99; the sponsor's send returned, re-measured) | 17882, 18016, 19734, 18813, 14349 | 16253, 17432, 18876, 17349 | **30393**, **32398**, **24567** (recorded, not judged: below), 27239, 29907 | **43372**, **45317**, **56536** (recorded, not judged: below), 13997 (at the dequeue) |
+| deadline notice (p99; the sponsor's send returned, re-measured) | 17882, 18016, 19734, 18813, 14349 | 16253, 17432, 18876, 17349 | **30393**, **32398**, **24567**, **27239**, **29907** (recorded, not judged: below) | **43372**, **45317**, **56536** (recorded, not judged: below), 13997 (at the dequeue) |
 | `budget_destroy`, call to return (p50/p99) | 6012/8329, 6081/8372, 5016/8412, 5468/8354, 6204/8762 | 5468/8799, 6501/8884, 6739/8860, 6460/9557 | 8178/9787, 8390/11010, 7938/10401, 7800/11411, 7545/9390 | 12055/13673, 9636/12969, 9046/13885, 10016/16204 |
 | R10 (p99; the boots at N = 1 to 3 / 4 / 16, 99 / 35 / 31 destructions) | 9695 / 9716 / 4800 | 8796 / 9682 | 10042 / 9804 / 5490 | 8929 / 10063 |
 | a lease's end (worst decision wake p99 + R10, per boot) | 20974 + 9695 = 30669; 2000 + 9716 = 11716; 1532 + 4800 = 6332 | 1551 + 8796 = 10347; 1888 + 9682 = 11570 | 25163 + 10042 = 35205; 25254 + 9804 = 35058; 29787 + 5490 = 35277 | 5362 + 8929 = 14291; 41174 + 10063 = 51237 |
@@ -966,8 +968,8 @@ of 8,388,608 for the boots at N = 1 to 3 / 4 / 16 on rv64 at one hart, 5,525,840
 1,363,142 at two; 5,105,172 / 2,963,667 on rv32 at one hart, 6,233,716 / 3,932,389 at two. The
 real steward meets every target on rv64 at one and two harts, N = 1 to 16, on rv32 at one
 hart, N = 1 to 4, and on rv32 at two harts, N = 1 to 3, but the deadline notice's p99 there;
-at two harts that cell is recorded on both widths at N = 1 to 3 and judged where the harts run
-at once (below), each column one run at seed 3 with the cleanup steps on the steward's own thread ([steward](../servers/steward.md#failure-and-restart)): the timer wake's p99 at N = 3 and
+at two harts that cell is recorded on both widths at N = 1 to 3 and on rv64 at N = 4 and 16, and
+judged where the harts run at once (below), each column one run at seed 3 with the cleanup steps on the steward's own thread ([steward](../servers/steward.md#failure-and-restart)): the timer wake's p99 at N = 3 and
 4 is 2.6 and 5.2 ms on rv64, 1.2 and 1.5 ms on rv32, and the reply-to-receive p99 in those rounds
 11.5 and 11.0 ms, 10.6 and 12.4 ms, with no 100 ms retry in any sample. At N = 16 on rv64 at one
 hart the timer wake meets its targets, 0.6 ms at p50 and 1.4 at p99 (54.5 and 57.3 ms when the round
@@ -1078,7 +1080,19 @@ that holds each notice to the loop's next turn, after its exit's effects and the
 for its lines (a test-only change, one run of each width), reads 13.8 / 14.9 / 14.7 ms on rv32
 and 12.9 / 13.5 / 14.5 on rv64 at two harts, about 5 ms over the notice sent as the exit is
 decided, and passes. A change to the notice's path that does not depend on the hart count is
-still judged under `icount` at one hart, in `steward-latency`. The `a device interrupt returned without its claim` rejection of the rv32
+still judged under `icount` at one hart, in `steward-latency`. The rounds at N = 4
+and 16 have twins of their own, since their companions are boots of their own on the per-boot
+ring: `steward-latency-n4-mttcg` judges the notice at two harts at N = 4 on rv64 and
+`steward-latency-n16-mttcg` at N = 16, each booting as its companion does (N = 4's rv32 boot at
+one hart, recorded) and recording the rest, with leases twice the round's worst launch on the
+host's clock (0.78 s and 1.70 s, so 2 and 4 s). Under `icount` the companions' two-hart notice
+reads 27.2 and 29.9 ms (33.5 and 34.1 in a later run), recorded there; over three runs alone
+with the harts at once it reads 6.7 to 7.6 ms at N = 4 and 8.2 to 10.1 ms at N = 16 at two harts,
+and at one hart (recorded) 5.9 to 6.2 ms at N = 4 on rv64, 6.0 to 7.9 on rv32, and 9.0 to 9.4 ms at
+N = 16. The N = 16 twin's boot is not cheaper than its companion's: 292 s at two harts on the
+host's clock against 226 s under `icount`, whose `sleep=off` skips the session's idle sleeps that
+the host's clock waits out. Their sensitivity is `steward-latency-mttcg`'s, above: the same
+notice path on the same clock. The `a device interrupt returned without its claim` rejection of the rv32
 two-hart trace, one run in two at this seed before, met neither
 rv32 two-hart boot here. Before the steward's console lines were queued and written through one kept
 fid at the loop's turn ([steward](../servers/steward.md#failure-and-restart)), the steward
@@ -1375,13 +1389,15 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`), and for a `process_exit` ending 254 waits that each hold the timer's hint, within two slices of the same exit on an empty system (`bench:timeout-hint-exit`) · tested (72)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`), and for a `process_exit` ending 254 waits that each hold the timer's hint, within two slices of the same exit on an empty system (`bench:timeout-hint-exit`) · tested (74)</summary>
 
 - bench:sched-share
 - bench:steward-latency
 - bench:steward-latency-mttcg
 - bench:steward-latency-n4
+- bench:steward-latency-n4-mttcg
 - bench:steward-latency-n16
+- bench:steward-latency-n16-mttcg
 - bench:sched-share-release
 - bench:sched-capped
 - bench:sched-capped-mttcg
@@ -1906,7 +1922,9 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   their instructions advance the one clock, so its p99 at N = 1 to 3 reads 43.4 / 45.3 / 56.5 ms
   on rv32 and 30.4 / 32.4 / 24.6 on rv64 against 40, where the harts at once read 7.2 to 11.7 ms
   over three runs a width; the two-hart cells are recorded in `steward-latency` and judged in
-  `steward-latency-mttcg` ([responsiveness](#responsiveness)). Turns fix the order harts take the
+  `steward-latency-mttcg`, and the companions' at N = 4 and 16 on rv64 (27.2 and 29.9 ms) in
+  their twins `steward-latency-n4-mttcg` and `steward-latency-n16-mttcg` (6.7 to 10.1 ms)
+  ([responsiveness](#responsiveness)). Turns fix the order harts take the
   kernel lock too: in `sched-capped`'s second
   cap at three harts no timeout fires in the window, every interrupt is a slice end of the hart's
   own runner, and the three slice ends meet at the lock every slice in one order, so the heavy

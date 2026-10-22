@@ -53,7 +53,13 @@ smp = [1, 2]
 # Sixteen beamlet VMs live at once under icount, and the reboot rule needs six exits within 60 s.
 # One round here, the sixteen launches its cost.
 timeout_secs = 10800
-post_check = "sched_oracle gate_harts=2 r10_p99_us=30000 lease_end_p99_us=125000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000"
+# One cell is recorded, not judged, its target unmoved: the deadline notice's p99 at two harts
+# on rv64. Under icount the harts take turns on one host thread and both harts' instructions
+# advance one clock, so the other hart's work is counted inside the steward's send (p99 29.9 ms
+# there, 34.1 in a later run); the cell is judged where the harts run at once, in
+# steward-latency-n16-mttcg (kernel/scheduling.md, "With the real steward" and "A hart waits
+# for QEMU's turns").
+post_check = "sched_oracle gate_harts=2 r10_p99_us=30000 lease_end_p99_us=125000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000 record=rv64:2:N=16:deadline_notice:p99"
 expect = [
     '^init: started sshd, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
