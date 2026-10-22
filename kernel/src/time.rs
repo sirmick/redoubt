@@ -72,6 +72,9 @@ struct Timer {
     slice: [u64; MAX_HARTS],
     /// What each hart's timer is armed for, in microseconds.
     armed: [u64; MAX_HARTS],
+    /// An end of the hart's running slice that the slice has since moved past ([`move_slice_end`]),
+    /// `NEVER` for none: while the timer is armed for it, it is early, not wrong.
+    moved: [u64; MAX_HARTS],
 }
 
 static TIMER: KernelCell<Timer> = KernelCell::new(Timer {
@@ -80,6 +83,7 @@ static TIMER: KernelCell<Timer> = KernelCell::new(Timer {
     budgets: Hint::NONE,
     slice: [NEVER; MAX_HARTS],
     armed: [NEVER; MAX_HARTS],
+    moved: [NEVER; MAX_HARTS],
 });
 
 /// Monotonic microseconds since boot.
@@ -118,8 +122,30 @@ pub fn note_budget_deadline(deadline: u64, payer: Option<u64>) {
     TIMER.with(|t| t.budgets = t.budgets.lowered(deadline, payer));
 }
 
-/// This hart's running thread's slice ends at `at` (`NEVER` for none).
-pub fn set_slice_end(at: u64) { TIMER.with(|t| t.slice[hart::index()] = at); }
+/// This hart's running thread's slice ends at `at` (`NEVER` for none): a new slice, or none.
+pub fn set_slice_end(at: u64) {
+    TIMER.with(|t| {
+        let h = hart::index();
+        (t.slice[h], t.moved[h]) = (at, NEVER);
+    });
+}
+
+/// This hart's running slice now ends at `at`, later than it did: it resumes after a pause
+/// (`sched::resume_slice`), or an audit moved it. A timer armed for an earlier end of it stays
+/// armed: the target is the same slice's end, so [`rearm`] leaves it. It comes early only if the
+/// thread runs to that end, where the decision (`sched::slice_over`) finds the slice not over and
+/// the return re-arms: one early interrupt an arming, each after an entry since it; at rest the
+/// thread blocks first. So the pauses of a slice cost no re-arm each (kernel/timer.md, "The hart
+/// timer").
+pub fn move_slice_end(at: u64) {
+    TIMER.with(|t| {
+        let h = hart::index();
+        if t.armed[h] == t.slice[h] {
+            t.moved[h] = t.slice[h];
+        }
+        t.slice[h] = at;
+    });
+}
 
 /// When this hart's running thread's slice ends.
 pub fn slice_end() -> u64 { TIMER.with(|t| t.slice[hart::index()]) }
@@ -131,7 +157,8 @@ pub fn slice_end() -> u64 { TIMER.with(|t| t.slice[hart::index()]) }
 /// slice; an item whose payer runs nowhere, or that two payers share, one hart comes by, the first
 /// to re-arm, so at rest a timeout wakes one hart, not every hart. The harts' runners are read as
 /// they are now (`sched::runner_ids`): at the
-/// return to user mode, after the switch, and before `kmain` idles (module docs).
+/// return to user mode, after the switch, and before `kmain` idles (module docs). A slice's end
+/// that only moved later is no change ([`move_slice_end`]).
 pub fn rearm() {
     MemoryManager::with(settle_timeouts);
     let h = hart::index();
@@ -143,7 +170,9 @@ pub fn rearm() {
             if cfg!(feature = "timer-any-hart") { hint.at } else { hint.due_on(h, &runners, &t.armed) }
         };
         let target = item(t.threads).min(item(t.budgets)).min(t.slice[h]);
-        if target != t.armed[h] {
+        // Armed for an end the running slice moved past, with nothing earlier: early, so no change.
+        let early = t.armed[h] == t.moved[h] && target > t.armed[h];
+        if target != t.armed[h] && !early {
             t.armed[h] = target;
             timer::set(if target == NEVER { u64::MAX } else { timer::us_to_ticks(target) });
         }

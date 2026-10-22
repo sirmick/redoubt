@@ -84,13 +84,16 @@ file holds is typed, in the wire encoding ([wire](wire.md#the-encoding)), never 
   send.
 - **What a probe costs.** One probe is `ipd`'s timer wake, its `transmit` call to `netd`, the
   card's interrupt for the answer, `netd`'s receive thread's send to `ipd`, and `ipd`'s wake: 15
-  system calls from user mode, 9 of them `ipd`'s. On an idle four-hart box it costs about 26 to 30
-  interrupts and 32 to 36 SBI calls in all, every hart's, on rv64 (26 to 27 and 33 to 34 on rv32):
+  system calls from user mode, 9 of them `ipd`'s. On an idle four-hart box it costs about 23 to 26
+  interrupts and 29 to 33 SBI calls in all, every hart's, on rv64 (26 to 28 and 33 to 35 on rv32):
   `bench:launch-idle-probes` builds `ipd` with its test-only `keep-alive-probes`, a probe every 2
   s, and the cost is its window less `launch-idle`'s over the card's answer frames between them,
-  one a probe (about 26), three rounds a width alone. Each is named by the entry that makes it. The
-  probe's own: its timer, `ipd`'s call and `netd`'s reply, the card's interrupt on the hart that
-  claims it, and `netd`'s receive thread's entries, with the timer's re-arms they move. About 5 are
+  one a probe (26 or 27), three alternating rounds a width alone. The kernel arms the hart timer
+  only when its target changes, not for a slice's end that a call's or an interrupt's pause moved
+  ([the hart timer](../kernel/timer.md#the-hart-timer)). Each is named by the entry that makes
+  it. The probe's own: its timer, `ipd`'s call and `netd`'s reply, the card's interrupt on the
+  hart that claims it, and `netd`'s receive thread's entries, with the timer's re-arms they move
+  (a target that changes: a wait's timeout, a new slice). About 5 are
   lock hand-offs (an interrupt and an SBI call each) after a `send`, a `reply` or the `receive`
   that takes a queued send, because a server's turn is two entries
   ([scheduling](../kernel/scheduling.md#residual-risks)); about 5 more follow the card's interrupt,

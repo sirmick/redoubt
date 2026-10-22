@@ -453,7 +453,7 @@ pub fn from_user() {
         trace::record(trace::EXCUSED, excused, 0);
         let length = crate::arch::irq::timer::ticks_to_us(now)
             - crate::arch::irq::timer::ticks_to_us(now.saturating_sub(excused));
-        crate::time::set_slice_end(crate::time::slice_end().saturating_add(length));
+        crate::time::move_slice_end(crate::time::slice_end().saturating_add(length));
     }
 }
 
@@ -469,11 +469,12 @@ pub fn pause_slice() {
 
 /// The paused slice resumes with what it had left when it paused, unless it ended meanwhile (a
 /// slice's end picked, or the hart left for `kmain`). An audit's move of its end during the pause
-/// is inside the pause already, so it is not counted twice.
+/// is inside the pause already, so it is not counted twice. The end moves later, and a timer armed
+/// for the old end stays armed for it (`time::move_slice_end`).
 pub fn resume_slice() {
     let paused = SCHED.with(|s| s.b().paused_slice.take());
     if let Some((end, at)) = paused.filter(|_| crate::time::slice_end() != crate::time::NEVER) {
-        crate::time::set_slice_end(crate::time::now_us().saturating_add(end.saturating_sub(at)));
+        crate::time::move_slice_end(crate::time::now_us().saturating_add(end.saturating_sub(at)));
     }
 }
 
@@ -812,7 +813,7 @@ pub fn audit(which: u64, check: impl FnOnce()) {
         });
         let length =
             crate::arch::irq::timer::ticks_to_us(ended) - crate::arch::irq::timer::ticks_to_us(started);
-        crate::time::set_slice_end(crate::time::slice_end().saturating_add(length));
+        crate::time::move_slice_end(crate::time::slice_end().saturating_add(length));
         // Debug only, never in a bench build but one recorded negative run (feature
         // `audit-wait-billed`): a hart waiting behind the audit stays billed for the wait.
         #[cfg(not(feature = "audit-wait-billed"))]
@@ -898,8 +899,8 @@ pub fn leave(pid: Pid) {
     if SCHED.with(|s| s.marks.audit_due(crate::time::now_us(), SLICE_US, false)) {
         ProcessTable::with(|ss| MemoryManager::with(|mm| audit_marks(ss, mm)));
     }
-    // An interrupt's paused slice resumes here, before the timer is armed for its end; the rest of
-    // the return, the arming included, is the thread's.
+    // An interrupt's paused slice resumes here, before the timer is armed; the rest of the return,
+    // the arming included, is the thread's. A timer armed for the slice's old end stays armed.
     resume_slice();
     if pid.get() == 1 {
         crate::time::set_slice_end(crate::time::NEVER);

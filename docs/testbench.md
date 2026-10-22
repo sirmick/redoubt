@@ -730,7 +730,8 @@ the other's naps too ([the hart timer](kernel/timer.md#the-hart-timer)). Three c
 ([preemption points](kernel/scheduling.md#preemption-points), [charging](kernel/scheduling.md#charging)):
 `irq_wake_no_preempt=N` needs N device interrupts from user mode that claimed a source, woke one
 budget and returned to the runner with no pick inside, whose hart's next pick or interrupt was the
-runner's slice's end (`sched-irq-wake`), and refuses any device interrupt that began no destruction
+runner's slice's end, passing over timer interrupts that found the slice not over (the device
+interrupt moved its end later) (`sched-irq-wake`), and refuses any device interrupt that began no destruction
 yet did not return to user mode; `irq_billed_to=<mark>` needs every device interrupt that claimed a
 source to charge the budget the program marks after the claim, and lets
 it charge only that budget and, for its return, the one it interrupted: the owner is the program's
@@ -1635,13 +1636,16 @@ interrupts as answer frames, those within six traps of each other being one fram
 harts, and judges the window per frame (`[idle]`'s `min_frames`, `interrupts_per_frame`,
 `sbi_calls_per_frame`, `user_ecalls_per_frame`), the window's background included. So it is a
 per-frame guard, not the per-probe cost ([what a probe costs](servers/ipd.md#the-net-tree)), which
-is this window less `launch-idle`'s: about 26 to 30 interrupts and 32 to 36 SBI calls a probe on
-rv64. Its ceilings are twice the most per frame measured alone, three rounds a width, rounded up:
-85 interrupts and 106 SBI calls a frame (the most 42.1 and 53.0); and user ecalls the most plus
-one, 33.1 a frame: 15 a probe plus about 17 a frame of background, which moves with real time. It
-passes on main. It is kept as the witness that a server's turn made one entry, or a device
-interrupt taken on one hart, must turn down for its own hops, and so that the idle ceilings are not
-the only reading of a frame's cost. It is a host-clock case in the quiet class.
+is this window less `launch-idle`'s: about 23 to 26 interrupts and 29 to 33 SBI calls a probe on
+rv64. Its ceilings are idle ceilings, tighter than `launch-idle`'s twice the most: the most per
+frame measured alone, three rounds a width, plus the rounds' spread, rv32's, the wider, rounded
+up: 44 interrupts and 56 SBI calls a frame (the most 38.8 and 50.3, spreads 4.9 and 5.1), so a
+timer armed only when its target changes ([the hart timer](kernel/timer.md#the-hart-timer)) is
+guarded at rest; and user ecalls the most plus one, 33.1 a frame: 15 a probe plus about 17 a
+frame of background, which moves with real time. It is kept as the witness that a
+server's turn made one entry, or a device interrupt taken on one hart, must turn down for its own
+hops, and so that `launch-idle`'s ceilings are not the only reading of a frame's cost. It is a
+host-clock case in the quiet class.
 
 ### Against Redoubt's sshd
 

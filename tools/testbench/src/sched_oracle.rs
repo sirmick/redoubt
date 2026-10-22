@@ -1267,7 +1267,9 @@ fn interrupt_intervals(records: &[Record]) -> Result<BTreeMap<u64, Vec<(usize, u
 /// budget other than the one it interrupted (`W`) and returned to user mode (`O 1`) with no pick,
 /// requeue, leave or destruction inside; and whose hart's next pick or interrupt is a timer
 /// interrupt that requeued the interrupted budget (`R`) and returned to `kmain` or ended its slice
-/// in place: the runner ran to its slice's end before the woken budget was picked. Every device
+/// in place: the runner ran to its slice's end before the woken budget was picked. Timer
+/// interrupts on the way that found the slice not over and returned to the runner are passed
+/// over: the device interrupt moved the slice's end later. Every device
 /// interrupt from user mode that began no destruction must return to user mode: it ends no slice
 /// and preempts nothing. The case needs `expected` proofs, so it cannot pass for want of
 /// interrupts that could have preempted.
@@ -1303,13 +1305,26 @@ fn check_irq_wake_no_preempt(records: &[Record], expected: usize) -> Result<Stri
             }
             woke += 1;
             // The hart's next pick or interrupt: a timer interrupt whose records requeue the runner.
-            let Some(next) = own(e + 1, records.len()).find(|r| "KIx".contains(r.kind)) else { continue };
-            if next.kind != 'I' || next.id != runner {
-                continue;
-            }
-            let nb = records.iter().position(|r| core::ptr::eq(r, next)).expect("found above");
-            let Some(&(_, ne)) = list.iter().find(|(b, _)| *b == nb) else { continue };
-            if own(nb, ne + 1).any(|r| r.kind == 'R' && r.id == runner) && records[ne].pass != 1 {
+            // A timer interrupt that found the runner's slice not over and returned to it, with no
+            // pick, requeue, leave or destruction inside, is passed over: the timer was armed for a slice end
+            // since moved later (kernel/timer.md, "The hart timer").
+            let mut from = e + 1;
+            let proved = loop {
+                let Some(next) = own(from, records.len()).find(|r| "KIx".contains(r.kind)) else {
+                    break false;
+                };
+                if next.kind != 'I' || next.id != runner {
+                    break false;
+                }
+                let nb = records.iter().position(|r| core::ptr::eq(r, next)).expect("found above");
+                let Some(&(_, ne)) = list.iter().find(|(b, _)| *b == nb) else { break false };
+                if records[ne].pass == 1 && !own(nb, ne + 1).any(|r| "KRDX".contains(r.kind)) {
+                    from = ne + 1;
+                    continue;
+                }
+                break own(nb, ne + 1).any(|r| r.kind == 'R' && r.id == runner) && records[ne].pass != 1;
+            };
+            if proved {
                 *proofs.entry(wakes[0]).or_default() += 1;
             }
         }
@@ -7445,6 +7460,14 @@ mod tests {
         assert!(
             check_irq_wake_no_preempt(&one_hart(&preempted), 1).is_err_and(|e| e.contains("preempted it")),
         );
+        // The timer armed for the slice's old end finds it not over and returns to the spinner:
+        // passed over, the proof is the end after it.
+        let mut early = events.to_vec();
+        early.splice(7..7, [('I', 7, 700), ('=', 800, 700), ('O', 0, 1)]);
+        assert!(check_irq_wake_no_preempt(&one_hart(&early), 1).is_ok());
+        let mut picked_after_early = early.clone();
+        picked_after_early.insert(10, ('K', 8, 10));
+        assert!(check_irq_wake_no_preempt(&one_hart(&picked_after_early), 1).is_err());
         // One that claimed nothing (another hart's) proves nothing, and is no failure.
         let mut unclaimed = events.to_vec();
         unclaimed[2] = ('c', 0, 0);
