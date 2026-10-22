@@ -3,7 +3,8 @@
 //! Decoding reads module literals and untrusted binaries, so it treats its input as hostile:
 //! every length is checked against the bytes that remain, nothing is preallocated from an
 //! untrusted count, and nesting depth is bounded so a crafted term cannot exhaust the stack.
-//! In `safe` mode it also refuses to create atoms.
+//! In `safe` mode it also refuses to create atoms. Given a process's [`Steps`], it asks before
+//! each allocation whose size the input chose, and holds its own copies fallibly.
 //!
 //! Encoding writes what OTP 28 writes, byte for byte, except that maps are always in key order
 //! (as with `term_to_binary(T, [deterministic])`). It uses a work list, not recursion.
@@ -13,7 +14,8 @@ use alloc::vec::Vec;
 use num_bigint::{BigInt, Sign};
 
 use crate::atom::{Atom, AtomError, AtomTable};
-use crate::term::{External, FunView, Heap, Term};
+use crate::process::Steps;
+use crate::term::{Bits, External, FunView, Heap, Term};
 
 /// How deeply tuples, maps and list heads may nest. Lists nest along the tail without limit.
 pub const MAX_DEPTH: usize = 256;
@@ -36,6 +38,9 @@ pub enum EtfError {
     NotExported,
     /// Bytes left over after the term.
     TrailingBytes,
+    /// An allocation the input asked for is past the decoding process's limits, or refused by
+    /// the allocator.
+    NoRoom,
 }
 
 impl From<AtomError> for EtfError {
@@ -69,7 +74,7 @@ impl Loaded<'_> {
 /// Decode one complete term (with its version byte) that must fill all of `bytes`, onto `heap`.
 /// No module counts as loaded, so a fun keeps the identity it was encoded with.
 pub fn decode(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Term, EtfError> {
-    let (t, used) = decode_prefix(bytes, atoms, heap, false, Loaded::NONE)?;
+    let (t, used) = decode_prefix(bytes, atoms, heap, false, Loaded::NONE, None)?;
     if used != bytes.len() {
         return Err(EtfError::TrailingBytes);
     }
@@ -80,14 +85,16 @@ pub fn decode(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Te
 /// an atom that does not already exist is an error rather than a new atom, and an export fun
 /// of a function not exported now is refused, as on BEAM. A fun encoded with a loaded module's
 /// checksum is that code's fun, and any other keeps the identity it came with ([`External`]).
+/// With `steps`, each allocation of a size the input chose is asked for there first.
 pub fn decode_prefix(
     bytes: &[u8],
     atoms: &mut AtomTable,
     heap: &mut Heap,
     safe: bool,
     loaded: Loaded<'_>,
+    steps: Option<&mut Steps>,
 ) -> Result<(Term, usize), EtfError> {
-    let mut r = Reader { bytes, pos: 0, atoms, heap, safe, loaded };
+    let mut r = Reader { bytes, pos: 0, atoms, heap, safe, loaded, steps };
     if r.u8()? != VERSION {
         return Err(EtfError::BadTag(bytes[0]));
     }
@@ -95,7 +102,8 @@ pub fn decode_prefix(
         r.pos = 2;
         let size = r.u32()?;
         let (inflated, used) = inflate(&bytes[r.pos..], size)?;
-        let mut inner = Reader { bytes: &inflated, pos: 0, atoms: r.atoms, heap: r.heap, safe, loaded };
+        let mut inner =
+            Reader { bytes: &inflated, pos: 0, atoms: r.atoms, heap: r.heap, safe, loaded, steps: r.steps };
         let t = inner.term(0)?;
         if inner.pos != inflated.len() {
             return Err(EtfError::Malformed);
@@ -114,7 +122,8 @@ fn inflate(input: &[u8], size: usize) -> Result<(Vec<u8>, usize), EtfError> {
     if size > MAX_INFLATED || size > input.len().saturating_mul(1032).saturating_add(64) {
         return Err(EtfError::Malformed);
     }
-    let mut out = alloc::vec![0u8; size];
+    let mut out = held(size)?;
+    out.resize(size, 0);
     let flags =
         inflate_flags::TINFL_FLAG_PARSE_ZLIB_HEADER | inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF;
     let mut state = alloc::boxed::Box::<DecompressorOxide>::default();
@@ -149,6 +158,14 @@ pub fn encode_compressed(
     Ok(out)
 }
 
+/// An empty vector holding room for `n`, or [`EtfError::NoRoom`]: a copy the decoder holds
+/// aside is asked of the allocator, never grown by `Vec`, whose refusal ends the VM.
+fn held<T>(n: usize) -> Result<Vec<T>, EtfError> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| EtfError::NoRoom)?;
+    Ok(v)
+}
+
 struct Reader<'a, 'b> {
     bytes: &'a [u8],
     pos: usize,
@@ -156,9 +173,25 @@ struct Reader<'a, 'b> {
     heap: &'b mut Heap,
     safe: bool,
     loaded: Loaded<'b>,
+    steps: Option<&'b mut Steps>,
 }
 
 impl<'a> Reader<'a, '_> {
+    /// Room for `cells` more on the heap and `bytes` of a buffer, asked for before an object
+    /// or a binary of a size the input chose is made ([`Steps::allow`]).
+    fn room(&mut self, cells: usize, bytes: usize) -> Result<(), EtfError> {
+        let allowed = self.steps.as_mut().is_none_or(|s| s.allow(self.heap, cells, bytes));
+        if allowed { Ok(()) } else { Err(EtfError::NoRoom) }
+    }
+
+    /// A binary of `data`, its bytes copied to a buffer of their own (`bits` long).
+    fn bits(&mut self, data: &[u8], bits: usize) -> Result<Term, EtfError> {
+        self.room(4, data.len())?;
+        let mut copy = held(data.len())?;
+        copy.extend_from_slice(data);
+        Ok(self.heap.bits(Bits { data: alloc::sync::Arc::new(copy), offset: 0, len: bits }))
+    }
+
     fn take(&mut self, n: usize) -> Result<&'a [u8], EtfError> {
         let end = self.pos.checked_add(n).ok_or(EtfError::Truncated)?;
         let s = self.bytes.get(self.pos..end).ok_or(EtfError::Truncated)?;
@@ -215,6 +248,7 @@ impl<'a> Reader<'a, '_> {
                 // Any non-zero sign byte means negative, as BEAM reads it.
                 let sign = if self.u8()? == 0 { Sign::Plus } else { Sign::Minus };
                 let digits = self.take(n)?;
+                self.room(2, n)?;
                 self.heap.big(BigInt::from_bytes_le(sign, digits))
             }
             118 | 119 | 100 | 115 => {
@@ -236,33 +270,35 @@ impl<'a> Reader<'a, '_> {
             104 | 105 => {
                 let n = if tag == 104 { self.u8()? as usize } else { self.u32()? };
                 self.check_count(n, 1)?;
-                let mut elems = Vec::with_capacity(n);
+                let mut elems = held(n)?;
                 for _ in 0..n {
                     elems.push(self.term(depth + 1)?);
                 }
+                self.room(n + 1, 0)?;
                 self.heap.tuple(&elems)
             }
             106 => Term::Nil,
             107 => {
                 let n = self.u16()?;
                 let bytes = self.take(n)?;
-                let items: Vec<Term> = bytes.iter().map(|&b| Term::Int(b as i64)).collect();
-                self.heap.list(items)
+                self.room(2 * n, 0)?;
+                self.heap.list(bytes.iter().map(|&b| Term::Int(b as i64)))
             }
             108 => {
                 let n = self.u32()?;
                 self.check_count(n, 1)?;
-                let mut items = Vec::with_capacity(n);
+                let mut items = held(n)?;
                 for _ in 0..n {
                     items.push(self.term(depth + 1)?);
                 }
                 let tail = self.term(depth + 1)?;
+                self.room(2 * n, 0)?;
                 self.heap.list_with_tail(items, tail)
             }
             109 => {
                 let n = self.u32()?;
                 let bytes = self.take(n)?;
-                self.heap.binary(bytes)
+                self.bits(bytes, n * 8)?
             }
             77 => {
                 let n = self.u32()?;
@@ -271,23 +307,19 @@ impl<'a> Reader<'a, '_> {
                     return Err(EtfError::Malformed);
                 }
                 let data = self.take(n)?;
-                let bits = crate::term::Bits {
-                    data: alloc::sync::Arc::new(data.to_vec()),
-                    offset: 0,
-                    len: (n - 1) * 8 + last_bits,
-                };
-                self.heap.bits(bits)
+                self.bits(data, (n - 1) * 8 + last_bits)?
             }
             116 => {
                 let n = self.u32()?;
                 self.check_count(n, 2)?;
-                let mut pairs = Vec::with_capacity(n);
-                for _ in 0..n {
+                let mut pairs = held(n)?;
+                for i in 0..n {
                     let k = self.term(depth + 1)?;
                     let v = self.term(depth + 1)?;
-                    pairs.push((k, v));
+                    pairs.push((k, v, i));
                 }
-                self.heap.map_from(pairs)
+                self.room(Heap::map_cells(n), 0)?;
+                self.heap.map_of(&mut pairs)
             }
             113 => {
                 let module = self.atom(depth)?;
@@ -300,6 +332,7 @@ impl<'a> Reader<'a, '_> {
                 if self.safe && !(self.loaded.exported)(&module, &function, arity) {
                     return Err(EtfError::NotExported);
                 }
+                self.room(4, 0)?;
                 self.heap.fun_export(module, function, arity)
             }
             // NEW_PID_EXT and PID_EXT: only this node's pids (there is no distribution).
@@ -366,13 +399,15 @@ impl<'a> Reader<'a, '_> {
         };
         let old_index = u32::try_from(old_index).map_err(|_| EtfError::Malformed)?;
         self.creator(depth)?;
-        let mut env = Vec::with_capacity(num_free);
+        let mut env = held(num_free)?;
         for _ in 0..num_free {
             env.push(self.term(depth + 1)?);
         }
         if self.pos - start != size {
             return Err(EtfError::Malformed);
         }
+        // The fun's own cells, at most a dozen, and its environment.
+        self.room(num_free + 12, 0)?;
         let uniq = u32::try_from(uniq).map_err(|_| EtfError::Malformed)?;
         // The name is not in the external format; the module's fun table has it, if
         // the module is loaded now (and matches), else it is left unknown.
@@ -686,12 +721,12 @@ mod tests {
         let mut h = heap();
         let bytes = [131, 119, 3, 110, 101, 119];
         assert_eq!(
-            decode_prefix(&bytes, &mut atoms, &mut h, true, Loaded::NONE).err(),
+            decode_prefix(&bytes, &mut atoms, &mut h, true, Loaded::NONE, None).err(),
             Some(EtfError::BadAtom)
         );
         assert!(atoms.existing("new").is_none());
-        assert!(decode_prefix(&bytes, &mut atoms, &mut h, false, Loaded::NONE).is_ok());
-        assert!(decode_prefix(&bytes, &mut atoms, &mut h, true, Loaded::NONE).is_ok());
+        assert!(decode_prefix(&bytes, &mut atoms, &mut h, false, Loaded::NONE, None).is_ok());
+        assert!(decode_prefix(&bytes, &mut atoms, &mut h, true, Loaded::NONE, None).is_ok());
     }
 
     /// In safe mode an export fun decodes only if it names a function exported now; without
@@ -711,17 +746,17 @@ mod tests {
             b
         };
         let (map2, map3, nope) = (fun(b"map", 2), fun(b"map", 3), fun(b"nope", 2));
-        assert!(decode_prefix(&map2, &mut atoms, &mut h, false, code).is_ok());
-        assert!(decode_prefix(&map2, &mut atoms, &mut h, true, code).is_ok());
-        assert!(decode_prefix(&nope, &mut atoms, &mut h, false, code).is_ok());
+        assert!(decode_prefix(&map2, &mut atoms, &mut h, false, code, None).is_ok());
+        assert!(decode_prefix(&map2, &mut atoms, &mut h, true, code, None).is_ok());
+        assert!(decode_prefix(&nope, &mut atoms, &mut h, false, code, None).is_ok());
         for refused in [&map3, &nope] {
             assert_eq!(
-                decode_prefix(refused, &mut atoms, &mut h, true, code).err(),
+                decode_prefix(refused, &mut atoms, &mut h, true, code, None).err(),
                 Some(EtfError::NotExported)
             );
         }
         assert_eq!(
-            decode_prefix(&map2, &mut atoms, &mut h, true, Loaded::NONE).err(),
+            decode_prefix(&map2, &mut atoms, &mut h, true, Loaded::NONE, None).err(),
             Some(EtfError::NotExported)
         );
     }
@@ -738,8 +773,11 @@ mod tests {
         let code = Loaded { md5_of: &md5_of, exported: &|_, _, _| true };
         let fun = h.fun_local(module, 0, 1, 5, name, &[Term::Int(1)]);
         let bytes = encode_with(&h, fun, &md5_of).unwrap();
-        assert!(decode_prefix(&bytes, &mut atoms, &mut h, false, code).is_ok());
-        assert_eq!(decode_prefix(&bytes, &mut atoms, &mut h, true, code).err(), Some(EtfError::BadTag(112)));
+        assert!(decode_prefix(&bytes, &mut atoms, &mut h, false, code, None).is_ok());
+        assert_eq!(
+            decode_prefix(&bytes, &mut atoms, &mut h, true, code, None).err(),
+            Some(EtfError::BadTag(112))
+        );
     }
 
     #[test]
@@ -803,18 +841,18 @@ mod tests {
         };
         for (sum, old) in [(0, 2), (0, 40), (9, 2)] {
             let encoded = other(sum, old);
-            let (t, _) = decode_prefix(&encoded, &mut atoms, &mut h, false, code).unwrap();
+            let (t, _) = decode_prefix(&encoded, &mut atoms, &mut h, false, code, None).unwrap();
             let Some(FunView::Local { external: Some(e), .. }) = h.as_fun(t) else { panic!("kept") };
             assert_eq!((e.md5, e.old_index), ([sum; 16], old as u32));
             assert_eq!(encode_with(&h, t, &md5_of).unwrap(), encoded);
         }
         // The loaded code's checksum, whatever its OldIndex: that code's fun.
         let encoded = other(7, 40);
-        let (t, _) = decode_prefix(&encoded, &mut atoms, &mut h, false, code).unwrap();
+        let (t, _) = decode_prefix(&encoded, &mut atoms, &mut h, false, code, None).unwrap();
         assert!(matches!(h.as_fun(t), Some(FunView::Local { external: None, index: 2, .. })));
         assert_eq!(encode_with(&h, t, &md5_of).unwrap(), bytes);
         assert_eq!(h.cmp_exact(t, fun), core::cmp::Ordering::Equal);
-        let kept = decode_prefix(&other(0, 2), &mut atoms, &mut h, false, code).unwrap().0;
+        let kept = decode_prefix(&other(0, 2), &mut atoms, &mut h, false, code, None).unwrap().0;
         assert_ne!(h.cmp_exact(kept, fun), core::cmp::Ordering::Equal);
     }
 

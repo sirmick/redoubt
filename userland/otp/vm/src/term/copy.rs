@@ -112,6 +112,9 @@ impl OwnedTerm {
     /// A copy of this term on `dst`.
     pub fn copy_into(&self, dst: &mut Heap) -> Term { copy(&self.heap, self.root, dst) }
 
+    /// The most cells a copy of this term takes ([`OwnedTerm::copy_into`]): all its heap's.
+    pub fn cells(&self) -> usize { self.heap.terms.len() }
+
     /// Memory in 8-byte words.
     pub fn words(&self) -> u64 { self.heap.words() }
 

@@ -71,6 +71,7 @@ fn collect(c: &mut Ctx, data: &Term, latin1: bool, out: &mut Vec<char>) -> Resul
                             u32::try_from(i).ok().and_then(char::from_u32).filter(|_| !latin1 || i <= 255);
                         match ch {
                             Some(ch) if partial.is_empty() => {
+                                c.held(out, 1)?;
                                 out.push(ch);
                                 continue;
                             }
@@ -92,6 +93,8 @@ fn collect(c: &mut Ctx, data: &Term, latin1: bool, out: &mut Vec<char>) -> Resul
         };
         let b = c.heap().as_bits(bin).filter(|b| b.is_binary()).ok_or_else(|| c.badarg())?;
         let bytes = b.to_bytes();
+        // A character takes a byte at least, and an unfinished sequence's bytes one more.
+        c.held(out, bytes.len() + 1)?;
         if latin1 {
             out.extend(bytes.iter().map(|&x| x as char));
             continue;
@@ -184,10 +187,9 @@ pub fn characters_to_list(c: &mut Ctx, a: &[Term]) -> R {
     let latin1 = in_encoding(c, &a[1])?;
     let mut chars = Vec::new();
     let stop = collect(c, &a[0], latin1, &mut chars)?;
-    let list = {
-        let v = chars.into_iter().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>();
-        c.list(v)
-    };
+    // The list and the tuple a stop puts it in.
+    c.room(2 * chars.len() + 4)?;
+    let list = c.list(chars.into_iter().map(|ch| Term::Int(ch as i64)));
     Ok(finish(c, list, stop))
 }
 

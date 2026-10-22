@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use super::Ctx;
 use crate::process::Exception;
-use crate::term::Term;
+use crate::term::{Heap, Term};
 
 type R = Result<Term, Exception>;
 
@@ -97,41 +97,54 @@ pub fn merge(c: &mut Ctx, a: &[Term]) -> R {
     Ok(left)
 }
 
+/// The entries of map `m` as a list in key order, each `cells` cells made by `entry`, their
+/// room asked for first.
+fn listed(c: &mut Ctx, m: Term, cells: usize, entry: impl Fn(&mut Heap, Term, Term) -> Term) -> R {
+    let n = c.heap().map_len(m).expect("a map");
+    c.room(n * (2 + cells))?;
+    Ok(c.heap_mut().map_list(m, entry))
+}
+
 pub fn keys(c: &mut Ctx, a: &[Term]) -> R {
     let m = map(c, &a[0])?;
-    let keys: Vec<Term> = entries(c, m).into_iter().map(|(k, _)| k).collect();
-    Ok(c.list(keys))
+    listed(c, m, 0, |_, k, _| k)
 }
 
 pub fn values(c: &mut Ctx, a: &[Term]) -> R {
     let m = map(c, &a[0])?;
-    let values: Vec<Term> = entries(c, m).into_iter().map(|(_, v)| v).collect();
-    Ok(c.list(values))
+    listed(c, m, 0, |_, _, v| v)
 }
 
 pub fn to_list(c: &mut Ctx, a: &[Term]) -> R {
     let m = map(c, &a[0])?;
-    let pairs: Vec<Term> = entries(c, m).into_iter().map(|(k, v)| c.tuple(&[k, v])).collect();
-    Ok(c.list(pairs))
+    listed(c, m, 3, |h, k, v| h.tuple(&[k, v]))
+}
+
+/// A map of the `(key, value)` pairs `pair` finds in each element of list `t` (`badarg` for one
+/// it refuses), later pairs winning, as in Erlang: the pairs held aside and the map's room
+/// asked for first.
+fn map_of(c: &mut Ctx, t: Term, pair: impl Fn(&Heap, Term) -> Option<(Term, Term)>) -> R {
+    let n = c.list_len(t)?;
+    let mut pairs = Vec::new();
+    c.held(&mut pairs, n)?;
+    for (i, item) in c.heap().list_iter(t).map_while(Result::ok).enumerate() {
+        let (k, v) = pair(c.heap(), item).ok_or_else(|| c.badarg())?;
+        pairs.push((k, v, i));
+    }
+    c.room(Heap::map_cells(n))?;
+    Ok(c.heap_mut().map_of(&mut pairs))
 }
 
 pub fn from_list(c: &mut Ctx, a: &[Term]) -> R {
-    let items = c.list_arg(a[0])?;
-    let mut pairs = Vec::with_capacity(items.len());
-    for item in items {
-        match c.heap().as_tuple(item) {
-            Some(&[k, v]) => pairs.push((k, v)),
-            _ => return Err(c.badarg()),
-        }
-    }
-    // Later pairs win, as in Erlang.
-    Ok(c.map_from(pairs))
+    map_of(c, a[0], |h, item| match h.as_tuple(item) {
+        Some(&[k, v]) => Some((k, v)),
+        _ => None,
+    })
 }
 
 pub fn from_keys(c: &mut Ctx, a: &[Term]) -> R {
-    let keys = c.list_arg(a[0])?;
     let v = a[1];
-    Ok(c.map_from(keys.into_iter().map(|k| (k, v))))
+    map_of(c, a[0], |_, k| Some((k, v)))
 }
 
 /// `erts_internal:map_next(Path, Map, Mode)`, the engine behind `maps:next/1`, `maps:to_list/1`

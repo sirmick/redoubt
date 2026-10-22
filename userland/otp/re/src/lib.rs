@@ -667,8 +667,7 @@ struct RunOpts {
     kind: Kind,
 }
 
-fn run_options(c: &Ctx, opts: &[Term], flags: &mut Flags) -> Result<RunOpts, Exception> {
-    let h = c.heap();
+fn run_options(c: &mut Ctx, opts: &[Term], flags: &mut Flags) -> Result<RunOpts, Exception> {
     let mut r = RunOpts {
         global: false,
         offset: 0,
@@ -685,7 +684,7 @@ fn run_options(c: &Ctx, opts: &[Term], flags: &mut Flags) -> Result<RunOpts, Exc
             Some("notempty") => r.notempty = true,
             Some("notempty_atstart") => r.notempty_atstart = true,
             Some("notbol" | "noteol" | "report_errors") => {}
-            _ => match h.as_tuple(*o) {
+            _ => match c.heap().as_tuple(*o) {
                 Some(&[k, v]) if atom(&k) == Some("offset") => {
                     r.offset = v.as_usize().ok_or_else(|| c.badarg())?
                 }
@@ -704,7 +703,7 @@ fn run_options(c: &Ctx, opts: &[Term], flags: &mut Flags) -> Result<RunOpts, Exc
                     };
                 }
                 _ => {
-                    if !compile_option(h, flags, o) {
+                    if !compile_option(c.heap(), flags, o) {
                         return Err(c.badarg());
                     }
                 }
@@ -714,7 +713,7 @@ fn run_options(c: &Ctx, opts: &[Term], flags: &mut Flags) -> Result<RunOpts, Exc
     Ok(r)
 }
 
-fn spec(c: &Ctx, t: &Term) -> Result<Spec, Exception> {
+fn spec(c: &mut Ctx, t: &Term) -> Result<Spec, Exception> {
     Ok(match atom(t) {
         Some("all") => Spec::All,
         Some("all_but_first") => Spec::AllButFirst,

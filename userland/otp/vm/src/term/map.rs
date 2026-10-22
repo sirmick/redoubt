@@ -166,17 +166,67 @@ impl Heap {
 
     /// A map of `pairs`; a later pair wins over an earlier one with an equal key.
     pub fn map_from(&mut self, pairs: impl IntoIterator<Item = (Term, Term)>) -> Term {
-        let mut m = self.empty_map();
-        let (mut len, mut root) = (0, Term::Nil);
-        for (k, v) in pairs {
-            let (r, added) = self.insert(root, k, v);
-            root = r;
-            len += added as usize;
+        let mut placed: Vec<(Term, Term, usize)> =
+            pairs.into_iter().enumerate().map(|(i, (k, v))| (k, v, i)).collect();
+        self.map_of(&mut placed)
+    }
+
+    /// The cells a map of `n` keys takes: a node each, and the map.
+    pub const fn map_cells(n: usize) -> usize { 6 * n + 3 }
+
+    /// A map of `pairs`, each a key, its value and its place: a later place wins over an earlier
+    /// one with an equal key. The pairs are sorted where they are and the tree built balanced
+    /// from them, a node for each key and nothing more, so with room for [`Heap::map_cells`] of
+    /// them the heap grows nothing, and the copy of the pairs is the only one held.
+    pub fn map_of(&mut self, pairs: &mut Vec<(Term, Term, usize)>) -> Term {
+        // Unstable, so it holds nothing more; the place keeps equal keys in order.
+        pairs.sort_unstable_by(|a, b| compare(self, a.0, self, b.0, true).then(a.2.cmp(&b.2)));
+        // Of equal keys the first is kept, as an insert keeps it, with the last value.
+        pairs.dedup_by(|later, kept| {
+            let equal = compare(self, later.0, self, kept.0, true) == Ordering::Equal;
+            if equal {
+                kept.1 = later.1;
+            }
+            equal
+        });
+        if pairs.is_empty() {
+            return self.empty_map();
         }
-        if len > 0 {
-            m = self.new_map(len, root);
+        let root = self.tree(pairs);
+        self.new_map(pairs.len(), root)
+    }
+
+    /// A balanced tree of sorted, distinct `pairs`: halves differ by at most one key, so heights
+    /// by at most one. Recursion is bounded by the height.
+    fn tree(&mut self, pairs: &[(Term, Term, usize)]) -> Term {
+        if pairs.is_empty() {
+            return Term::Nil;
         }
-        m
+        let mid = pairs.len() / 2;
+        let left = self.tree(&pairs[..mid]);
+        let right = self.tree(&pairs[mid + 1..]);
+        self.new_node(pairs[mid].0, pairs[mid].1, left, right)
+    }
+
+    /// The entries of map `m` as a list in key order, each made by `entry`, with no copy of them
+    /// held aside: walked from the largest key, each consed in front of those after it.
+    pub fn map_list(&mut self, m: Term, entry: impl Fn(&mut Heap, Term, Term) -> Term) -> Term {
+        let (_, root) = self.map_parts(m).expect("a map");
+        let mut list = Term::Nil;
+        // The nodes on the path to the current one: at most the height.
+        let mut stack = Vec::new();
+        let mut cur = root;
+        loop {
+            while let Some(n) = self.node(cur) {
+                stack.push(n);
+                cur = n.right;
+            }
+            let Some(n) = stack.pop() else { break };
+            let e = entry(self, n.key, n.value);
+            list = self.cons(e, list);
+            cur = n.left;
+        }
+        list
     }
 
     /// The entries of a map in key order (`None` if `m` is not a map).

@@ -822,6 +822,29 @@ impl Ctx<'_> {
         self.answer(ask)
     }
 
+    /// Room in `v`, a native's own copy held aside while it works, for `more` items, asked of the
+    /// allocator as [`Ctx::room`] asks: a refusal ends the process, not the VM. Counted toward no
+    /// limit: it holds a word or two for each element, character or object of a term the
+    /// process holds or is given, and ends with the call.
+    pub fn held<T>(&mut self, v: &mut Vec<T>, more: usize) -> Result<(), Exception> {
+        if v.capacity() - v.len() >= more {
+            return Ok(());
+        }
+        let ask = self.p.ask(self.sched.limits.max_heap_words, 0, |_, _| v.try_reserve(more).is_ok());
+        self.answer(ask)
+    }
+
+    /// The limits of a native that allocates in many steps of sizes its input chooses
+    /// ([`crate::process::Process::steps`]); one refused, it returns [`Ctx::refused`].
+    pub fn steps(&self) -> crate::process::Steps { self.p.steps(self.sched.limits.max_heap_words) }
+
+    /// What a native returns when a step [`Ctx::steps`] allowed is refused, having changed
+    /// nothing: it is called again after a collection, or the process is killed.
+    pub fn refused(&mut self) -> Exception {
+        let ask = self.p.refuse();
+        self.answer(ask).expect_err("a refusal")
+    }
+
     /// What a native does with the answer to an allocation it asked for. The error is never
     /// raised: the native's caller acts on the process's [`crate::process::Room`] first.
     fn answer(&mut self, ask: Ask) -> Result<(), Exception> {
@@ -902,9 +925,13 @@ impl Ctx<'_> {
         Ok(n)
     }
 
-    /// The elements of a proper list, or `badarg`.
-    pub fn list_arg(&self, t: Term) -> Result<Vec<Term>, Exception> {
-        self.p.heap.to_vec(t).ok_or_else(|| self.badarg())
+    /// The elements of a proper list, or `badarg`: a copy held aside, asked for ([`Ctx::held`]).
+    pub fn list_arg(&mut self, t: Term) -> Result<Vec<Term>, Exception> {
+        let n = self.list_len(t)?;
+        let mut out = Vec::new();
+        self.held(&mut out, n)?;
+        out.extend(self.p.heap.list_iter(t).map_while(Result::ok));
+        Ok(out)
     }
 
     /// The elements of a tuple (copied out, so the heap is free for building), or `None`.

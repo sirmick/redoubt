@@ -219,6 +219,30 @@ pub enum Ask {
     Refused,
 }
 
+/// The steps of a native that allocates in many, each of a size its input chooses
+/// ([`Process::steps`]).
+pub struct Steps {
+    /// Words the process may take before a limit.
+    left: u64,
+    /// The most cells its heap may grow to by itself.
+    most: usize,
+    /// Words asked for so far.
+    asked: u64,
+}
+
+impl Steps {
+    /// Whether `heap`, the asking process's, may take `cells` more cells and `bytes` of a buffer
+    /// the caller then reserves itself, fallibly: within the limits counting every step so far
+    /// (the first steps, up to the headroom a heap keeps, as [`Process::ask`] does not check
+    /// them), and the cells given by the allocator now.
+    pub fn allow(&mut self, heap: &mut Heap, cells: usize, bytes: usize) -> bool {
+        let words = (2 * cells as u64).saturating_add(bytes.div_ceil(8) as u64);
+        self.asked = self.asked.saturating_add(words);
+        (self.asked <= 2 * HEADROOM_CELLS as u64 || self.asked <= self.left)
+            && heap.try_room(cells, self.most)
+    }
+}
+
 /// Off-heap binary bytes a heap may reference before its first collection. Large binaries
 /// cost the heap only a cell or two, so they get a budget of their own (BEAM's virtual heap).
 pub const MIN_BINARY_BYTES: usize = 1 << 20;
@@ -392,9 +416,6 @@ impl Process {
     /// with nothing changed and run the asking instruction again after a collection; the second
     /// time, it is to be killed, as a process over `max_heap_size` is.
     pub fn ask(&mut self, vm_limit: u64, words: u64, alloc: impl FnOnce(&mut Heap, usize) -> bool) -> Ask {
-        // A collection made for the asking instruction serves all it asks for until it ends,
-        // when the interpreter clears it.
-        let collected = self.room == Room::Collected;
         let most = self.most_cells(vm_limit);
         // No more than the headroom every heap keeps is checked against the limit at the end of
         // the slice, as the heap's own growth is.
@@ -402,12 +423,34 @@ impl Process {
         if (small || self.within(vm_limit, words)) && alloc(&mut self.heap, most) {
             return Ask::Granted;
         }
-        if collected {
+        self.refuse()
+    }
+
+    /// An allocation the process asked for is refused: run again after a collection the first
+    /// time, killed the second ([`Process::ask`]).
+    pub fn refuse(&mut self) -> Ask {
+        // A collection made for the asking instruction serves all it asks for until it ends,
+        // when the interpreter clears it.
+        if self.room == Room::Collected {
             self.room = Room::Refused;
             return Ask::Refused;
         }
         self.room = Room::Wanted;
         Ask::Collect
+    }
+
+    /// What a native that allocates in many steps, each of a size its input chooses (a term it
+    /// decodes), may take: each step is asked as [`Process::ask`] asks, all of them together
+    /// counted against the limits from what the process held when it began.
+    pub fn steps(&self, vm_limit: u64) -> Steps {
+        let usage = crate::memory::process(self);
+        let own = self.max_heap;
+        let mut left = vm_limit.saturating_sub(usage.total_words());
+        if own.size > 0 && own.kill {
+            let used = if own.include_shared_binaries { usage.total_words() } else { usage.words };
+            left = left.min(own.size.saturating_sub(used));
+        }
+        Steps { left, most: self.most_cells(vm_limit), asked: 0 }
     }
 
     /// Ask for room for `cells` more heap cells ([`Process::ask`]).

@@ -223,7 +223,10 @@ pub fn send3(c: &mut Ctx, a: &[Term]) -> R {
 
 // ---- aliases ----
 
-fn monitor_options(c: &Ctx, opts: &Term) -> Result<(Option<crate::vm::AliasMode>, Option<Term>), Exception> {
+fn monitor_options(
+    c: &mut Ctx,
+    opts: &Term,
+) -> Result<(Option<crate::vm::AliasMode>, Option<Term>), Exception> {
     use crate::vm::AliasMode;
     let (mut mode, mut tag) = (None, None);
     for o in c.list_arg(*opts)? {
@@ -659,9 +662,17 @@ pub fn get(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn get_all(c: &mut Ctx, _a: &[Term]) -> R {
-    let entries = c.p.dictionary.entries().to_vec();
-    let v: Vec<Term> = entries.into_iter().map(|(k, v)| c.tuple(&[k, v])).collect();
-    Ok(c.list(v))
+    c.room(5 * c.p.dictionary.len())?;
+    Ok(pairs(&mut c.p.heap, c.p.dictionary.entries()))
+}
+
+/// The dictionary's `entries` as a list of `{Key, Value}`, built on `heap` with no copy held
+/// aside: five cells an entry, asked for by the caller.
+fn pairs(heap: &mut crate::term::Heap, entries: &[(Term, Term)]) -> Term {
+    entries.iter().rev().fold(Term::Nil, |list, &(k, v)| {
+        let pair = heap.tuple(&[k, v]);
+        heap.cons(pair, list)
+    })
 }
 
 pub fn erase(c: &mut Ctx, a: &[Term]) -> R {
@@ -1065,7 +1076,7 @@ pub fn halt(c: &mut Ctx, a: &[Term]) -> R {
         None => 0,
         Some(Term::Int(n)) if *n >= 0 => *n,
         Some(Term::Atom(x)) if x.as_str() == "abort" => 1,
-        Some(t) if c.heap().to_vec(*t).is_some() => 1,
+        Some(t) if c.heap().is_proper_list(*t) => 1,
         _ => return Err(c.badarg()),
     };
     if let Some(opts) = a.get(1) {
@@ -1135,15 +1146,16 @@ pub fn registered(c: &mut Ctx, _a: &[Term]) -> R {
 /// `get_keys()`: the process dictionary's keys; `get_keys(Value)`: those whose value is
 /// exactly `Value`.
 pub fn get_keys(c: &mut Ctx, a: &[Term]) -> R {
-    let h = &c.p.heap;
-    let keys: Vec<Term> =
-        c.p.dictionary
-            .entries()
-            .iter()
-            .filter(|(_, v)| a.first().is_none_or(|w| h.eq_exact(*v, *w)))
-            .map(|(k, _)| *k)
-            .collect();
-    Ok(c.list(keys))
+    let wanted = |h: &crate::term::Heap, v: Term| a.first().is_none_or(|w| h.eq_exact(v, *w));
+    let n = c.p.dictionary.entries().iter().filter(|(_, v)| wanted(&c.p.heap, *v)).count();
+    c.room(2 * n)?;
+    let mut keys = Term::Nil;
+    for &(k, v) in c.p.dictionary.entries().iter().rev() {
+        if wanted(&c.p.heap, v) {
+            keys = c.p.heap.cons(k, keys);
+        }
+    }
+    Ok(keys)
 }
 
 /// `now()`: `{MegaSecs, Secs, MicroSecs}` of the system clock, strictly increasing.
@@ -1176,7 +1188,7 @@ pub fn bump_reductions(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `link(Pid, Options)`: the options (`priority`, OTP 28) do not change anything here.
 pub fn link2(c: &mut Ctx, a: &[Term]) -> R {
-    c.heap().to_vec(a[1]).ok_or_else(|| c.badarg())?;
+    c.list_len(a[1])?;
     link(c, &a[..1])
 }
 
@@ -1274,9 +1286,10 @@ pub fn garbage_collect(c: &mut Ctx, _a: &[Term]) -> R {
 }
 
 pub fn erase_all(c: &mut Ctx, _a: &[Term]) -> R {
+    // Asked for while the dictionary still holds them.
+    c.room(5 * c.p.dictionary.len())?;
     let old = c.p.dictionary.take();
-    let v: Vec<Term> = old.into_iter().map(|(k, v)| c.tuple(&[k, v])).collect();
-    Ok(c.list(v))
+    Ok(pairs(&mut c.p.heap, &old))
 }
 
 /// `unique_integer()` and `unique_integer([positive | monotonic])`. References come from a
