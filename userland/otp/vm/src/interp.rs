@@ -649,7 +649,7 @@ fn hibernate(sys: &mut Sched<'_>, p: &mut Process, arity: usize, kind: Kind) -> 
     let (Term::Atom(m), Term::Atom(f)) = (p.x[0], p.x[1]) else {
         return Err(badarg());
     };
-    let args = p.heap.to_vec(p.x[2]).filter(|a| a.len() <= 255).ok_or_else(badarg)?;
+    let args = p.heap.to_vec_at_most(p.x[2], 255).ok_or_else(badarg)?;
     let Some(Target::Code(cp)) = sys.resolve(&m, &f, args.len() as u32) else {
         return Err(Fault::Raise(Exception::error(Term::Atom(sys.atoms.undef))));
     };
@@ -681,11 +681,8 @@ fn apply(sys: &mut Sched<'_>, p: &mut Process, arity: usize, kind: Kind) -> R<Fl
     let args_term = p.x[arity - 1];
     let args = p
         .heap
-        .to_vec(args_term)
+        .to_vec_at_most(args_term, 255)
         .ok_or_else(|| Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg))))?;
-    if args.len() > 255 {
-        return Err(Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg))));
-    }
     if arity == 2 {
         let fun = p.x[0];
         let n = args.len();

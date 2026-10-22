@@ -67,7 +67,8 @@ pub fn part(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn copy(c: &mut Ctx, a: &[Term]) -> R {
-    let bytes = bytes_of(c, &a[0])?;
+    let b = bin(c, &a[0])?;
+    let bytes = b.to_bytes();
     let n = match a.get(1) {
         None => 1,
         Some(t) => t.as_usize().ok_or_else(|| c.badarg())?,
@@ -114,7 +115,8 @@ pub fn encode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn decode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
-    let bytes = bytes_of(c, &a[0])?;
+    let b = bin(c, &a[0])?;
+    let bytes = b.to_bytes();
     let little = a.get(1).is_some_and(|e| e.is_atom(&c.atoms.little));
     if a.len() == 2 && !little && !a[1].is_atom(&c.atoms.big) {
         return Err(c.badarg());
@@ -191,7 +193,7 @@ impl core::ops::Deref for Pattern {
 }
 
 /// A pattern: one binary or a list of them, none empty, or `compile_pattern/1`'s `{bm | ac, Ref}`.
-fn pattern(c: &Ctx, t: &Term) -> Result<Pattern, Exception> {
+fn pattern(c: &mut Ctx, t: &Term) -> Result<Pattern, Exception> {
     let list = match t {
         Term::Bits(_) => alloc::vec![*t],
         Term::Tuple(_) => {
@@ -203,7 +205,7 @@ fn pattern(c: &Ctx, t: &Term) -> Result<Pattern, Exception> {
             }
             .ok_or_else(|| c.badarg());
         }
-        _ => c.heap().to_vec(*t).ok_or_else(|| c.badarg())?,
+        _ => c.list_arg(*t)?,
     };
     let mut pats = Vec::with_capacity(list.len());
     for p in &list {
@@ -326,21 +328,17 @@ pub fn split(c: &mut Ctx, a: &[Term]) -> R {
     Ok(c.list(pieces))
 }
 
-fn common(c: &Ctx, a: &Term, suffix: bool) -> R {
-    let bins: Vec<Vec<u8>> = c
-        .heap()
-        .to_vec(*a)
-        .ok_or_else(|| c.badarg())?
-        .iter()
-        .map(|t| bytes_of(c, t))
-        .collect::<Result<_, _>>()?;
+fn common(c: &mut Ctx, a: &Term, suffix: bool) -> R {
+    let bits: Vec<Bits> = c.list_arg(*a)?.iter().map(|t| bin(c, t)).collect::<Result<_, _>>()?;
+    // Each binary's bytes where they are; only one off a byte boundary is copied.
+    let bins: Vec<_> = bits.iter().map(Bits::to_bytes).collect();
     if bins.is_empty() {
         return Err(c.badarg());
     }
     let shortest = bins.iter().map(|b| b.len()).min().unwrap_or(0);
     let n = (0..shortest)
         .take_while(|&i| {
-            let at = |b: &Vec<u8>| if suffix { b[b.len() - 1 - i] } else { b[i] };
+            let at = |b: &[u8]| if suffix { b[b.len() - 1 - i] } else { b[i] };
             bins.iter().all(|b| at(b) == at(&bins[0]))
         })
         .count();

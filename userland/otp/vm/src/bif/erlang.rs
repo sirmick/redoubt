@@ -43,7 +43,16 @@ pub fn is_tuple(c: &mut Ctx, a: &[Term]) -> R { Ok(c.bool(matches!(a[0], Term::T
 
 // ---- tuples ----
 
-fn tuple(c: &Ctx, t: &Term) -> Result<Vec<Term>, Exception> { c.tuple_elems(*t).ok_or_else(|| c.badarg()) }
+/// The elements of tuple `t` (`badarg` for anything else): a copy held aside, asked for
+/// ([`Ctx::held`]).
+fn tuple(c: &mut Ctx, t: &Term) -> Result<Vec<Term>, Exception> {
+    let n = tuple_len(c, t)?;
+    // Room for one more, which append_element and insert_element add.
+    let mut v = Vec::new();
+    c.held(&mut v, n + 1)?;
+    v.extend_from_slice(c.heap().as_tuple(*t).expect("a tuple"));
+    Ok(v)
+}
 
 /// The size of tuple `t`, for asking room before copying it.
 fn tuple_len(c: &Ctx, t: &Term) -> Result<usize, Exception> {
@@ -328,21 +337,132 @@ fn radix(c: &Ctx, a: &[Term]) -> Result<u32, Exception> {
     }
 }
 
-fn integer_text(c: &Ctx, a: &[Term]) -> Result<String, Exception> {
-    let r = radix(c, a)?;
-    let i = c.heap().as_bigint(a[0]).ok_or_else(|| c.badarg())?;
-    // Erlang prints digits above 9 in upper case.
-    Ok(i.to_str_radix(r).to_uppercase())
+/// An integer to print: its magnitude as 64-bit words, least significant first, and whether it
+/// is negative.
+struct Integer {
+    words: Vec<u64>,
+    negative: bool,
+}
+
+/// Integer `t` to print in radix `r` (`badarg` for anything else), and what `room` makes of the
+/// most characters its text takes, asked for first; then a bignum's magnitude is held aside,
+/// asked for too ([`Ctx::held`]), and never cloned as a bignum.
+fn integer<T>(
+    c: &mut Ctx,
+    t: Term,
+    r: u32,
+    room: impl FnOnce(&mut Ctx, usize) -> Result<T, Exception>,
+) -> Result<(Integer, T), Exception> {
+    let (bits, negative) = match t {
+        Term::Int(i) => ((64 - i.unsigned_abs().leading_zeros()) as usize, i < 0),
+        Term::Big(_) => {
+            let b = c.heap().as_big(t).expect("a bignum");
+            (b.bits() as usize, b.sign() == num_bigint::Sign::Minus)
+        }
+        _ => return Err(c.badarg()),
+    };
+    let room = room(c, most_digits(bits, r) + negative as usize)?;
+    let words = match t {
+        Term::Big(_) => {
+            let mut words = Vec::new();
+            c.held(&mut words, bits.div_ceil(64))?;
+            words.extend(c.heap().as_big(t).expect("a bignum").magnitude().iter_u64_digits());
+            words
+        }
+        _ => alloc::vec![t.as_i64().expect("a small integer").unsigned_abs()],
+    };
+    Ok((Integer { words, negative }, room))
+}
+
+/// `r^k`, the largest power of radix `r` a word holds, and `k`.
+fn word_base(r: u32) -> (u64, usize) {
+    let (mut base, mut k) = (r as u64, 1);
+    while let Some(b) = base.checked_mul(r as u64) {
+        (base, k) = (b, k + 1);
+    }
+    (base, k)
+}
+
+/// The most digits a magnitude of `bits` bits takes in radix `r`: exactly, for a power of two;
+/// else `k` for each `r^k` the magnitude may hold, `r^k` being at least `2^ilog2(r^k)`.
+fn most_digits(bits: usize, r: u32) -> usize {
+    if r.is_power_of_two() {
+        return bits.div_ceil(r.trailing_zeros() as usize).max(1);
+    }
+    let (base, k) = word_base(r);
+    (k * bits.div_ceil(base.ilog2() as usize)).max(1)
+}
+
+/// The digits of magnitude `words` in radix `r`, least significant first, upper case above 9
+/// as Erlang prints them, each handed to `digit`. A power of two's are read off the bits; any
+/// other radix's come `k` at a time from dividing `words` in place by `r^k`, so nothing is made
+/// but the digits.
+fn digits(words: &mut [u64], r: u32, mut digit: impl FnMut(u8)) {
+    const CHARS: &[u8; 36] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut len = words.iter().rposition(|&w| w != 0).map_or(0, |top| top + 1);
+    if len == 0 {
+        return digit(b'0');
+    }
+    if r.is_power_of_two() {
+        let (step, mask) = (r.trailing_zeros() as usize, r as u64 - 1);
+        let bits = 64 * len - words[len - 1].leading_zeros() as usize;
+        for at in (0..bits).step_by(step) {
+            let (w, o) = (at / 64, at % 64);
+            let mut v = words[w] >> o;
+            if o + step > 64 && w + 1 < len {
+                v |= words[w + 1] << (64 - o);
+            }
+            digit(CHARS[(v & mask) as usize]);
+        }
+        return;
+    }
+    let (base, k) = word_base(r);
+    let r = r as u64;
+    loop {
+        let mut rem = 0u64;
+        for w in words[..len].iter_mut().rev() {
+            let cur = (rem as u128) << 64 | *w as u128;
+            *w = (cur / base as u128) as u64;
+            rem = (cur % base as u128) as u64;
+        }
+        while len > 0 && words[len - 1] == 0 {
+            len -= 1;
+        }
+        // The most significant part's digits stop at its last non-zero one.
+        let mut n = 0;
+        while (len > 0 && n < k) || rem > 0 {
+            digit(CHARS[(rem % r) as usize]);
+            rem /= r;
+            n += 1;
+        }
+        if len == 0 {
+            return;
+        }
+    }
 }
 
 pub fn integer_to_list(c: &mut Ctx, a: &[Term]) -> R {
-    let s = integer_text(c, a)?;
-    Ok(c.string(&s))
+    let r = radix(c, a)?;
+    // Two cells a character, asked for before the digits are made.
+    let (mut i, ()) = integer(c, a[0], r, |c, most| c.room(2 * most))?;
+    let mut list = Term::Nil;
+    digits(&mut i.words, r, |d| list = c.cons(Term::Int(d as i64), list));
+    if i.negative {
+        list = c.cons(Term::Int(b'-' as i64), list);
+    }
+    Ok(list)
 }
 
 pub fn integer_to_binary(c: &mut Ctx, a: &[Term]) -> R {
-    let s = integer_text(c, a)?;
-    Ok(c.binary(s.as_bytes()))
+    let r = radix(c, a)?;
+    let (mut i, mut out) = integer(c, a[0], r, |c, most| c.buffer(most))?;
+    digits(&mut i.words, r, |d| out.push(d));
+    if i.negative {
+        out.push(b'-');
+    }
+    out.reverse();
+    let len = out.len() * 8;
+    Ok(crate::bits::Builder::from_parts(out, len).finish(c.heap_mut()))
 }
 
 fn parse_integer(c: &mut Ctx, s: &str, r: u32) -> R {
@@ -431,9 +551,10 @@ pub fn dt_same(_c: &mut Ctx, a: &[Term]) -> R { Ok(a[0]) }
 
 pub fn binary_to_integer(c: &mut Ctx, a: &[Term]) -> R {
     let b = binary(c, &a[0])?;
-    let s = core::str::from_utf8(&b.to_bytes()).map_err(|_| c.badarg())?.to_string();
+    let bytes = b.to_bytes();
+    let s = core::str::from_utf8(&bytes).map_err(|_| c.badarg())?;
     let r = radix(c, a)?;
-    parse_integer(c, &s, r)
+    parse_integer(c, s, r)
 }
 
 /// `float_to_list/1`: the classic 20-significant-digit scientific format, e.g.
@@ -617,7 +738,7 @@ pub fn delete_element(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `float_to_list(F, Options)` / `float_to_binary(F, Options)`: `{decimals, N}`, `compact`,
 /// `{scientific, N}`, `short`. Later options override earlier ones, as in BEAM.
-fn float_text(c: &Ctx, f: f64, opts: &Term) -> Result<String, Exception> {
+fn float_text(c: &mut Ctx, f: f64, opts: &Term) -> Result<String, Exception> {
     enum Fmt {
         Scientific(usize),
         Decimals(usize),
@@ -704,8 +825,9 @@ pub fn list_to_float(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn binary_to_float(c: &mut Ctx, a: &[Term]) -> R {
     let b = binary(c, &a[0])?;
-    let s = core::str::from_utf8(&b.to_bytes()).map_err(|_| c.badarg())?.to_string();
-    parse_float(c, &s)
+    let bytes = b.to_bytes();
+    let s = core::str::from_utf8(&bytes).map_err(|_| c.badarg())?;
+    parse_float(c, s)
 }
 
 // ---- the external term format ----
@@ -799,7 +921,7 @@ pub fn string_list_to_float(c: &mut Ctx, a: &[Term]) -> R {
 /// `used` (also return how many bytes were read).
 pub fn binary_to_term(c: &mut Ctx, a: &[Term]) -> R {
     let b = binary(c, &a[0])?;
-    let bytes = b.to_bytes().into_owned();
+    let bytes = b.to_bytes();
     let (mut safe, mut used) = (false, false);
     if let Some(opts) = a.get(1) {
         for o in c.list_arg(*opts)? {
@@ -810,15 +932,21 @@ pub fn binary_to_term(c: &mut Ctx, a: &[Term]) -> R {
             }
         }
     }
+    // What it decodes is asked for as it goes: refused, the call runs again after a collection
+    // or the process is killed.
+    let mut steps = c.steps();
     // A fun names its module's code by checksum: one of the loaded code's is that code's fun;
     // and in safe mode an export fun must name a function exported now.
     let decoded = {
         let mut guard = c.sys();
         let (atoms, md5_of, exported) = guard.term_decoding();
         let loaded = crate::etf::Loaded { md5_of: &md5_of, exported: &exported };
-        crate::etf::decode_prefix(&bytes, atoms, &mut c.p.heap, safe, loaded)
+        crate::etf::decode_prefix(&bytes, atoms, &mut c.p.heap, safe, loaded, Some(&mut steps))
     };
-    let (t, n) = decoded.map_err(|_| c.badarg())?;
+    let (t, n) = match decoded {
+        Err(crate::etf::EtfError::NoRoom) => return Err(c.refused()),
+        decoded => decoded.map_err(|_| c.badarg())?,
+    };
     if used {
         return Ok(c.tuple(&[t, Term::Int(n as i64)]));
     }
@@ -881,4 +1009,41 @@ pub fn flat_size(c: &mut Ctx, a: &[Term]) -> R {
         };
     }
     Ok(Term::Int(words as i64))
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    use num_bigint::BigUint;
+
+    use super::{digits, most_digits};
+
+    /// An integer's digits in every radix are num-bigint's, at most the bound asked for, for
+    /// zero, single words, a word's edges and magnitudes of many words.
+    #[test]
+    fn digits_are_the_text_in_every_radix_within_their_bound() {
+        let mut values: Vec<BigUint> =
+            [0u64, 1, 9, 10, 35, 36, u64::MAX].into_iter().map(BigUint::from).collect();
+        let big = BigUint::from(u64::MAX) * BigUint::from(0x1234_5678_9abc_def1u64) + BigUint::from(77u32);
+        values.push(big.clone());
+        values.push(BigUint::from(1u32) << 1000usize);
+        values.push((BigUint::from(1u32) << 4099usize) - BigUint::from(1u32));
+        values.push(big.pow(9));
+        for v in &values {
+            for r in 2..=36u32 {
+                let mut words: Vec<u64> = v.iter_u64_digits().collect();
+                if words.is_empty() {
+                    words.push(0);
+                }
+                let mut text = Vec::new();
+                digits(&mut words, r, |d| text.push(d));
+                text.reverse();
+                let text = String::from_utf8(text).unwrap();
+                assert_eq!(text, v.to_str_radix(r).to_uppercase(), "{v} in radix {r}");
+                assert!(text.len() <= most_digits(v.bits() as usize, r), "{v} in radix {r}");
+            }
+        }
+    }
 }

@@ -586,7 +586,7 @@ fn offset(c: &Ctx, t: &Term) -> Result<u64, Exception> {
 }
 
 /// The bytes of an iovec (a list of binaries).
-fn iovec(c: &Ctx, t: &Term) -> Result<Vec<u8>, Exception> {
+fn iovec(c: &mut Ctx, t: &Term) -> Result<Vec<u8>, Exception> {
     let mut out = Vec::new();
     for b in c.list_arg(*t)? {
         match c.heap().as_bits(b) {

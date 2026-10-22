@@ -79,7 +79,7 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 
 ### Limits inside one VM
 
-<details><summary>Status: built · partly tested: in a boot, only the process heap limit, one allocation a line asks for and the budget's backstop are attacked · tested (55)</summary>
+<details><summary>Status: built · partly tested: in a boot, only the process heap limit, one allocation a line asks for and the budget's backstop are attacked · tested (76)</summary>
 
 - host:beamlet-vm::full_mailbox_kills_the_receiver
 - host:beamlet-vm::a_term_equal_to_itself_is_not_scanned
@@ -136,6 +136,27 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 - host:beamlet-vm::a_tuple_past_the_processs_own_limit_is_refused_before_it_is_made
 - host:beamlet-vm::an_allocation_past_the_limit_only_with_garbage_is_made_after_a_collection
 - bench:beamlet-heap-allocation
+- host:beamlet-vm::a_maps_keys_past_the_allocator_kill_their_maker
+- host:beamlet-vm::a_maps_values_past_the_allocator_kill_their_maker
+- host:beamlet-vm::a_maps_pairs_past_the_allocator_kill_their_maker
+- host:beamlet-vm::a_map_from_a_list_past_the_allocator_kills_its_maker
+- host:beamlet-vm::a_map_from_keys_past_the_allocator_kills_its_maker
+- host:beamlet-vm::table_objects_looked_up_past_the_allocator_kill_the_reader
+- host:beamlet-vm::table_objects_taken_past_the_allocator_kill_the_taker
+- host:beamlet-vm::table_elements_looked_up_past_the_allocator_kill_the_reader
+- host:beamlet-vm::a_tables_objects_matched_past_the_allocator_kill_the_reader
+- host:beamlet-vm::characters_listed_past_the_allocator_kill_their_maker
+- host:beamlet-vm::a_term_decoded_past_the_allocator_kills_its_decoder
+- host:beamlet-vm::dictionary_keys_past_the_allocator_kill_their_maker
+- host:beamlet-vm::a_dictionary_listed_past_the_allocator_kills_its_owner
+- host:beamlet-vm::a_dictionary_erased_past_the_allocator_kills_its_owner
+- host:beamlet-vm::a_bignums_digits_past_the_allocator_kill_their_maker
+- host:beamlet-vm::a_natives_copy_of_a_list_past_the_pages_left_kills_its_caller
+- host:beamlet-vm::a_bignums_binary_digits_past_the_allocator_kill_their_maker
+- host:beamlet-vm::digits_are_the_text_in_every_radix_within_their_bound
+- host:beamlet-vm::a_natives_copy_of_a_tables_elements_past_the_pages_left_kills_its_caller
+- host:beamlet-vm::a_chunked_matchs_copy_past_the_pages_left_kills_its_caller
+- host:beamlet-vm::a_natives_copy_of_a_tuple_past_the_pages_left_kills_its_caller
 
 </details>
 
@@ -165,9 +186,16 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   accumulator grown in place, `binary:copy/2`, `list_to_binary/1` and `iolist_to_binary/1`), a
   tuple of a size it names (`make_tuple`, `list_to_tuple/1`, `setelement/3`,
   `append_element/2`, `insert_element/3`), a list's copy (`++`, `--`, `lists:reverse/2`,
-  `tuple_to_list/1`, a binary's bytes as a list) and its heap's own growth. The allocation counts
-  toward the process's limits with what it already holds, and the allocator is asked for it
-  with room to grow into: twice what is held, then a half, a quarter and an eighth more, never
+  `tuple_to_list/1`, a binary's bytes as a list), what a native copies out of a map, a table, the
+  process dictionary or text (`maps:keys/1`, `maps:values/1`, `maps:to_list/1`,
+  `maps:from_list/1` and `maps:from_keys/2`; an ETS lookup, `take`, `lookup_element` and every
+  match or select, `ets:tab2list/1`'s among them; `get/0`, `get_keys` and `erase/0`;
+  `unicode:characters_to_list/2`; an integer's text, `integer_to_list` and `integer_to_binary`,
+  asked for at the most digits it can take before any is made), each tuple, list, map, binary,
+  bignum and fun `binary_to_term` decodes, all of a term's together, and its heap's own growth.
+  The allocation counts toward the process's limits with what it already holds, and the
+  allocator is asked for it with room to grow into: twice what is held, then a half, a quarter
+  and an eighth more, never
   past the limit and never less than an eighth more, since a heap grown by slivers is copied
   whole at each, its copying growing with the square of its size. Past a limit or refused, the
   process stops with nothing changed, its heap is collected
@@ -180,7 +208,11 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   evaluator's heap into a 3 MiB request, under its limit but past the pages a session's VM has
   left on rv64, and is answered or killed; a 3,000,000-byte binary, past the line's limit, is
   refused; without the check the first ends rv64's VM and the second is answered on rv32
-  (`beamlet-heap-allocation`).
+  (`beamlet-heap-allocation`). A copy a native holds aside while it works, of a list it reads,
+  of a tuple it changes (`setelement/3`, `append_element/2`, `insert_element/3`,
+  `tuple_to_list/1`), of the elements `ets:lookup_element` takes, of a bignum's magnitude it
+  prints or of the characters it collects, is asked of the allocator alone, counted toward no
+  limit: a word or two for each element of a term the process holds, gone when the call ends.
 - **ETS** (`max_ets_words`, 2^27 words for all tables together): an insert past it raises
   `system_limit`, as does an `update_counter` or `update_element` that would take it there. A
   table's heir data (`{heir, Pid, Data}`) is kept with the table and counts as an object does: an
@@ -214,14 +246,24 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   fun, so a loop typed at the prompt over a 256 KiB binary once cost a scan of it a step
   (`a_term_equal_to_itself_is_not_scanned`).
 
-Beyond those, the limits are measurements, not an allocator: a native's own allocation (a zlib
-codec's, `crypto`'s, `term_to_binary/1`'s encoding, a bignum's arithmetic within its 2^24 bits);
-a native not named above that builds a term of a size the process chose, such as
-`maps:to_list/1`, `maps:keys/1`, `maps:values/1` and `maps:from_list/1`, what an ETS lookup,
-`ets:tab2list/1` or a match copies out, `unicode:characters_to_list/1`, `binary_to_term/1`,
-`get_keys/1` and `erase/0`, `integer_to_list/1` of a large bignum, and the copy of a list a native
-holds aside, whose heap growth past the headroom asks the allocator in the same steps but whose
-last refusal is the allocator's; and a message's copy into its receiver are caught afterwards. The hard backstop is the embedder's allocator, and on Redoubt the session budget's page
+Beyond those, the limits are measurements, not an allocator, and these allocations are caught
+afterwards. A native's own: a zlib codec's, `crypto`'s, `term_to_binary/1`'s encoding
+(its buffer, its work list and a map's entries), a bignum's arithmetic within its 2^24 bits, the
+digits of one `binary_to_term` decodes (counted toward the limits, taken as they come) and the
+bignum `binary:decode_unsigned/1,2` makes of a binary, the copy ETS keeps of an object it stores, and the process dictionary's own table. A copy of a term
+the process holds, made whole without asking: term comparison's work list and the entries of two
+maps it compares (`==`, `<`, sorting, a map's keys), `erlang:phash2/1,2`'s and the printer's
+(`erlang:display/1`) copy of a map's entries, `erts_debug:flat_size/1`'s work list,
+`erlang:error/2,3`'s copies of the arguments and location it is given, `open_port/2`'s copies of
+its option, `args` and `env` lists, `ets:update_counter` and `ets:update_element`'s copy of the
+object's elements, a match specification's copies of its guards and body and of each tuple it
+evaluates, `unicode:characters_to_binary/2`'s text, `erlang:display_string/1,2`'s text of a
+list, the copies of their patterns `binary:compile_pattern/1`, `match/2,3`, `matches/2,3` and
+`split/2,3` (and so `replace`) keep in the matcher they build, and a binary that starts off a byte boundary, copied
+whole by any native that reads its bytes. And the heap's
+growth past the headroom in a native not named above, `maps:merge/2`'s puts and a match
+specification's results among them, which asks the allocator in the same steps but whose last
+refusal is the allocator's; and a message's copy into its receiver. The hard backstop is the embedder's allocator, and on Redoubt the session budget's page
 limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). The image also caps `beamlet`'s heap
 ([init](../servers/init.md#the-boot-manifest)), but at the budget's edge, where the budget binds
 first: that cap is there for the bench's measurement. On Redoubt the platform lowers

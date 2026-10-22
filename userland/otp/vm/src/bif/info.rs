@@ -142,8 +142,7 @@ pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     }
     let single = matches!(a[1], Term::Atom(_) | Term::Tuple(_));
-    let items: Vec<Term> =
-        if single { alloc::vec![a[1]] } else { c.heap().to_vec(a[1]).ok_or_else(|| c.badarg())? };
+    let items: Vec<Term> = if single { alloc::vec![a[1]] } else { c.list_arg(a[1])? };
     // One lock for all of it: the process read cannot start running meanwhile.
     let mut guard = c.sys();
     let sys = &mut *guard;
@@ -252,7 +251,7 @@ pub fn is_loaded(c: &mut Ctx, a: &[Term]) -> R {
 /// `code:ensure_modules_loaded(Modules)`: `ok`, or `{error, [{Module, nofile}]}`.
 pub fn ensure_modules_loaded(c: &mut Ctx, a: &[Term]) -> R {
     let mut missing = Vec::new();
-    for m in c.heap().to_vec(a[0]).ok_or_else(|| c.badarg())? {
+    for m in c.list_arg(a[0])? {
         let Term::Atom(name) = &m else {
             return Err(c.badarg());
         };
@@ -487,11 +486,13 @@ pub fn display_string(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     }
     let s = a.last().expect("one or two arguments");
-    let text = match c.heap().as_bits(*s) {
-        Some(b) if b.is_binary() => b.to_bytes().into_owned(),
-        _ => text_of(c, s)?.into_bytes(),
-    };
-    c.platform().console_write(&text);
+    match c.heap().as_bits(*s) {
+        Some(b) if b.is_binary() => c.platform().console_write(&b.to_bytes()),
+        _ => {
+            let text = text_of(c, s)?.into_bytes();
+            c.platform().console_write(&text)
+        }
+    }
     Ok(Term::Atom(c.atoms.true_))
 }
 
@@ -995,7 +996,7 @@ pub fn memory1(c: &mut Ctx, a: &[Term]) -> R {
     if let Term::Atom(_) = &a[0] {
         return value(c, &a[0]);
     }
-    let types = c.heap().to_vec(a[0]).ok_or_else(|| c.badarg())?;
+    let types = c.list_arg(a[0])?;
     let mut out = Vec::new();
     for t in &types {
         out.push({

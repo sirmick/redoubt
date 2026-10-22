@@ -762,6 +762,19 @@ impl Heap {
         Some(out)
     }
 
+    /// The elements of a proper list of at most `most`, or `None` if `t` is not one: a longer
+    /// list is refused before more than `most` are copied.
+    pub fn to_vec_at_most(&self, t: Term, most: usize) -> Option<Vec<Term>> {
+        let mut out = Vec::new();
+        for item in self.list_iter(t) {
+            if out.len() == most {
+                return None;
+            }
+            out.push(item.ok()?);
+        }
+        Some(out)
+    }
+
     /// Whether `t` is a proper list (ends in `[]`).
     pub fn is_proper_list(&self, t: Term) -> bool { self.list_iter(t).all(|x| x.is_ok()) }
 
@@ -930,11 +943,8 @@ impl Heap {
         items.into_iter().rev().fold(tail, |acc, t| self.cons(t, acc))
     }
 
-    /// A string as a list of characters.
-    pub fn string(&mut self, s: &str) -> Term {
-        let chars: Vec<Term> = s.chars().map(|c| Term::Int(c as i64)).collect();
-        self.list(chars)
-    }
+    /// A string as a list of characters, built from its end with no copy held aside.
+    pub fn string(&mut self, s: &str) -> Term { self.list(s.chars().map(|c| Term::Int(c as i64))) }
 
     pub fn bits(&mut self, b: Bits) -> Term {
         let data = self.push_offheap(OffHeap::Bytes(b.data));

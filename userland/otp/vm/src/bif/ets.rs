@@ -45,11 +45,31 @@ fn table_mut<'s>(c: &Ctx, sys: &'s mut System, id: &Term) -> Result<&'s mut Tabl
     Ok(sys.ets.get_mut(tid).expect("resolved"))
 }
 
-/// Copies of the objects under `key` on the caller's heap, as a list.
-fn objects_out(c: &mut Ctx, sys: &System, tid: u64, key: &Key) -> Term {
-    let t = sys.ets.get(tid).expect("resolved");
-    let copies: Vec<Term> = t.lookup(key).iter().map(|o| o.copy_into(&mut c.p.heap)).collect();
-    c.p.heap.list(copies)
+/// The room on the caller's heap for copies of `objs` and `extra` cells more, asked for before
+/// any is made ([`Ctx::room`]).
+fn room_out<'t>(
+    c: &mut Ctx,
+    objs: impl Iterator<Item = &'t OwnedTerm>,
+    extra: usize,
+) -> Result<(), Exception> {
+    let cells = objs.fold(extra, |n, o| n.saturating_add(o.cells()));
+    c.room(cells)
+}
+
+/// Copies of the objects under `key` on the caller's heap, as a list, their room asked for first.
+fn objects_out(c: &mut Ctx, sys: &System, tid: u64, key: &Key) -> R {
+    let objs = sys.ets.get(tid).expect("resolved").lookup(key);
+    room_out(c, objs.iter(), 2 * objs.len())?;
+    Ok(objs.iter().rev().fold(Term::Nil, |list, o| {
+        let copy = o.copy_into(&mut c.p.heap);
+        c.p.heap.cons(copy, list)
+    }))
+}
+
+/// A copy of `o` on the caller's heap, its room asked for first.
+fn copy_out(c: &mut Ctx, o: &OwnedTerm) -> R {
+    room_out(c, core::iter::once(o), 0)?;
+    Ok(o.copy_into(&mut c.p.heap))
 }
 
 /// The identifier `ets:new/2` returns: the name for a named table, else its reference.
@@ -112,7 +132,7 @@ pub fn new(c: &mut Ctx, a: &[Term]) -> R {
 
 /// The objects `insert` was given: one tuple or a list of them, each with a key, copied out of
 /// the caller's heap. Raises `system_limit` if they would take ETS past `Limits::max_ets_words`.
-fn objects(c: &Ctx, sys: &System, t: &Table, arg: &Term) -> Result<Vec<(Key, OwnedTerm)>, Exception> {
+fn objects(c: &mut Ctx, sys: &System, t: &Table, arg: &Term) -> Result<Vec<(Key, OwnedTerm)>, Exception> {
     let list = match arg {
         Term::Tuple(_) => alloc::vec![*arg],
         _ => c.list_arg(*arg)?,
@@ -172,7 +192,7 @@ pub fn lookup(c: &mut Ctx, a: &[Term]) -> R {
     let sys = c.sys();
     let tid = table_id(c, &sys, &a[0], false)?;
     let key = sys.ets.get(tid).expect("resolved").key(&c.p.heap, a[1]);
-    Ok(objects_out(c, &sys, tid, &key))
+    objects_out(c, &sys, tid, &key)
 }
 
 pub fn member(c: &mut Ctx, a: &[Term]) -> R {
@@ -194,14 +214,23 @@ pub fn lookup_element(c: &mut Ctx, a: &[Term]) -> R {
         return a.get(3).copied().ok_or_else(|| c.badarg());
     }
     let mut elems = Vec::new();
+    c.held(&mut elems, objs.len())?;
     for o in objs {
         let e = o.heap().as_tuple(o.term()).and_then(|e| e.get(pos - 1)).copied();
         let Some(e) = e else { return Err(c.badarg()) };
-        elems.push(crate::term::copy(o.heap(), e, &mut c.p.heap));
+        elems.push((o, e));
     }
+    // An element's copy takes at most its object's cells.
+    room_out(c, objs.iter(), 2 * objs.len())?;
     Ok(match kind {
-        Kind::Set | Kind::OrderedSet => elems.pop().expect("one object"),
-        Kind::Bag | Kind::DuplicateBag => c.list(elems),
+        Kind::Set | Kind::OrderedSet => {
+            let (o, e) = elems.pop().expect("one object");
+            crate::term::copy(o.heap(), e, &mut c.p.heap)
+        }
+        Kind::Bag | Kind::DuplicateBag => elems.into_iter().rev().fold(Term::Nil, |list, (o, e)| {
+            let copy = crate::term::copy(o.heap(), e, &mut c.p.heap);
+            c.p.heap.cons(copy, list)
+        }),
     })
 }
 
@@ -241,9 +270,14 @@ pub fn take(c: &mut Ctx, a: &[Term]) -> R {
     let tid = table_id(c, &sys, &a[0], true)?;
     let t = sys.ets.get_mut(tid).expect("resolved");
     let k = t.key(&c.p.heap, a[1]);
-    let gone = t.remove(&k);
-    let copies: Vec<Term> = gone.iter().map(|o| o.copy_into(&mut c.p.heap)).collect();
-    Ok(c.list(copies))
+    // The copies' room is asked for while the objects are still in the table.
+    let objs = t.lookup(&k);
+    room_out(c, objs.iter(), 2 * objs.len())?;
+    let gone = sys.ets.get_mut(tid).expect("resolved").remove(&k);
+    Ok(gone.iter().rev().fold(Term::Nil, |list, o| {
+        let copy = o.copy_into(&mut c.p.heap);
+        c.p.heap.cons(copy, list)
+    }))
 }
 
 pub fn internal_delete_all(c: &mut Ctx, a: &[Term]) -> R {
@@ -289,7 +323,7 @@ pub fn update_counter(c: &mut Ctx, a: &[Term]) -> R {
     let t = sys.ets.get(tid).expect("resolved");
     let (keypos, kind) = (t.keypos, t.kind);
     let key = t.key(&c.p.heap, a[1]);
-    let current = t.lookup(&key).first().map(|o| o.copy_into(&mut c.p.heap));
+    let current = t.lookup(&key).first().map(|o| copy_out(c, o)).transpose()?;
     if !matches!(kind, Kind::Set | Kind::OrderedSet) {
         return Err(c.badarg());
     }
@@ -337,7 +371,7 @@ pub fn update_element(c: &mut Ctx, a: &[Term]) -> R {
     }
     let key = t.key(&c.p.heap, a[1]);
     let keypos = t.keypos;
-    let Some(obj) = t.lookup(&key).first().map(|o| o.copy_into(&mut c.p.heap)) else {
+    let Some(obj) = t.lookup(&key).first().map(|o| copy_out(c, o)).transpose()? else {
         return Ok(Term::Atom(c.atoms.false_));
     };
     let changes = match a[2] {
@@ -368,10 +402,10 @@ fn key_out(c: &mut Ctx, id: &Term, find: impl Fn(&Table, &crate::term::Heap) -> 
     let mut sys = c.sys();
     let tid = table_id(c, &sys, id, false)?;
     let t = sys.ets.get(tid).expect("resolved");
-    Ok(match find(t, &c.p.heap) {
-        Some(k) => k.term.copy_into(&mut c.p.heap),
-        None => end_of_table(&mut sys),
-    })
+    match find(t, &c.p.heap) {
+        Some(k) => copy_out(c, &k.term),
+        None => Ok(end_of_table(&mut sys)),
+    }
 }
 
 pub fn first(c: &mut Ctx, a: &[Term]) -> R { key_out(c, &a[0], |t, _| t.first().cloned()) }
@@ -397,8 +431,10 @@ fn with_objects(c: &mut Ctx, id: &Term, find: impl Fn(&Table, &crate::term::Heap
     let Some(k) = find(t, &c.p.heap) else {
         return Ok(end_of_table(&mut sys));
     };
+    // The key and the pair; then its objects.
+    room_out(c, core::iter::once(&k.term), 3)?;
     let key = k.term.copy_into(&mut c.p.heap);
-    let objs = objects_out(c, &sys, tid, &k);
+    let objs = objects_out(c, &sys, tid, &k)?;
     Ok(c.tuple(&[key, objs]))
 }
 
@@ -538,16 +574,20 @@ fn spec(c: &Ctx, t: &Term) -> Result<Vec<Clause>, Exception> {
 }
 
 /// Objects of `id` for which `spec` gives a result, with those results, in key order. Each
-/// object is copied to the caller's heap to be matched there.
+/// object is copied to the caller's heap to be matched there, the copies' room asked for first.
 fn select_all(c: &mut Ctx, id: &Term, spec: &[Clause]) -> Result<Vec<(Term, Term)>, Exception> {
     // Copied out under the lock; matched after it is released (guards call natives).
-    let objs: Vec<Term> = {
+    let mut objs = Vec::new();
+    {
         let sys = c.sys();
         let tid = table_id(c, &sys, id, false)?;
         let t = sys.ets.get(tid).expect("resolved");
-        t.all().map(|o| o.copy_into(&mut c.p.heap)).collect()
-    };
+        c.held(&mut objs, t.size())?;
+        room_out(c, t.all(), 0)?;
+        objs.extend(t.all().map(|o| o.copy_into(&mut c.p.heap)));
+    }
     let mut out = Vec::new();
+    c.held(&mut out, objs.len())?;
     for o in objs {
         if let Some(r) = run_spec(c, spec, o) {
             out.push((o, r));
@@ -559,7 +599,13 @@ fn select_all(c: &mut Ctx, id: &Term, spec: &[Clause]) -> Result<Vec<(Term, Term
 pub fn select(c: &mut Ctx, a: &[Term]) -> R {
     let s = spec(c, &a[1])?;
     let found = select_all(c, &a[0], &s)?;
-    Ok(c.list(found.into_iter().map(|(_, r)| r).collect::<Vec<_>>()))
+    listed(c, found.into_iter().map(|(_, r)| r))
+}
+
+/// `items` as a list, its room asked for first.
+fn listed(c: &mut Ctx, items: impl DoubleEndedIterator<Item = Term> + ExactSizeIterator) -> R {
+    c.room(2 * items.len())?;
+    Ok(items.rev().fold(Term::Nil, |list, t| c.cons(t, list)))
 }
 
 /// Hand out `results` `limit` at a time, as `{Chunk, Continuation}` and finally
@@ -567,23 +613,27 @@ pub fn select(c: &mut Ctx, a: &[Term]) -> R {
 /// such as Elixir's `Module.get_last_attribute/2` relies on) and from the front otherwise.
 /// The results are computed once, when the traversal starts: later changes to the table do not
 /// show, which BEAM does not promise either.
-fn chunk(c: &mut Ctx, mut results: Vec<Term>, limit: usize, from_end: bool) -> Term {
+fn chunk(c: &mut Ctx, results: Vec<Term>, limit: usize, from_end: bool) -> R {
     if results.is_empty() {
-        return end_of_table(&mut c.sys());
+        return Ok(end_of_table(&mut c.sys()));
     }
+    // The chunk and the rest, and the two tuples.
+    c.room(2 * results.len() + 8)?;
     let n = limit.min(results.len());
-    let chunk: Vec<Term> =
-        if from_end { results.split_off(results.len() - n) } else { results.drain(..n).collect() };
-    let cont = if results.is_empty() {
+    // Both lists are built from `results` where it is, with no copy of either part.
+    let at = if from_end { results.len() - n } else { n };
+    let (first, second) = results.split_at(at);
+    let (chunk, rest) = if from_end { (second, first) } else { (first, second) };
+    let cont = if rest.is_empty() {
         end_of_table(&mut c.sys())
     } else {
         let tag = c.atom("$beamlet_select");
-        let rest = c.list(results);
+        let rest = c.list(rest.iter().copied());
         let from_end = c.bool(from_end);
         c.tuple(&[tag, rest, Term::Int(limit as i64), from_end])
     };
-    let chunk = c.list(chunk);
-    c.tuple(&[chunk, cont])
+    let chunk = c.list(chunk.iter().copied());
+    Ok(c.tuple(&[chunk, cont]))
 }
 
 fn limit(c: &Ctx, t: &Term) -> Result<usize, Exception> {
@@ -601,8 +651,8 @@ pub fn select3(c: &mut Ctx, a: &[Term]) -> R {
     let n = limit(c, &a[2])?;
     let from_end = hash_table(c, &a[0])?;
     let all = select(c, &a[..2])?;
-    let all = c.heap().to_vec(all).expect("a list");
-    Ok(chunk(c, all, n, from_end))
+    let all = c.list_arg(all)?;
+    chunk(c, all, n, from_end)
 }
 
 /// `select_reverse(Tab, MS, Limit)`: an ordered set from its last key; a hash table as `select/3`.
@@ -610,8 +660,8 @@ pub fn select_reverse3(c: &mut Ctx, a: &[Term]) -> R {
     let n = limit(c, &a[2])?;
     let from_end = hash_table(c, &a[0])?;
     let all = if from_end { select(c, &a[..2])? } else { select_reverse(c, &a[..2])? };
-    let all = c.heap().to_vec(all).expect("a list");
-    Ok(chunk(c, all, n, from_end))
+    let all = c.list_arg(all)?;
+    chunk(c, all, n, from_end)
 }
 
 /// `match(Tab, Pattern, Limit)` and `match_object(Tab, Pattern, Limit)`.
@@ -619,16 +669,16 @@ pub fn match3(c: &mut Ctx, a: &[Term]) -> R {
     let n = limit(c, &a[2])?;
     let from_end = hash_table(c, &a[0])?;
     let all = match_(c, &a[..2])?;
-    let all = c.heap().to_vec(all).expect("a list");
-    Ok(chunk(c, all, n, from_end))
+    let all = c.list_arg(all)?;
+    chunk(c, all, n, from_end)
 }
 
 pub fn match_object3(c: &mut Ctx, a: &[Term]) -> R {
     let n = limit(c, &a[2])?;
     let from_end = hash_table(c, &a[0])?;
     let all = match_object(c, &a[..2])?;
-    let all = c.heap().to_vec(all).expect("a list");
-    Ok(chunk(c, all, n, from_end))
+    let all = c.list_arg(all)?;
+    chunk(c, all, n, from_end)
 }
 
 /// `select(Continuation)` (also `match/1`, `match_object/1`, `select_reverse/1`).
@@ -643,7 +693,7 @@ pub fn select1(c: &mut Ctx, a: &[Term]) -> R {
         {
             let rest = c.list_arg(rest)?;
             let from_end = from_end.is_atom(&c.atoms.true_);
-            Ok(chunk(c, rest, n as usize, from_end))
+            chunk(c, rest, n as usize, from_end)
         }
         _ => Err(c.badarg()),
     }
@@ -652,7 +702,7 @@ pub fn select1(c: &mut Ctx, a: &[Term]) -> R {
 pub fn select_reverse(c: &mut Ctx, a: &[Term]) -> R {
     let s = spec(c, &a[1])?;
     let found = select_all(c, &a[0], &s)?;
-    Ok(c.list(found.into_iter().rev().map(|(_, r)| r).collect::<Vec<_>>()))
+    listed(c, found.into_iter().rev().map(|(_, r)| r))
 }
 
 pub fn select_count(c: &mut Ctx, a: &[Term]) -> R {
@@ -717,13 +767,13 @@ fn pattern_spec(c: &mut Ctx, pattern: &Term, body: &str) -> Vec<Clause> {
 pub fn match_(c: &mut Ctx, a: &[Term]) -> R {
     let s = pattern_spec(c, &a[1], "$$");
     let found = select_all(c, &a[0], &s)?;
-    Ok(c.list(found.into_iter().map(|(_, r)| r).collect::<Vec<_>>()))
+    listed(c, found.into_iter().map(|(_, r)| r))
 }
 
 pub fn match_object(c: &mut Ctx, a: &[Term]) -> R {
     let s = pattern_spec(c, &a[1], "$_");
     let found = select_all(c, &a[0], &s)?;
-    Ok(c.list(found.into_iter().map(|(o, _)| o).collect::<Vec<_>>()))
+    listed(c, found.into_iter().map(|(o, _)| o))
 }
 
 pub fn match_spec_compile(c: &mut Ctx, a: &[Term]) -> R {
