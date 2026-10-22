@@ -660,9 +660,13 @@ its sessions and they re-bind ([steward](steward.md#failure-and-restart)). A res
 - **Restart.** A server that exits is restarted on the same endpoint. Calls it had taken get
   `Dead` ([R4b (a server dies)](../kernel/ipc.md#r4b-a-server-dies)), and clients see the error
   and retry; senders still waiting on the endpoint are served by the restarted server. The new
-  instance gets the same manifest name, arguments and receive endpoint, but a new startup block:
-  `init`, as its launcher, disconnects the dead instance's connections at every server
-  ([releasing grants](wire.md#a-launcher-releases-its-childs-grants)) and mints new ones. The
+  instance gets the same manifest name, arguments and receive endpoint, but a new startup block.
+  `init`, as its launcher, disconnects the connections it made for the dead instance: its console
+  connection, and the steward's fresh connections
+  ([releasing grants](wire.md#a-launcher-releases-its-childs-grants)), and makes new ones. A root
+  badge the entry is handed is minted again with the same number, so what the dead instance held
+  at that server under it goes at its successor's `Tversion`
+  ([the end](serving.md#multiplexed-connections)). The
   server's own tables start empty, with a newly drawn first badge
   ([R27 (badge allocation)](serving.md#r27-badge-allocation)), so a client's old connection ids
   are dead.

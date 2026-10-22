@@ -31,10 +31,12 @@
 //! - **Flush.** `Tflush(oldtag)` drops oldtag's request (or its pending `busy`) when it arrives, and is
 //!   answered `Rflush` in turn: an answer delivered before it is the only one oldtag gets (intro(5), flush).
 //! - **The end.** The completion call's abandonment (kernel/ipc.md R3: its caller died or gave up), a reply
-//!   to it that was discarded, a protocol error, the connection's `disconnect`, or no completion call parked
-//!   for the session bound since the last one returned, ends the session: every request goes, its admission
-//!   with it, and a parked call is answered [`ENDED`]. So a client that dies between two completion calls is
-//!   found at the session bound.
+//!   to it that was discarded, a protocol error, the connection's `disconnect`, a `Tversion` on the
+//!   connection by either path, or no completion call parked for the session bound since the last one
+//!   returned, ends the session: every request goes, its admission with it, and a parked call is answered
+//!   [`ENDED`]. So a client that dies between two completion calls is found at the session bound, and a
+//!   successor on the same badge (init's restart of an entry) ends what its predecessor left at its first
+//!   `Tversion`.
 //! - **Crash blame** (kernel/processes.md R21): requests are served with the completion call as the thread's
 //!   current call, so a crash while serving them blames their client.
 
@@ -197,9 +199,12 @@ impl Mux {
     /// with none parked. The server's longest wait or [`COLLECT_WAIT`], whichever is shorter.
     fn bound(&self) -> u64 { self.wait.min(COLLECT_WAIT) }
 
-    /// Ends every session on `badge` (a minted connection disconnected).
-    pub(super) fn end_badge(&mut self, admission: &mut super::Admission, badge: u64) {
-        while let Some(s) = self.sessions.iter().position(|s| s.key.badge == badge) {
+    /// Ends every session whose key `which` picks: those on a minted connection's badge when it is
+    /// disconnected, or one key's at a `Tversion` by one call (a new session on the connection).
+    /// Never reached while a session is being served: a multiplexed `Tversion` ends its session
+    /// where it is taken, and is never pending.
+    pub(super) fn end_where(&mut self, admission: &mut super::Admission, which: impl Fn(&ConnKey) -> bool) {
+        while let Some(s) = self.sessions.iter().position(|s| which(&s.key)) {
             let session = self.sessions.swap_remove(s);
             end(&mut self.pending, admission, session);
         }
