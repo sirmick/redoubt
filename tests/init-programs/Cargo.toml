@@ -97,6 +97,11 @@ name = "half-rest"
 path = "src/bin/half-rest.rs"
 test = false
 
+[[bin]]
+name = "mux-restartee"
+path = "src/bin/mux-restartee.rs"
+test = false
+
 [lib]
 test = false
 doctest = false

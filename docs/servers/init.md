@@ -632,10 +632,11 @@ its sessions and they re-bind ([steward](steward.md#failure-and-restart)). A res
 
 ### Restarts and reboots
 
-<details><summary>Status: built · partly tested: the machine shows a fault blamed through `init`'s own badge and taken by the steward, three of them reaching the lockout, and the steward's connection at the restarted server handed over; the timeouts' outcomes are decided on the host; a restarted `consoled`'s attach is read from the code, not attacked · tested (20)</summary>
+<details><summary>Status: built · partly tested: the machine shows a fault blamed through `init`'s own badge and taken by the steward, three of them reaching the lockout, and the steward's connection at the restarted server handed over; the timeouts' outcomes are decided on the host; a restarted `consoled`'s attach is read from the code, not attacked · tested (21)</summary>
 
 - bench:steward-blame-lockout
 - bench:steward-server-restart
+- bench:init-restart-mux
 - host:redoubt-init::a_blame_goes_to_the_steward_only_for_a_named_account_while_the_steward_runs
 - host:redoubt-init::a_blame_the_steward_does_not_take_in_time_is_lost_and_said
 - host:redoubt-init::a_blame_taken_a_dead_steward_and_a_refusal_are_told_apart

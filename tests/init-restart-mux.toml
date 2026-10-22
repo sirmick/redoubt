@@ -1,0 +1,47 @@
+description = "A restarted entry never meets its predecessor's multiplexed session (servers/serving.md, \"Multiplexed connections\", the end; servers/init.md, \"Restarts and reboots\"): mux-restartee, handed a root badge at walfsd:data, opens a multiplexed session there, sends a read and exits 0 with its answer pending and no completion call parked; init restarts it on the same badge, inside the session bound, and the successor's Tversion ends the predecessor's session, so its first completion call opens a session of its own (not parked on the old one, and collecting nothing of it), and its read and write through it are answered. The verdict is walfsd's: its count of open sessions, said each time it changes (test-only feature session-count), goes 1, 0 at the successor's Tversion, 1 at its first completion call, and never 2"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, walfsd built with its test-only feature
+# session-count, and mux-restartee.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-walfsd", bin = "walfsd", features = ["session-count"] },
+    { package = "redoubt-init-programs", bin = "mux-restartee" },
+]
+timeout_secs = 60
+# walfsd's lines are the verdict: no other program says them. mux-restartee's own line says what
+# the successor saw. It is restarted, so it is no reporter: the bench takes a reporter's verdict
+# only under the console connection init announced first.
+expect = [
+    '^init: started walfsd, console [0-9a-f]{16}$',
+    # The first instance's session.
+    '^\[con [0-9a-f]{16}\] walfsd: 1 session open$',
+    '^init: mux-restartee \(PID [0-9]+\) exited, code 0$',
+    '^init: restarted mux-restartee, console [0-9a-f]{16}$',
+    # The successor's Tversion ends it; its first completion call opens its own.
+    '^\[con [0-9a-f]{16}\] walfsd: 0 sessions open$',
+    '^\[con [0-9a-f]{16}\] walfsd: 1 session open$',
+    '^\[con [0-9a-f]{16}\] mux-restartee: the successor.s first completion call opened its own session; read 5 bytes, wrote 5$',
+    '^\[con [0-9a-f]{16}\] mux-restartee TEST PASSED$',
+]
+# Two sessions open at once is the successor beside its predecessor's; nothing else may end, and
+# the machine may not reboot.
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: (keyd|consoled|blkd|walfsd) .*(exited|faulted|was killed)',
+    '^init: mux-restartee .*(faulted|was killed)',
+    'walfsd: ([2-9]|[1-9][0-9]+) sessions open',
+    'mux-restartee TEST FAILED',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/restart-mux.json" }
+
+[disk]
+size_kib = 4096
+partitions = 1

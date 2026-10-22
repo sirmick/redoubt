@@ -2043,6 +2043,34 @@ mod tests {
         }
     }
 
+    /// `walfsd`'s test-only `session-count` (servers/walfsd.md, "Failure and restart") is built by
+    /// `init-restart-mux`'s recipe and by nothing else in the tree: its console line is that
+    /// case's witness and nothing else's. A recipe names it quoted, as `size-budget.toml`'s
+    /// comment on `walfsd`'s ceiling does not.
+    #[test]
+    fn only_init_restart_mux_builds_the_session_count() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut enabling = Vec::new();
+        for entry in std::fs::read_dir(root.join("tests")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "toml")
+                && std::fs::read_to_string(&path).unwrap().contains("\"session-count\"")
+            {
+                enabling.push(path.file_name().unwrap().to_string_lossy().into_owned());
+            }
+        }
+        enabling.sort();
+        assert_eq!(enabling, ["init-restart-mux.toml"]);
+        for dir in ["image", "tests/data"] {
+            let mut found = Vec::new();
+            manifests_under(&root.join(dir), &mut found);
+            for path in found {
+                let text = std::fs::read_to_string(&path).unwrap();
+                assert!(!text.contains("session-count"), "{} names the feature", path.display());
+            }
+        }
+    }
+
     /// Every file under `dir`, recursively.
     fn manifests_under(dir: &Path, found: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap() {

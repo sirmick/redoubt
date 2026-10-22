@@ -24,6 +24,11 @@ one-volume-probe = ["redoubt-fileserver/one-volume-probe"]
 # `walfsd-cut-N` ends the instance after its N-th block write from then on, and every start
 # checks the volume and says what the check found (src/cut.rs).
 cut-after-write = []
+# Test-only, for the bench's init-restart-mux case, and off in every default build (the image's
+# recipe names no features): walfsd says on its console how many multiplexed sessions are open
+# each time the number changes, the case's witness that a restarted client's Tversion ends its
+# predecessor's session.
+session-count = []
 
 [dev-dependencies]
 # The range in memory the tests serve from.

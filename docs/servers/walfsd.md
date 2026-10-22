@@ -636,7 +636,7 @@ each, with the volume check finding nothing.
 
 ## Failure and restart
 
-Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, bench:walfsd-reboot, host:redoubt-walfsd::a_poisoned_volume_says_so_once, host:redoubt-walfsd::a_mount_that_fails_says_why, host:redoubt-fileserver::a_fault_says_why
+Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, bench:walfsd-reboot, bench:init-restart-mux, host:redoubt-walfsd::a_poisoned_volume_says_so_once, host:redoubt-walfsd::a_mount_that_fails_says_why, host:redoubt-fileserver::a_fault_says_why
 
 - **`walfsd` crashes:** its clients' calls get `Dead`, `init` restarts it on the same endpoint
   ([init](init.md#restarts-and-reboots)), and its mount recovers a cut transaction from the log,
@@ -651,6 +651,13 @@ Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, b
   recovers what the error left. `walfsd` says so once on its console,
   `walfsd: volume poisoned: <operation>: <reason>`, with the reason its range client noted: the
   call failed, `blkd` answered an error, or a reply was malformed.
+- **A client restarts:** `init` hands the next instance the same root badge, and its `Tversion`
+  ends what the dead one held here ([the end](serving.md#multiplexed-connections)).
+  `init-restart-mux` watches it through a test-only feature, `session-count`, off in every
+  default build, which the image's recipe cannot turn on: `walfsd` says
+  `walfsd: N session(s) open` each time the number changes. The line is that case's witness and
+  nothing else's (the bench's host test `only_init_restart_mux_builds_the_session_count` holds the
+  feature to it).
 
 ## Residual risks
 

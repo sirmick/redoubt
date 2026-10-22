@@ -60,5 +60,42 @@ pub fn serve(startup: &Startup) -> u32 {
     let Ok(mut server) = NineServer::new(walfsd, limits, random) else { return BAD_ARGS };
     // 9P, multiplexed 9P and `ninep_common` in the skeleton's loop; the four typed operations
     // are ours.
+    #[cfg(feature = "session-count")]
+    return server.run_around(&endpoint, count::Sessions { startup, open: 0 });
+    #[cfg(not(feature = "session-count"))]
     server.run(&endpoint, |s, request| serve_call::<Walfsds, _>(&mut Typed(s), request))
+}
+
+/// Test-only (feature `session-count`): the skeleton's loop as `run` serves it, saying on the
+/// console how many multiplexed sessions are open whenever the number changes.
+#[cfg(feature = "session-count")]
+mod count {
+    use redoubt_rt::ipc::Request;
+    use redoubt_rt::server::ninep::{Around, NineServer};
+    use redoubt_walfsd::{Range, Walfsd};
+
+    use super::{Startup, Typed, Walfsds, say, serve_call};
+
+    pub struct Sessions<'a> {
+        pub startup: &'a Startup<'a>,
+        /// The number last said.
+        pub open: usize,
+    }
+
+    impl<R: Range> Around<Walfsd<R>> for Sessions<'_> {
+        fn call(&mut self, server: &mut NineServer<Walfsd<R>>, request: Request, _: u64) {
+            let _ = server.serve_with(request, |s, request| {
+                serve_call::<Walfsds, _>(&mut Typed(s), request).map(|()| None)
+            });
+        }
+
+        fn turn(&mut self, server: &mut NineServer<Walfsd<R>>, _: u64) {
+            let open = server.sessions();
+            if open != self.open {
+                self.open = open;
+                let noun = if open == 1 { "session" } else { "sessions" };
+                say(self.startup, &alloc::format!("walfsd: {open} {noun} open\n"));
+            }
+        }
+    }
 }

@@ -272,10 +272,11 @@ stateDiagram-v2
 
 ### Multiplexed connections
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two`, and packs one send at `bootfsd` in `session-mux-flood` · tested (21)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two`, packs one send at `bootfsd` in `session-mux-flood`, and restarts a client holding a session at `walfsd` in `init-restart-mux` · tested (22)</summary>
 
 - bench:aio-many-reads
 - bench:aio-many-reads-two
+- bench:init-restart-mux
 - bench:session-mux-flood
 - host:redoubt-rt::a_sends_pages_count_once_and_go_back_with_its_last_request
 - host:redoubt-rt::a_parked_read_sent_in_a_page_leaves_the_page_to_a_write
