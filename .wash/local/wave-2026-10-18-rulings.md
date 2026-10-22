@@ -2281,3 +2281,40 @@ shape.** A hand recount goes stale again by the next train; the count belongs to
 case files (total, boot cases, under icount), failing the docs case when they drift, as C7 fails a
 SECURITY row. The node recounts once and adds the check, so the number is never written by hand
 again. Not before AGENT0's chain; size S.
+
+### K35 round 2: the expiry's time and the interrupted slice → K39 (architect-oct21, 2026-10-22)
+
+Finding (.wash/local/K35-report.md 'Red P2'): on main a waiter ran 19 µs a turn and never
+progressed (6,128 of 6,128 slice decisions over): the sibling's 1 ms poll holds 1.4 ms (0.87 ms
+of audit), so its timer is due when the waiter is picked; the timer interrupt's expiry reads all
+253 of the sibling's timed waits (1,327 µs) inside the waiter's slice, and `slice_over` compares
+now, after the expiry, with the slice's end. K35's head reads the due waits plus the next (5 µs
+median, 537 µs max) and the waiter runs. No wake is lost; not a model item. The implementer moved
+the case's poll to 10 ms so main passes.
+
+1. **Two things, not one.** (i) The expiry read every timed wait of a process whose cache had
+   come: K35's stage 1 bounds it to the due waits plus the next, a kernel property K35 states on
+   timer.md ("Expiry walks the processes" and R12's timer paragraph) with the figures (main 1,327
+   µs median at 253 waits; head 5 µs median, 537 µs max), and whose fix case is already red on
+   main: `sched-timer-flood` at 0 stale-wait interrupts (73 and 19-20 before). (ii) The expiry's
+   time counts against the interrupted thread's slice: not K35's and not removed by it, only
+   narrowed; a deadline ending many waits at once (`worst-walk`, 250 due, about 8 ms) still takes
+   the slice, self-limited only by the attacker's share for re-arming. **The 1 ms poll is not
+   kept as a fix case**: what it is red on is (i) and (ii) together, and a case claims one thing.
+   The 10 ms poll stands, its comment stating the stall's cause with the numbers and that the
+   guard passes on main (editor P3 holds).
+2. **Billing is as designed; the slice is not.** K20/R12: the interrupted budget pays none of the
+   expiry, and that holds. But the slice is time, and the page is silent on kernel work in an
+   interrupt inside a slice; K24 already excludes the pick's exit work. Rule, node **K39** (added,
+   todo, needs K35): a slice is the thread's own time, its user time and its own calls; kernel
+   work inside it billed to another payer extends the slice's end by that work, so the interrupted
+   thread resumes with what it had; only a deadline due now preempts (R12 unchanged); nothing is
+   charged twice. Acceptance: a case red on main and on K35's head (a sibling's due waits each
+   slice beside a 1 ms poller, the victim's progress bounded below by its share); sched/smp counts
+   kept; nobody-share figures re-recorded if they move. Tier A, S-M. K35 states the residual on
+   scheduling.md's slice paragraph, pointing at K39: a timer interrupt's expiry inside a slice
+   counts against it; bounded by the due waits since K35.
+3. **Before K35 merges:** the timer.md statement in 1 with its figures; the residual in 2; the
+   10 ms poll's comment; K35's title and acceptance as restated on "K35 after the measurement".
+   The sched-*/smp-* load run and the beamlet/net classes, not run in round 1, are the train's.
+   Nothing else.

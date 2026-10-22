@@ -1,6 +1,6 @@
 # Environment and rules for every member launched 2026-10-20
 
-Main is 328bcecff (train 97: K34 per-process free-run summaries, +2 frames per process). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
+Main is 7a15bc867 (train 98: B103 two-hart notice judged in a host-time twin, B108, B107 checked natives). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
 
 ## Shell
 

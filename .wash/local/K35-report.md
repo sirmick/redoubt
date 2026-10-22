@@ -280,3 +280,206 @@ sockets"), docs/testbench.md ("The machine at rest" status +4, the case's paragr
 docs/kernel/scheduling.md (rule (a); residuals "A server's turn crosses harts", "Every hart pays
 for each device interrupt"), docs/kernel/timer.md, docs/todo/kernel-attack-gaps.md.
 Docs name no plan nodes (doccheck forbids process references): K37/K38 appear as their remedies.
+
+## Load run and final rebase (2026-10-22)
+
+Load run on 125fcc2e2 (orchestrator's go after train 98; .tmp/K35/bin/load.sh, log
+.tmp/K35/gates/load.log): `make -k -f scripts/jobs.mk set CASES="<57 cases>"` pinned 8-19, both
+widths: every sched-* case, every case named *timer*/*timeout*/*deadline*, worst-walk,
+launch-idle, launch-idle-probes, and the smoke set (userland-boot init-boot bench-net-peer
+ipc-outcomes sum-clear lend-untouched-page). rc=2: one failure, every other job PASS (128 PASS
+lines, smp variants counted). sched-timer-flood both widths PASS (0 finding a wait ended early),
+launch-idle and launch-idle-probes both widths PASS.
+
+The failure: deadline-placement rv64 smp=2 (host time, multi-threaded TCG), foreign timer work
+in the victim's time 11 of 1000 against <= 10, under load. Log copied to .tmp/K35/fail/. Rerun
+alone 3/3 PASS at 0 of 1000 (q showed nothing else running before each). A miss under load only,
+not judged a finding; the change touches the timeouts' hint, not budget deadlines' placement.
+
+Rebased onto main 7a15bc867 (train 98), clean: b50bfd392 kernel, a2d9ecccb docs, 58dcb572e bench.
+Train 98's scheduling.md changes are the steward-latency rows, apart from this branch's sections.
+Pinned gates on 58dcb572e, exit 0: docs, formatting, size-budget.
+
+## Round 1 fold (2026-10-22, k35-implementer-4)
+
+Base wp-B110 69ccdde58 (main 7a15bc867 + C14). Head **0218e48c2**, three commits, reordered so
+ipd.md's figures land before the docs commit that cites them (editor P3):
+- 9b2a1b376 kernel: a wait answered before its timeout takes its timer hint with it
+- 4b5a0b021 bench: launch-idle-probes, a per-frame guard on what a keep-alive probe costs
+- 0218e48c2 docs: a thread readied where its waker blocks is that hart's pick
+
+### Red P1: the hint is recomputed once per call/expiry/delivery, not per ended wait
+`untime` now only marks the hint stale (`time::timeout_ended(deadline)`, a flag in `Timer`).
+`time::settle_timeouts(mm)` recomputes it once (one read per live process): at the end of each
+outermost entry part, in `message::audit` (in every build, outside the audit's uncharged time, so
+it is billed to the entry's payer), and first wherever the hint is read (`rearm`, `due`,
+`expire_due`). `expire_due` still sets the hint from its walk. A fault that kills leaves the
+recomputation to the next reader. timer.md (hart timer, R12 for timer work, residual "Expiry walks
+the processes", rationale) and the kernel docs say this.
+
+The cost, measured (new case `timeout-hint-exit`, hold-trace, icount shift=3, checked build, one
+hart, both widths). A child with 255 threads exits; its 254 waits have deadlines rising by TID, so
+each one the exit ends held the hint in turn. It exits once on an empty system, then again with all
+508 other PIDs holding parked fillers with no timeout. The oracle's new `EXIT-SECTIONS` holds the
+second `process_exit` section, net of audits, to the first's plus one slice (10,000 ticks).
+
+| process_exit section, ticks | empty | every PID in use | difference |
+| --- | --- | --- | --- |
+| head rv64 | 170,023 | 173,425 | 3,402 (0.34 slice) |
+| head rv32 | 183,404 | 188,057 | 4,653 (0.47 slice) |
+| head before this fold, rv64 (recompute per wait) | 176,851 | 386,825 | 209,974: FAIL |
+| head before this fold, rv32 | 193,683 | 518,465 | 324,782: FAIL |
+
+The margin is twice the worst difference (9,306), rounded up to a slice. The exit itself takes 17 to
+19 ms either way. That is its own 254 thread ends, with the same scale on an empty system. With
+untimed waits it reads 137k/149k ticks, so a timed wait's end costs about 130 ticks more, a
+per-wait constant. I did not investigate further. On main (7a15bc867 + C14) the case reaches no
+verdict: the second child's exit notice did not come within 600 s of virtual time, on both widths.
+The first (empty) exit passed. I did not investigate this either; the logs are in
+.tmp/K35/r1/main/. The case is a guard on what this branch's exactness costs, not a fix case
+against main.
+
+### Red P3
+- timer.md and testbench.md now say that `no_stale_waits_in` catches a cache left early. A hint
+  left early while every cache is exact is caught only by the checked build's hint==earliest
+  audit.
+- deadline-placement rv64 smp=2, 3 rounds alternating head and main. Each round ran under the same
+  load (rv64+rv32 sched-timer-flood and rv64 timeouts repeating from the head tree, 4 jobs at
+  most). Head: PASS 3/3, foreign timer work 0, 0, 0 of 1000 (0, 0, 11,210 ticks). Main: PASS 3/3,
+  0, 0, 0 of 1000 (0, 10,431, 5,473 ticks). The 11/1000 of the 57-case load run is not reproduced
+  at this load, and head is not worse. Logs are in .tmp/K35/dp/.
+
+### Editor P2
+- History wording removed: ipd.md ("no longer leaves ... before that read" is now a present
+  statement; main's figures moved to the bench commit message), scheduling.md (sched-timer-flood
+  paragraph and timer-tail-billed), timer.md (both). Before-figures are in the commit messages.
+- C14: rebased onto wp-B110. Counts: kernel commit boot 356, icount 188 ("181 so"); bench commit
+  boot 357, host clock 169 (twice), sockets 73, and also disk 142 (C14 found launch-idle-probes
+  has a disk; the orchestrator's list omitted it).
+
+### Simplifier P3s
+- `KEEP_ALIVE_US` is now one `cfg!`, still at the file's end. Plain ipd is byte-identical to main
+  on both widths (sha256 e805fecc… rv64, 90eb3c97… rv32).
+- `Due.stale`'s doc now says it is the witness `no_stale_waits_in` reads.
+- Declined: the collect_due repair as an assert. Its `stale` is the witness a release-built case's
+  trace carries. The checked build already asserts exact caches at every audit (check_lists). A
+  release build that ever found a cache left early would otherwise keep a hint in the past and
+  re-interrupt.
+
+### Other changes
+R12's status, its test list and SECURITY.md's R12 row name `bench:timeout-hint-exit`.
+Size budget: kernel 11095 (was 11090; the stale flag and settle points), with its line in the
+commit.
+
+### Quiet slot
+None run. The change cannot move launch-idle-probes' figures: at every point the hint is read
+(rearm, due, expire_due), its value is the one a per-wait recompute gave. Only where in the
+call the recompute's reads run changes, and at rest a call or expiry ends at most one
+hint-holding wait.
+
+### Gates (pinned taskset -c 8-19 nice -n 10; at most 4 boot jobs at once)
+On 9b2a1b376 + C2/C3 as replayed (code identical to the final head; the last amend touched only
+comments, same line count):
+- Host gates, exit 0: unsafe-budget, size-budget, formatting, host-tests, ipd-host-tests,
+  netd-host-tests.
+- docs failed once on C14 disk 141→142 (fixed in the bench commit), then passed.
+- Exit 0, both widths: sched-timer-flood, timeouts, budget-deadline,
+  expiry-deadline-then-timeout, timeout-hint-exit.
+- On the final head 0218e48c2, exit 0: docs (C14), formatting, size-budget.
+- `cargo test -p testbench exit`: 3 passed (the new an_exit_is_held_to_its_empty_system_section).
+
+### Summaries checked
+- No change needed (grep for hint, stale and early interrupt): README.md, GETTING-STARTED.md,
+  docs/README.md, docs/kernel/README.md (timer row unchanged and true), docs/plan/*.
+- Updated: docs/kernel/timer.md, docs/kernel/scheduling.md (R12 status and list, timer-flood
+  paragraph), docs/SECURITY.md (R12 row), docs/testbench.md, docs/servers/ipd.md.
+
+### Notes
+- I read every committed file's diff in full, plus the surrounding regions. I did not read all of
+  message.rs or sched_oracle.rs.
+- The scratch worktrees .tmp/K35/wt-* (13 of them) are the predecessors' measurements, left
+  in place.
+
+## Round 2 fold (2026-10-22, k35-implementer-4)
+
+Head **719710c4e** on wp-B110 69ccdde58: e03ac9260 kernel, 473f82aa4 bench, 719710c4e docs. The
+kernel code is unchanged since round 1. The case, timer.md, testbench.md and R12's status changed,
+all in the kernel commit.
+
+### Red P2: main's stall is the case's own, not a lost wake
+I traced main (wp-B110) with block-trace and hold-trace, rv64, one hart, and the report wait cut
+to 30 s with a power-off so the trace dumps. Logs are .tmp/K35/r1/diag1-console.log and
+diag4-console.log; head's is hdiag1-console.log.
+
+- **No wake is lost.** After the fill, the exiting child's budget blocked 6,347 times and was
+  woken by its timeout 6,094 times (EXPIRED what=1, never 2). 253 waiters blocked. One waiter
+  never ran its first `fetch_add`, so `WAITING` stuck at 253 and the child's 1 ms poll looped
+  until the parent's wait ran out.
+- **Each turn, the stuck waiter ran 19 µs** (median, between its return and the timer entry).
+  - The poll's own `receive` section is 1.4 ms, of which the marks audit is 0.87 ms. So the
+    poll's 1 ms timeout has passed before the call returns.
+  - The waiter, picked next by round-robin, returns with the timer already due.
+  - The timer interrupt's expiry takes 1,327 µs (median) before the slice decision. Main's
+    `collect_due` reads all 253 of the child's timed waits, kept in arrival order, whenever its
+    cache has come.
+  - `sched::slice_over` compares now, after that expiry, with the slice's end, so the waiter's
+    slice is over (6,128 of 6,128 decisions) and the poll is picked again.
+- **Head escapes.** Its expiry reads only the waits due and the next one: entry to decision is
+  5 µs median, at most 537 µs. The waiter keeps its slice, and the loop ran once.
+- **Result.** With the poll at 10 ms, main passes the whole case on both widths:
+  - rv64: 161,768 against 159,202 (+2,566).
+  - rv32: 175,097 against 171,672 (+3,425).
+
+  Main has no recomputation, so the guard passes on main, and no page claims it does.
+- **Not a model item.** No wake is lost, and the model has no notion of how long an expiry takes,
+  so no mutation or contract is added.
+- **Open, for the orchestrator and Architect, not changed here.** A timer interrupt's own expiry
+  time counts against the interrupted thread's slice. scheduling.md says a slice is the picked
+  thread's user time and that kernel work between the pick and the return never uses it. It is
+  silent on kernel work in an interrupt inside the slice. On head that work is bounded by the
+  expiry (≤ 537 µs measured here). A sibling can still be starved if the expiry ever outgrows a
+  slice.
+
+### Red P3: fillers hold later timeouts
+Each filler now waits with a 2 h timeout (later than every waiter's 1 h deadline), so the
+recomputation lowers the hint for every PID (the costly branch). Head:
+- rv64: 175,199 against 170,023 (+5,176, 0.52 of a slice).
+- rv32: 190,183 against 183,375 (+6,808, 0.68 of a slice).
+
+The margin follows the bench's rule: twice the worst, 13,616, rounded up to whole slices, so two
+slices (20,000 ticks). The pre-fold kernel read +210k and +325k with untimed fillers. timer.md,
+R12's status and the commit message state the new figures.
+
+### Editor
+- P2: testbench.md's "Checked builds" names `timeout-hint-exit` and its `EXIT-SECTIONS` check
+  beside `no_stale_waits_in` (status 21, case listed).
+- P3: no page claims the case passes on main.
+
+### Gates (pinned 8-19, at most 4 boot jobs at once)
+- `timeout-hint-exit` both widths, head and main together, exit 0. Head is quoted above. Main:
+  - rv64: 161,768 / 159,202.
+  - rv32: 175,097 / 171,672.
+- Exit 0, both widths: sched-timer-flood, timeouts, budget-deadline,
+  expiry-deadline-then-timeout.
+- formatting failed once on the program's header (rustfmt); fixed in the kernel commit.
+- On the final head 719710c4e, exit 0: timeout-hint-exit (both widths), docs (C14), formatting,
+  size-budget.
+
+## Round 2 ruling folded (2026-10-22)
+
+Head **506617ef9**: b00bf54c6 kernel, fce4807fe bench, 506617ef9 docs. Per "K35 round 2: the
+expiry's time and the interrupted slice":
+- timer.md, residual "Expiry walks the processes" and R12 for timer work: an expiry reads the due
+  waits plus the next. Figures: head 5 µs median and 537 µs max at 253 pending waits with every
+  PID in use, against 1,327 µs median when reading every timed wait. The R12 paragraph says that
+  time falls inside the interrupted thread's slice.
+- scheduling.md, R12's slice paragraph, a residual sentence: a timer interrupt's expiry inside a
+  slice counts against it, though billed to the payers. It is bounded by the waits it ends and the
+  next of each process. The remedy is a slice that is the thread's own time. The node is not named,
+  because docs carry no plan ids.
+- The 10 ms poll's comment states the stall's cause with the numbers, and that at 10 ms the guard
+  reaches its verdict on main and passes.
+- Gates on 506617ef9, exit 0: timeout-hint-exit both widths (rv64 175,201/170,023; rv32
+  190,176/183,409), docs, formatting, size-budget. Kernel code unchanged.
+- K35's title and acceptance as restated in "K35 after the measurement" are the plan node's and
+  the merge's. No branch file carries them; left to the orchestrator.
