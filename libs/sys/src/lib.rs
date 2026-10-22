@@ -15,7 +15,8 @@
 //! [`NUMBER_BASE`] + 1) and its arguments in `a1..=a7`, in the order listed on each [`Call`]
 //! variant. The kernel answers in the same eight registers: `a0` = 0 and the result in `a1..=a7`
 //! (see [`Return`]), or `a0` = an [`Error`] code and `a1..=a7` = 0, except `call`: its ownership
-//! and reply-validity payload is defined on every error too ([`CallOutcome`]). The kernel preserves
+//! and reply-validity payload is defined on every error too ([`CallOutcome`]), and the turns
+//! (`reply_receive`, `send_receive`): what their first half did ([`TurnOutcome`]). The kernel preserves
 //! every other register across the `ecall`.
 //!
 //! The layout is the same on both widths: in this crate a register is a `u64` holding the
@@ -53,7 +54,8 @@
 //! | --- | --- | --- |
 //! | [`Body`]: words, handle count, handles | [`BODY_SLOTS`] | `call` (request in), `send`, `reply` |
 //! | [`ReceivedBody`]: the same slots; a handle slot within the count may be 0 | [`BODY_SLOTS`] | `call` (reply out) |
-//! | [`Received`]: kind, msg_id, badge, account, labels, words, handles, buffer, pages; one layout for a message, an interrupt, an exit notice and an abandoned-call notice | [`RECEIVED_SLOTS`] | `receive` (out) |
+//! | [`Received`]: kind, msg_id, badge, account, labels, words, handles, buffer, pages; one layout for a message, an interrupt, an exit notice and an abandoned-call notice | [`RECEIVED_SLOTS`] | `receive`, `reply_receive`, `send_receive` (out) |
+//! | [`FirstHalf`]: message id or endpoint, the send's timeout, transfer, body | [`FIRST_SLOTS`] | `reply_receive`, `send_receive` (in) |
 //! | [`BudgetSpec`]: pages, processes, weight, labels, account, deadline | [`BUDGET_SPEC_SLOTS`] | `budget_create` (in) |
 //! | [`Usage`]: page limit and usage, process limit and usage, weight limit and carved | [`USAGE_SLOTS`] | `budget_usage` (out) |
 //! | handle list: one handle per slot ([`Handle::from_raw`]) | the call's count, at most [`MAX_START_HANDLES`] | `process_start` (in) |
@@ -121,11 +123,15 @@ pub use call::{Call, Handle, Hold, MemFlags, MintSource, NUMBER_BASE, Number, Pa
 pub use ecall::{Ecall, syscall};
 pub use error::Error;
 pub use record::{
-    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BodyOf, BudgetSpec, Cause, ExitNotice, Handles, Labels, List,
-    Message, MessageKind, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Slot, USAGE_SLOTS, Usage,
+    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BodyOf, BudgetSpec, Cause, ExitNotice, FIRST_SLOTS, FirstHalf,
+    Handles, Labels, List, Message, MessageKind, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles,
+    Slot, USAGE_SLOTS, Usage,
 };
 pub use regs::REGS;
-pub use ret::{CallOutcome, DeviceInfo, LendDisposition, ReplyOutcome, Return, decode_result, encode_result};
+pub use ret::{
+    CallOutcome, DeviceInfo, FirstDone, LendDisposition, ReplyOutcome, Return, TurnOutcome, decode_result,
+    encode_result,
+};
 
 /// Carries one call to a kernel and its result back. Records and buffers named by address in
 /// `call` stay valid (and, for results, writable) for the duration; the transport reads and

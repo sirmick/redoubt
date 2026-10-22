@@ -34,6 +34,10 @@ pub mod op {
     /// Call, `log-server` only: the attack checker. It prints `[server] done: reported by pid
     /// N; still serving`, N the caller's place, replies, and powers the machine off.
     pub const DONE: usize = 7;
+    /// Call, `log-server` only: powers the machine off without answering, so the caller's last
+    /// call readies nobody (`ipc-turns`: the kernel's count of hand-offs across harts then ends
+    /// with the caller's work).
+    pub const OFF: usize = 8;
 }
 
 /// A page of memory that can be lent or transferred to a server, and written to as text.
@@ -127,6 +131,12 @@ pub mod checker {
     pub fn done() {
         rd::call_waiting(rd::LOG, &rd::body([op::DONE, 0, 0, 0]), None, rd::FOREVER)
             .expect("couldn't reach the checker");
+    }
+
+    /// Ask the checker to power off without answering ([`op::OFF`](crate::op::OFF)).
+    pub fn off() -> ! {
+        let _ = rd::call_waiting(rd::LOG, &rd::body([op::OFF, 0, 0, 0]), None, rd::FOREVER);
+        panic!("the checker answered OFF")
     }
 }
 

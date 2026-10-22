@@ -204,6 +204,10 @@ pub enum Mutation {
     IpcSkipOutputCheck,
     /// Leaks newly installed reply handles after failed output commit.
     IpcLeakRollback,
+    /// `reply_receive` skips its reply half and reports it delivered.
+    TurnReplyLost,
+    /// `send_receive` whose send failed reports its message taken.
+    TurnSendDispositionLies,
     // R12. Scheduling.
     /// Budget id creates a priority tier ahead of stride pass (kernel/scheduling.md: one flat
     /// stride queue).
@@ -454,7 +458,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 183] = {
+    pub const ALL: [Mutation; 185] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -537,6 +541,8 @@ impl Mutation {
             IpcFalseDelivery,
             IpcSkipOutputCheck,
             IpcLeakRollback,
+            TurnReplyLost,
+            TurnSendDispositionLies,
             R12PriorityById,
             R12IgnoreWeight,
             R12WakeBanksCredit,
@@ -755,7 +761,13 @@ impl Mutation {
             | R12BlockLeavesAsRequeued
             | R12OneRunnerPerBudget
             | R12SpreadChargesOnce => "R12",
-            IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "R13",
+            IpcWrongLend
+            | IpcDropPartial
+            | IpcFalseDelivery
+            | IpcSkipOutputCheck
+            | IpcLeakRollback
+            | TurnReplyLost
+            | TurnSendDispositionLies => "R13",
             MsgNoLabels | MsgBadgeZero | MsgAccountZero | MsgIdsGlobal => "R14",
             BlameNobody
             | BlameNewestCall

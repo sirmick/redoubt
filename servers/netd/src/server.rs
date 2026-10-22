@@ -8,9 +8,9 @@
 //! (so it stops touching its rings) and every later request is answered `failed`. `netd` stays up
 //! and `init` has nothing to restart, so a lying device cannot make the box reboot-loop.
 
-use redoubt_rt::abi::{Error, Handle, ReceivedHandles};
+use redoubt_rt::abi::{Handle, ReceivedHandles};
 use redoubt_rt::ipc::{Caller, Request, Words};
-use redoubt_rt::server::typed::{Answer, Outcome, Protocol, TypedServer, answer, finish};
+use redoubt_rt::server::typed::{Answer, Finished, Outcome, Protocol, TypedServer, answer, finish_held};
 use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::netif::{ErrorCode, Info, InfoReply, Message, Reply, Transmit, TransmitReply};
 
@@ -71,11 +71,12 @@ impl<T: Transport> NetServer<T> {
         }
     }
 
-    /// Answers one call and replies to it.
-    pub fn serve(&mut self, mut request: Request) -> Result<(), Error> {
+    /// Answers one call: replies to it, or holds a reply with no handles for the serving loop's
+    /// next receive (`redoubt_rt::ipc::Endpoint::receive_after`).
+    pub fn serve(&mut self, mut request: Request) -> Finished {
         let (caller, words, handles) = (request.caller, request.words, request.handles);
         let outcome = answer_with(self, &caller, &words, &handles, request.lend());
-        finish(request, &outcome).map(|_| ())
+        finish_held(request, &outcome)
     }
 
     fn dispatch(&mut self, caller: &Caller, request: Message<'_>) -> Result<Answer<Reply>, ErrorCode> {

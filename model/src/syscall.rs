@@ -162,11 +162,33 @@ pub enum Syscall {
         h: u64,
         hold: u64,
     },
+    /// A server's turn (kernel/ipc.md): `reply(msg_id, words, handles)`, then `receive(h,
+    /// timeout, max_transfer)`, in one call.
+    ReplyReceive {
+        h: Option<u64>,
+        timeout: u64,
+        max_transfer: u64,
+        msg_id: u64,
+        words: [u64; WORDS],
+        handles: Vec<u64>,
+    },
+    /// `send(endpoint, words, handles, transfer, send_timeout)`, then, once a receiver has taken
+    /// it, `receive(h, timeout, max_transfer)`, in one call.
+    SendReceive {
+        h: Option<u64>,
+        timeout: u64,
+        max_transfer: u64,
+        endpoint: u64,
+        words: [u64; WORDS],
+        handles: Vec<u64>,
+        transfer: Option<Buffer>,
+        send_timeout: u64,
+    },
 }
 
 /// The calls' names, in kernel/abi.md's table order (the order of `redoubt-sys`'s numbers, from 1).
 /// The one list of them: [`Syscall::name`], the trace and the tests use it.
-pub const CALL_NAMES: [&str; 29] = [
+pub const CALL_NAMES: [&str; 31] = [
     "map_anon",
     "unmap",
     "set_flags",
@@ -196,6 +218,8 @@ pub const CALL_NAMES: [&str; 29] = [
     "device_info",
     "budget_reap",
     "console_hold",
+    "reply_receive",
+    "send_receive",
 ];
 
 impl Syscall {
@@ -231,6 +255,8 @@ impl Syscall {
             Syscall::DeviceInfo { .. } => 27,
             Syscall::BudgetReap { .. } => 28,
             Syscall::ConsoleHold { .. } => 29,
+            Syscall::ReplyReceive { .. } => 30,
+            Syscall::SendReceive { .. } => 31,
         }
     }
 
@@ -313,6 +339,18 @@ pub enum Record {
     Memory(u64),
 }
 
+/// What a turn's first half did (kernel/ipc.md, "A server's turn").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurnFirst {
+    /// Nothing: the call is still open, or the message was not sent (its transfer is the
+    /// sender's).
+    Nothing,
+    /// The reply was made, as `reply`'s result says.
+    Replied { delivered: bool, installed_mask: u8 },
+    /// A receiver took the message.
+    Sent,
+}
+
 /// A successful result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Ret {
@@ -367,6 +405,12 @@ pub enum Ret {
         a: u64,
         b: u64,
         flags: u64,
+    },
+    /// `reply_receive`, `send_receive`: what the first half did, and the receive half's result
+    /// (`receive`'s), or the error that stopped the turn (R13).
+    Turn {
+        first: TurnFirst,
+        half: alloc::boxed::Box<Result<Ret, Error>>,
     },
 }
 

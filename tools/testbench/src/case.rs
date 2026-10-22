@@ -535,9 +535,11 @@ pub struct Idle {
     pub user_ecalls: Option<f64>,
     /// QEMU's host CPU time, in host cores.
     pub host_cores: Option<f64>,
-    /// The fewest answer frames the window must hold: the card's interrupts, each frame's taken on
-    /// one hart or several at once (`idle.rs`, `Counts::frames`). With a per-frame ceiling.
-    pub min_frames: Option<u64>,
+    /// The answer frames the per-frame ceilings are judged over, exactly: the span from the first
+    /// frame's first trap to the first trap of the frame after the last of them, so every count is
+    /// over this many frames' periods whatever the window's length (`idle.rs`, `Counts::starts`). A
+    /// window without the frame after them fails. Needed by a per-frame ceiling.
+    pub frames: Option<u64>,
     /// Every hart's interrupts, over the frames.
     pub interrupts_per_frame: Option<f64>,
     /// The kernel's calls to the firmware (SBI), every hart's, over the frames.

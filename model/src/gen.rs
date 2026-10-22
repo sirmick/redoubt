@@ -9,7 +9,8 @@
 //! worth attacking: principals' budgets under `users` (some labelled, with accounts), a system
 //! budget, shared endpoints, handles minted into the principals' budgets, and a process in each
 //! budget. Then random operations follow; now and then a "flood" phase piles blocked senders of
-//! two accounts onto one endpoint (R2).
+//! two accounts onto one endpoint (R2). A reply or send followed by its own thread's receive goes
+//! now and then as one call, a server's turn ([`Gen::next_op`]).
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -77,6 +78,10 @@ pub struct Gen {
     relay: u32,
     relay_from: Option<(u64, u64)>,
     relay_sent: bool,
+    /// The op drawn ahead for the state its predecessor leaves ([`Gen::next_op`]).
+    ahead: Option<Op>,
+    /// Whether pairs are fused into turns (always, but in the test that compares the two).
+    fuse: bool,
 }
 
 impl Gen {
@@ -98,12 +103,91 @@ impl Gen {
             relay,
             relay_from: None,
             relay_sent: false,
+            ahead: None,
+            fuse: true,
         }
     }
 
     /// The next op for this state. Always one the model accepts as a legal event (`step` returns
-    /// `Some`), unless the machine is halted.
+    /// `Some`), unless the machine is halted. The caller steps each op it is given before asking
+    /// for the next.
+    ///
+    /// A server's turn (kernel/ipc.md): a reply to an odd message id or a send whose first word is
+    /// odd (values already drawn or the state's, never a draw of their own), followed by its
+    /// own thread's receive, goes as one call, `reply_receive` or `send_receive`. The op after it
+    /// is drawn ahead, on the state it leaves, so it takes the draws it would have taken anyway,
+    /// and no draw is added: a fused pair consumes the pair's draws, and the rest of the sequence
+    /// is what it was. Only a first half that succeeds with a receive that passes its checks both
+    /// before and after it is fused (a turn checks its receive's handle first, so a handle the
+    /// first half installs is not yet one), so the turn does what the pair did; an op drawn
+    /// ahead and not fused comes next.
     pub fn next_op(&mut self, k: &Kernel) -> Op {
+        if let Some(op) = self.ahead.take() {
+            return op;
+        }
+        let op = self.draw(k);
+        let odd = match &op {
+            Op::Sys { call: Syscall::Reply { msg_id, .. }, .. } => msg_id & 1 == 1,
+            Op::Sys { call: Syscall::Send { words, .. }, .. } => words[0] & 1 == 1,
+            _ => false,
+        };
+        let Op::Sys { pid, tid, .. } = &op else { return op };
+        if !self.fuse || !odd {
+            return op;
+        }
+        let (pid, tid) = (*pid, *tid);
+        let mut after = k.clone();
+        let done = after
+            .step(&op)
+            .is_some_and(|s| matches!(s.outcome, Outcome::Done(Ok(Ret::Replied { .. } | Ret::Unit))));
+        let next = self.draw(&after);
+        let fused = match (&op, &next) {
+            (
+                Op::Sys { call: first, .. },
+                Op::Sys { pid: p, tid: t, call: Syscall::Receive { h, timeout, max_transfer } },
+            ) if done
+                && (*p, *t) == (pid, tid)
+                && k.receive_would_begin(pid, tid, *h)
+                && after.receive_would_begin(pid, tid, *h) =>
+            {
+                let (h, timeout, max_transfer) = (*h, *timeout, *max_transfer);
+                match first.clone() {
+                    Syscall::Reply { msg_id, words, handles } => {
+                        Some(Syscall::ReplyReceive { h, timeout, max_transfer, msg_id, words, handles })
+                    }
+                    Syscall::Send { h: endpoint, words, handles, transfer, timeout: send_timeout } => {
+                        Some(Syscall::SendReceive {
+                            h,
+                            timeout,
+                            max_transfer,
+                            endpoint,
+                            words,
+                            handles,
+                            transfer,
+                            send_timeout,
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        match fused {
+            Some(call) => Op::Sys { pid, tid, call },
+            None => {
+                self.ahead = Some(next);
+                op
+            }
+        }
+    }
+
+    /// The generator as it was before turns: pairs are never fused. For the test that compares
+    /// the two.
+    #[cfg(test)]
+    fn unfused(seed: u64) -> Gen { Gen { fuse: false, ..Gen::new(seed) } }
+
+    /// One op for this state, as [`Gen::next_op`] gives it but for the fusing.
+    fn draw(&mut self, k: &Kernel) -> Op {
         if self.setup != u32::MAX {
             if let Some(op) = self.setup_op(k) {
                 return op;
@@ -1106,5 +1190,84 @@ mod subtree_regressions {
             }
             assert!(Gen::new(0).next_op_in(&initial, USERS).is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod turn_fusion {
+    extern crate std;
+
+    use super::*;
+    use crate::kernel::Boot;
+
+    fn run(mut gen: Gen, len: usize) -> Vec<Op> {
+        let mut k = Kernel::boot(&Boot::testing(), None).unwrap();
+        let mut ops = Vec::new();
+        for _ in 0..len {
+            if k.halted.is_some() || (k.runnable().is_empty() && k.next_event().is_none()) {
+                break;
+            }
+            let op = gen.next_op(&k);
+            k.step(&op).unwrap();
+            ops.push(op);
+        }
+        ops
+    }
+
+    /// Fusing adds no draw and changes nothing else: on every seed the sequence is the unfused
+    /// one with each fused pair as one call, a reply or send and its own thread's receive.
+    #[test]
+    fn a_fused_sequence_is_the_unfused_one_with_each_pair_one_call() {
+        let (mut replies, mut sends) = (0, 0);
+        for seed in 0..5000 {
+            let fused = run(Gen::new(seed), 150);
+            let plain = run(Gen::unfused(seed), 300);
+            let mut j = 0;
+            for op in &fused {
+                let Op::Sys { pid, tid, call } = op else {
+                    assert_eq!(&plain[j], op, "seed {seed}, op {j}");
+                    j += 1;
+                    continue;
+                };
+                let (first, receive) = match call.clone() {
+                    Syscall::ReplyReceive { h, timeout, max_transfer, msg_id, words, handles } => {
+                        replies += 1;
+                        (
+                            Syscall::Reply { msg_id, words, handles },
+                            Syscall::Receive { h, timeout, max_transfer },
+                        )
+                    }
+                    Syscall::SendReceive {
+                        h,
+                        timeout,
+                        max_transfer,
+                        endpoint,
+                        words,
+                        handles,
+                        transfer,
+                        send_timeout,
+                    } => {
+                        sends += 1;
+                        let send =
+                            Syscall::Send { h: endpoint, words, handles, transfer, timeout: send_timeout };
+                        (send, Syscall::Receive { h, timeout, max_transfer })
+                    }
+                    _ => {
+                        assert_eq!(&plain[j], op, "seed {seed}, op {j}");
+                        j += 1;
+                        continue;
+                    }
+                };
+                assert_eq!(plain[j], Op::Sys { pid: *pid, tid: *tid, call: first }, "seed {seed}, op {j}");
+                assert_eq!(
+                    plain[j + 1],
+                    Op::Sys { pid: *pid, tid: *tid, call: receive },
+                    "seed {seed}, op {j}"
+                );
+                j += 2;
+            }
+        }
+        assert!(replies > 10 && sends > 10, "{replies} reply_receive and {sends} send_receive fused");
+        std::eprintln!("{replies} reply_receive and {sends} send_receive fused in 5000 seeds");
     }
 }

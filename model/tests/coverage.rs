@@ -10,6 +10,17 @@ use redoubt_model::kernel::{Boot, Kernel};
 use redoubt_model::spec::{Cause, Error};
 use redoubt_model::syscall::{BufferKind, CALL_NAMES, Op, Outcome, Ret};
 
+/// The error a `call` or a turn carries in its result, if it failed.
+fn status_error(r: &Ret) -> Option<Error> {
+    match r {
+        Ret::Call(c) => c.status.err(),
+        Ret::Turn { half, .. } => half.as_ref().as_ref().err().copied(),
+        _ => None,
+    }
+}
+
+fn failed(r: &Ret) -> bool { status_error(r).is_some() }
+
 fn kind(r: &Result<Ret, Error>) -> String {
     match r {
         Ok(Ret::Message(m)) => format!("message {:?}", m.buffer.map(|b| b.kind)),
@@ -20,6 +31,7 @@ fn kind(r: &Result<Ret, Error>) -> String {
             None => c.status.map_or_else(|e| e.name().into(), |_| "unit".into()),
         },
         Ok(Ret::Replied { .. }) => "unit".into(),
+        Ok(Ret::Turn { half, .. }) => kind(half),
         Ok(_) => "ok".into(),
         Err(e) => format!("{e:?}"),
     }
@@ -45,9 +57,7 @@ fn every_call_and_error_is_reached() {
                 if s.outcome == Outcome::Blocked {
                     blocked.insert(*tid, call.name());
                 }
-                if matches!(&s.outcome, Outcome::Done(Ok(r)) if !matches!(r, Ret::Call(c) if c.status.is_err()))
-                    || s.outcome == Outcome::Gone
-                {
+                if matches!(&s.outcome, Outcome::Done(Ok(r)) if !failed(r)) || s.outcome == Outcome::Gone {
                     seen.insert(format!("{} ok", call.name()));
                 }
                 let what = match &s.outcome {
@@ -58,16 +68,16 @@ fn every_call_and_error_is_reached() {
                 if let Outcome::Done(Err(e)) = s.outcome {
                     errors.insert(e);
                 }
-                if let Outcome::Done(Ok(Ret::Call(c))) = &s.outcome {
-                    if let Err(e) = c.status {
+                if let Outcome::Done(Ok(r)) = &s.outcome {
+                    if let Some(e) = status_error(r) {
                         errors.insert(e);
                     }
                 }
                 seen.insert(format!("{} {what}", call.name()));
             }
             for w in &s.wakes {
-                if let Ok(Ret::Call(c)) = &w.result {
-                    if let Err(e) = c.status {
+                if let Ok(r) = &w.result {
+                    if let Some(e) = status_error(r) {
                         errors.insert(e);
                     }
                 }
@@ -75,7 +85,7 @@ fn every_call_and_error_is_reached() {
                     errors.insert(e);
                 }
                 if let (Some(name), Ok(r)) = (blocked.remove(&w.tid), &w.result) {
-                    if matches!(r, Ret::Call(c) if c.status.is_err()) {
+                    if failed(r) {
                         continue;
                     }
                     seen.insert(format!("{name} ok"));

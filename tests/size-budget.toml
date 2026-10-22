@@ -6,7 +6,7 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 11131
+max_lines = 11452
 
 [[crate]]
 name = "loader"
@@ -21,7 +21,7 @@ max_lines = 364
 [[crate]]
 name = "libs/sys"
 paths = ["libs/sys/src"]
-max_lines = 1060
+max_lines = 1157
 
 [[crate]]
 name = "libs/layout"
@@ -81,7 +81,7 @@ max_lines = 1142
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 4182
+max_lines = 4305
 
 [[crate]]
 name = "libs/wire"
@@ -116,7 +116,7 @@ max_lines = 1691
 [[crate]]
 name = "model"
 paths = ["model/src"]
-max_lines = 11581
+max_lines = 11997
 
 [[crate]]
 name = "servers/keyd"
@@ -168,7 +168,7 @@ max_lines = 1729
 # in every default build.
 name = "servers/netd"
 paths = ["servers/netd/src"]
-max_lines = 1590
+max_lines = 1653
 
 [[crate]]
 # Includes the test-only feature keep-alive-probes (src/stack.rs, its constant), off in every

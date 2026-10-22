@@ -188,7 +188,11 @@ the readied thread, as for any other. The rule changes who picks, never what, an
 nobody: the waker's slice ended for its own reason. Every other readied thread's idle wake is
 sent in the entry that made it, never later: a `send` or a `reply` leaves its sender running, so
 the thread it readies is picked by an idle hart, and the two threads of one exchange then enter
-the kernel on two harts and wait for each other's sections ([R78](#r78-fair-kernel-entry)).
+the kernel on two harts and wait for each other's sections ([R78](#r78-fair-kernel-entry)). A
+server's turn made one entry, a `reply_receive` or a `send_receive` ([IPC](ipc.md#a-servers-turn)),
+blocks in the entry that readies when its receive blocks, so the thread it readies is then this
+hart's pick; with a message already queued for its receive it runs on, and the thread it readied
+is an idle hart's.
 
 A device interrupt only wakes too. `sched-irq-wake` runs a driver stand-in on the goldfish RTC's
 alarm beside an equal-weight spinner, so every alarm interrupts the spinner mid-slice, and the
@@ -1958,9 +1962,10 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   holding the lock about 31 µs (p50; 50 µs at p90): at most three are ahead of a wake, about
   0.15 ms of a p99 of 4 to 12 ms. So it is not routed for latency. At rest it costs more than
   its claims: the network card's answer to one of `ipd`'s keep-alive probes is taken on 1.75 to
-  1.85 harts, and about 5 of the probe's 10 to 11 lock hand-offs follow it and the idle wake its
-  hart sends ([what a probe costs](../servers/ipd.md#the-net-tree)). Sending each source to one
-  idle hart (a busy hart's threshold above the sources' priority while one idles) is the remedy.
+  1.85 harts, and none of the probe's 4 lock hand-offs follows it in the instrumented windows
+  ([what a probe costs](../servers/ipd.md#the-net-tree)). Sending each
+  source to one idle hart (a busy hart's threshold above the sources' priority while one idles)
+  is the remedy for the claims that find nothing.
 - **Some cases keep one hart.** A case that does not keep its hart count runs at the count the
   bench is given (`--smp`); these keep theirs (`keep_smp`), each for one of four reasons: a proof
   that reads one hart's slices; where a checked build's audits fall; a count with no trace, which
@@ -1999,20 +2004,23 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   `sched-capped` (two, three and four harts), `sched-capped-mttcg` (two and three), `sched-lock-contention` (two),
   `sched-lock-contention-4` (four), `sched-wake-no-preempt-harts` and
   `sched-wake-no-preempt-harts-mttcg` (two) keep the counts they are about.
-- **A server's turn crosses harts.** A thread readied where its waker blocks is that hart's pick
-  ([preemption points](#preemption-points)), so a `call` hands its server to no other hart. But a
-  server's `reply` and its next `receive` are two entries, and the reply leaves the server
-  running: the client it readies is an idle hart's pick, even when the two run in one budget, so
-  every server turn ends with a hand-off across harts, an interrupt and a wait for the lock, where
-  one hart would run them in turn. A driver's forward of what its device delivered and its wait
-  for the next interrupt are two entries too. Under `icount`, `ipc-client`'s 1000 lend round trips
-  against `log-server` in `system` take 2.07 s at two harts against 2.02 s at one (rv64; 2.06 and
-  2.01 s on rv32), since a hart waiting for the lock halts ([R78](#r78-fair-kernel-entry)); at
-  rest, about 5 of the 10 to 11 lock hand-offs of one of `ipd`'s keep-alive probes follow such a
-  `send`, `reply` or the `receive` that takes a queued send
-  ([what a probe costs](../servers/ipd.md#the-net-tree)). A server's turn made one entry (a reply
-  that receives; a receive or a wait for an interrupt that sends first) is the remedy, an addition
-  to the call ABI. A call's or a destruction's kernel time delays every wake
+- **A server's turn crosses harts where it is still two calls.** A thread readied where its waker
+  blocks is that hart's pick ([preemption points](#preemption-points)), so a `call` hands its
+  server to no other hart, and a server's turn made one entry hands its caller to none either: a
+  reply that receives (`reply_receive`) and a send that waits (`send_receive`;
+  [IPC](ipc.md#a-servers-turn)). The runtime's serving loops, `netd`'s and the test log server
+  make their turns so. A loop that still replies and then receives in two calls (the 9P
+  skeleton's, `ipd`'s and `sshd`'s, [serving](../servers/serving.md#residual-risks)) leaves its
+  server running after the reply, and the client it readied is an idle hart's pick: a hand-off
+  across harts, an interrupt and a wait for the lock. `ipc-turns` measures 1000 lend round trips
+  against the log server (a checked build, `icount` `shift=3,sleep=off`): one hart takes 2.121 s
+  on rv64 and 2.098 s on rv32, two harts 2.494 and 2.726 s, and from the first message to the
+  power-off the kernel sends no idle hart an interrupt, halts no hart for its lock and shoots
+  nothing down. The excess two harts take, 18 and 30 %, is QEMU's turn order between its vCPUs
+  (the residual below, "A hart waits for QEMU's turns"), not the kernel's: where the harts run at
+  once (QEMU's multi-threaded TCG, `ipc`'s pair, host time, three runs a width) two harts take 2
+  to 11 % longer than one, within the host's noise.
+  A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
   dominates lease termination and follows the dying subtree and the handles that depend on it, so its target
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had

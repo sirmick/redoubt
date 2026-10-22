@@ -170,6 +170,23 @@ impl Checker {
                     }
                 }
                 Flow::Delivered { tid, id, msg, via } => delivered(k, *tid, *id, msg, via)?,
+                // R13 for a turn: its result is one row of the turn's table, and its first half's
+                // disposition is what the ghost saw that half do.
+                Flow::Turn { tid, first, status, done } => {
+                    use crate::syscall::TurnFirst;
+                    let after =
+                        matches!(status, Ok(()) | Err(Error::Timeout | Error::Dead | Error::InvalidArgument));
+                    match first {
+                        TurnFirst::Nothing => ensure!(
+                            status.is_err() && done.is_none(),
+                            "R13: thread {tid}'s turn returned {status:?} with nothing done, its first half having done {done:?}"
+                        ),
+                        _ => ensure!(
+                            after && done.as_ref() == Some(first),
+                            "R13: thread {tid}'s turn returned {status:?} with {first:?}, its first half having done {done:?}"
+                        ),
+                    }
+                }
                 Flow::Exit { pid, from, to_class, to, got, want } => {
                     ensure!(
                         *to_class == Class::System || superset(to, from),

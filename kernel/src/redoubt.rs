@@ -12,8 +12,8 @@
 //!
 //! Implemented calls: `handle_close`, `budget_create`, `budget_destroy`, `budget_reap`,
 //! `budget_usage`, `time_now`, `random`, `endpoint_create`, `mint`, `call`, `send`, `receive`,
-//! `reply`, `serve`, `map_anon`, `unmap`, `set_flags`, `map_device`, `dma_alloc`,
-//! `system_reset` and the `process_*` and `thread_*` families.
+//! `reply`, `reply_receive`, `send_receive`, `serve`, `map_anon`, `unmap`, `set_flags`, `map_device`,
+//! `dma_alloc`, `system_reset` and the `process_*` and `thread_*` families.
 
 use redoubt_layout::Pid;
 use redoubt_sys::{
@@ -125,6 +125,34 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         Call::Reply { msg_id, body_rec } => with_both(|ss, mm| {
             crate::message::reply(ss, mm, pid, tid, msg_id.get(), body_rec)
                 .map(|outcome| Some(Return::Reply(outcome)))
+        }),
+        Call::ReplyReceive { from, timeout, max_transfer, received_rec, first_rec } => with_both(|ss, mm| {
+            let from = from.map(|h| h.index());
+            crate::message::reply_receive(
+                ss,
+                mm,
+                pid,
+                tid,
+                from,
+                timeout,
+                max_transfer,
+                received_rec,
+                first_rec,
+            )
+        }),
+        Call::SendReceive { from, timeout, max_transfer, received_rec, first_rec } => with_both(|ss, mm| {
+            let from = from.map(|h| h.index());
+            crate::message::send_receive(
+                ss,
+                mm,
+                pid,
+                tid,
+                from,
+                timeout,
+                max_transfer,
+                received_rec,
+                first_rec,
+            )
         }),
         Call::Serve { msg_id } => {
             MemoryManager::with_mut(|mm| crate::message::serve(mm, pid, tid, msg_id.get())).map(done)

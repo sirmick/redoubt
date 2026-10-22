@@ -84,6 +84,27 @@ fn sample_calls() -> Vec<Call> {
         Call::ConsoleHold { device: h(5), hold: Hold::Take },
         Call::ConsoleHold { device: h(5), hold: Hold::Release },
         Call::ConsoleHold { device: h(5), hold: Hold::ReleaseOpen },
+        Call::ReplyReceive {
+            from: Some(h(1)),
+            timeout: BIG,
+            max_transfer: 16,
+            received_rec: 0x7000,
+            first_rec: 0x5000
+        },
+        Call::ReplyReceive {
+            from: None,
+            timeout: 0,
+            max_transfer: 0,
+            received_rec: 0x7000,
+            first_rec: 0x5000
+        },
+        Call::SendReceive {
+            from: Some(h(u32::MAX)),
+            timeout: FOREVER,
+            max_transfer: 1,
+            received_rec: 0x7000,
+            first_rec: 0x5000
+        },
     ]
 }
 
@@ -120,6 +141,19 @@ fn sample_returns(number: Number) -> Vec<Return> {
         ],
         Number::BudgetReap => std::vec![Return::Remaining(0), Return::Remaining(u32::MAX)],
         Number::ConsoleHold => std::vec![Return::Wrote(false), Return::Wrote(true)],
+        Number::ReplyReceive => std::vec![
+            Return::Turn(TurnOutcome {
+                status: Ok(()),
+                first: FirstDone::Replied(ReplyOutcome { delivered: false, installed: 0 }),
+            }),
+            Return::Turn(TurnOutcome {
+                status: Ok(()),
+                first: FirstDone::Replied(ReplyOutcome { delivered: true, installed: 9 }),
+            }),
+        ],
+        Number::SendReceive => {
+            std::vec![Return::Turn(TurnOutcome { status: Ok(()), first: FirstDone::Sent })]
+        }
         _ => std::vec![Return::Nothing],
     }
 }
@@ -164,6 +198,13 @@ fn every_result_and_error_round_trips() {
                     reply_present: false,
                 });
                 assert_eq!(decode_result(number, &encode_result(&Ok(value))), Ok(value));
+                continue;
+            }
+            if matches!(number, Number::ReplyReceive | Number::SendReceive) {
+                // An error with nothing done is the plain error's registers: `a1` = 0.
+                let value = Return::Turn(TurnOutcome { status: Err(error), first: FirstDone::Nothing });
+                assert_eq!(encode_result(&Ok(value)), encode_result(&Err(error)));
+                assert_eq!(decode_result(number, &encode_result(&Err(error))), Ok(value));
                 continue;
             }
             let regs = encode_result(&Err(error));
@@ -232,6 +273,79 @@ fn ipc_outcomes_round_trip_and_reject_impossible_combinations() {
     assert_eq!(decode_result(Number::Call, &[0, 1, 2, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
     assert_eq!(decode_result(Number::Reply, &[0, 2, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
     assert!(ReplyOutcome { delivered: true, installed: 2 }.validate(1).is_err());
+}
+
+#[test]
+fn turn_outcomes_round_trip_and_reject_impossible_combinations() {
+    // Independent allowed rows from kernel/ipc.md's turn table: nothing done is any error; once
+    // the first half is done, the receive half's success, `Timeout`, `Dead` or `InvalidArgument`.
+    let after = [Ok(()), Err(Error::Timeout), Err(Error::Dead), Err(Error::InvalidArgument)];
+    let statuses = || core::iter::once(Ok(())).chain(Error::ALL.into_iter().map(Err));
+    let mut firsts = std::vec![FirstDone::Nothing, FirstDone::Sent];
+    for delivered in [false, true] {
+        for installed in 0..32 {
+            firsts.push(FirstDone::Replied(ReplyOutcome { delivered, installed }));
+        }
+    }
+    for number in [Number::ReplyReceive, Number::SendReceive] {
+        for first in &firsts {
+            for status in statuses() {
+                let value = Return::Turn(TurnOutcome { status, first: *first });
+                let regs = encode_result(&Ok(value));
+                assert!(fits_rv32(&regs));
+                let allowed = match *first {
+                    FirstDone::Nothing => status.is_err(),
+                    FirstDone::Sent => number == Number::SendReceive && after.contains(&status),
+                    FirstDone::Replied(ReplyOutcome { delivered, installed }) => {
+                        number == Number::ReplyReceive
+                            && after.contains(&status)
+                            && installed < 16
+                            && (delivered || installed == 0)
+                    }
+                };
+                // `Sent` and a discarded reply share `a1` = 1: each decodes as its own call's.
+                let decoded = decode_result(number, &regs);
+                if allowed {
+                    assert_eq!(decoded, Ok(value), "{number:?} {value:?}");
+                } else if decoded.is_ok() {
+                    let same_registers = matches!(
+                        (number, first),
+                        (Number::ReplyReceive, FirstDone::Sent)
+                            | (
+                                Number::SendReceive,
+                                FirstDone::Replied(ReplyOutcome { delivered: false, installed: 0 })
+                            )
+                    );
+                    assert!(same_registers && after.contains(&status), "{number:?} accepted {value:?}");
+                }
+            }
+        }
+    }
+    let rr = Number::ReplyReceive;
+    let sr = Number::SendReceive;
+    assert_eq!(decode_result(rr, &[0; REGS]), Err(Error::InvalidArgument), "success with nothing done");
+    assert_eq!(decode_result(rr, &[0, 3, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "a1 = 3");
+    assert_eq!(decode_result(sr, &[0, 2, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "send a1 = 2");
+    assert_eq!(decode_result(sr, &[0, 1, 1, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "send with a mask");
+    assert_eq!(
+        decode_result(rr, &[13, 0, 1, 0, 0, 0, 0, 0]),
+        Err(Error::InvalidArgument),
+        "a mask, no reply"
+    );
+    assert_eq!(decode_result(rr, &[0, 2, 1, 0, 0, 0, 1, 0]), Err(Error::InvalidArgument), "a6");
+    assert_eq!(
+        decode_result(sr, &[11, 1, 0, 0, 0, 0, 0, 0]),
+        Err(Error::InvalidArgument),
+        "Refused after the send was taken"
+    );
+    assert_eq!(
+        decode_result(rr, &[13, 2, 3, 0, 0, 0, 0, 0]),
+        Ok(Return::Turn(TurnOutcome {
+            status: Err(Error::Timeout),
+            first: FirstDone::Replied(ReplyOutcome { delivered: true, installed: 3 }),
+        })),
+        "a receive that timed out after a delivered reply"
+    );
 }
 
 fn snake_case(camel: &str) -> String {
@@ -358,6 +472,34 @@ fn received_layout() {
     assert_eq!(Received::Abandoned(nz(BIG)).encode(), a);
 }
 
+fn sample_halves() -> Vec<FirstHalf> {
+    std::vec![
+        FirstHalf::Reply { msg_id: nz(BIG), body: body(0) },
+        FirstHalf::Reply { msg_id: nz(1), body: body(MAX_MSG_HANDLES as u32) },
+        FirstHalf::Send { endpoint: h(7), timeout: FOREVER, transfer: None, body: body(1) },
+        FirstHalf::Send {
+            endpoint: h(u32::MAX),
+            timeout: 0,
+            transfer: Some(pages(0x6000, 3)),
+            body: body(2)
+        },
+    ]
+}
+
+/// The first-half record's layout: the target, the send's timeout, the transfer, the body.
+#[test]
+fn first_half_layout() {
+    assert_eq!(FIRST_SLOTS, 13);
+    let reply = FirstHalf::Reply { msg_id: nz(BIG), body: body(1) }.encode();
+    assert_eq!(reply[..4], [BIG, 0, 0, 0]);
+    assert_eq!(reply[4..], body(1).encode());
+    let send =
+        FirstHalf::Send { endpoint: h(7), timeout: BIG, transfer: Some(pages(0x6000, 3)), body: body(2) };
+    let slots = send.encode();
+    assert_eq!(slots[..4], [7, BIG, 0x6000, 3]);
+    assert_eq!(slots[4..], body(2).encode());
+}
+
 fn sample_usage() -> Usage {
     Usage {
         pages_limit: BIG,
@@ -404,6 +546,10 @@ fn records_round_trip() {
     }
     let usage = sample_usage();
     assert_eq!(Usage::decode(&usage.encode()), Ok(usage));
+    for half in sample_halves() {
+        let send = matches!(half, FirstHalf::Send { .. });
+        assert_eq!(FirstHalf::decode(send, &half.encode()), Ok(half), "{half:?}");
+    }
     // The spec has no scheduling flag: slot 3 is the label count.
     assert_eq!(sample_specs()[1].encode()[3], MAX_LABELS as u64, "labels");
 }
@@ -680,6 +826,40 @@ fn malformed_records_are_refused() {
     slots[WORD0 + WORDS + 3] = 5;
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "a handle past the count");
 
+    // FirstHalf: each call's target, its unused slots, the transfer's shape and the body's own
+    // refusals, the first in slot order.
+    let reply = FirstHalf::Reply { msg_id: nz(5), body: body(1) }.encode();
+    for (slot, value, error) in [
+        (0, 0, Error::InvalidArgument),
+        (1, 1, Error::InvalidArgument),
+        (2, 0x6000, Error::InvalidArgument),
+        (3, 1, Error::InvalidArgument),
+        (4 + WORDS, MAX_MSG_HANDLES as u64 + 1, Error::TooLarge),
+        (4 + WORDS + 1, 0, Error::BadHandle),
+        (4 + WORDS + 2, 9, Error::InvalidArgument),
+    ] {
+        let mut slots = reply;
+        slots[slot] = value;
+        assert_eq!(FirstHalf::decode(false, &slots), Err(error), "reply slot {slot} = {value}");
+    }
+    let send = FirstHalf::Send { endpoint: h(7), timeout: 10, transfer: None, body: body(1) }.encode();
+    for (slot, value, error) in [
+        (0, 0, Error::BadHandle),
+        (0, 1 << 32, Error::BadHandle),
+        (2, 0x6000, Error::InvalidArgument),
+        (3, 1, Error::InvalidArgument),
+        (4 + WORDS, MAX_MSG_HANDLES as u64 + 1, Error::TooLarge),
+        (4 + WORDS + 1, 0, Error::BadHandle),
+    ] {
+        let mut slots = send;
+        slots[slot] = value;
+        assert_eq!(FirstHalf::decode(true, &slots), Err(error), "send slot {slot} = {value}");
+    }
+    let mut slots = reply;
+    slots[0] = 0;
+    slots[4 + WORDS + 1] = 0;
+    assert_eq!(FirstHalf::decode(false, &slots), Err(Error::InvalidArgument), "slot order");
+
     // Usage: a counter too wide for its field.
     let mut slots = sample_usage().encode();
     slots[USAGE_SLOTS - 1] = 1 << 32;
@@ -739,6 +919,7 @@ fn random_records() {
     let mut rng = Rng(0xd1b5_4a32_d192_ed03);
     let valid = sample_received();
     let mut decoded = [0; 6];
+    let mut halves = 0;
     for _ in 0..200_000 {
         let mut body = [0; BODY_SLOTS].map(|_| rng.value());
         body[WORDS] %= 6;
@@ -768,8 +949,16 @@ fn random_records() {
         if let Ok(u) = Usage::decode(&usage) {
             assert_eq!(u.encode(), usage);
         }
+        let mut first = [0; FIRST_SLOTS].map(|_| rng.value());
+        first[4 + WORDS] %= 6;
+        let send = rng.next().is_multiple_of(2);
+        if let Ok(f) = FirstHalf::decode(send, &first) {
+            assert_eq!(f.encode(), first);
+            halves += 1;
+        }
     }
     assert!(decoded[1..].iter().all(|n| *n > 100), "decoded per kind: {decoded:?}");
+    assert!(halves > 100, "{halves} first halves decoded");
 }
 
 /// Each call's error row (kernel/abi.md, "Errors and the order of checks").
@@ -805,6 +994,16 @@ fn error_rows() {
     assert!(lacks(Number::Random, &[TooLarge, BadHandle, OutOfMemory]));
     assert!(lacks(Number::TimeNow, &[BadHandle, OutOfMemory]));
     assert!(lacks(Number::ThreadExit, &[BadHandle, OutOfMemory]));
+    // A turn's row is exactly its two halves' rows.
+    for (turn, first) in [(Number::ReplyReceive, Number::Reply), (Number::SendReceive, Number::Send)] {
+        for e in Error::ALL {
+            assert_eq!(
+                turn.can_return(e),
+                first.can_return(e) || Number::Receive.can_return(e),
+                "{turn:?} {e:?}"
+            );
+        }
+    }
     // `device_info` maps nothing and changes nothing (kernel/devices.md).
     assert!(has(Number::DeviceInfo, &[BadHandle, WrongObject]));
     assert!(lacks(Number::DeviceInfo, &[OutOfMemory, NotPermitted, TooLarge]));

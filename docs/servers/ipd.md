@@ -83,26 +83,23 @@ file holds is typed, in the wire encoding ([wire](wire.md#the-encoding)), never 
   deadline, and every answer came within a millisecond but one, which the host took 4.15 s to
   send.
 - **What a probe costs.** One probe is `ipd`'s timer wake, its `transmit` call to `netd`, the
-  card's interrupt for the answer, `netd`'s receive thread's send to `ipd`, and `ipd`'s wake: 15
-  system calls from user mode, 9 of them `ipd`'s. On an idle four-hart box it costs about 23 to 26
-  interrupts and 29 to 33 SBI calls in all, every hart's, on rv64 (26 to 28 and 33 to 35 on rv32):
-  `bench:launch-idle-probes` builds `ipd` with its test-only `keep-alive-probes`, a probe every 2
-  s, and the cost is its window less `launch-idle`'s over the card's answer frames between them,
-  one a probe (26 or 27), three alternating rounds a width alone. The kernel arms the hart timer
-  only when its target changes, not for a slice's end that a call's or an interrupt's pause moved
-  ([the hart timer](../kernel/timer.md#the-hart-timer)). Each is named by the entry that makes
-  it. The probe's own: its timer, `ipd`'s call and `netd`'s reply, the card's interrupt on the
-  hart that claims it, and `netd`'s receive thread's entries, with the timer's re-arms they move
-  (a target that changes: a wait's timeout, a new slice). About 5 are
-  lock hand-offs (an interrupt and an SBI call each) after a `send`, a `reply` or the `receive`
-  that takes a queued send, because a server's turn is two entries
-  ([scheduling](../kernel/scheduling.md#residual-risks)); about 5 more follow the card's interrupt,
-  taken on 1.75 to 1.85 harts, and the idle wake its hart sends. Those two halves are the box's
-  cost of any frame and its answer at rest, not the probe's: a server's turn made one entry removes
-  the first, a device interrupt taken on one hart the second, and the case is the witness each must
-  turn down. None of it is a timer interrupt for a wait answered before its timeout, which leaves
-  the timer nothing ([the hart timer](../kernel/timer.md#the-hart-timer)). The probe interval
-  follows from the loss model above, not from its cost.
+  card's interrupt for the answer, `netd`'s receive thread's send to `ipd`, and `ipd`'s wake: 11
+  system calls from user mode, 9 of them `ipd`'s and 2 `netd`'s, each of whose turns is one call
+  (its reply with its next receive, its forward with its wait for the next interrupt:
+  [IPC](../kernel/ipc.md#a-servers-turn)). On an idle four-hart box it costs about 10 to 16
+  interrupts and 14 to 19 SBI calls in all, every hart's, on both widths:
+  `bench:launch-idle-probes` builds `ipd` with its test-only `keep-alive-probes`, a probe every
+  2 s, and the cost is its window less `launch-idle`'s over the card's answer frames between them,
+  one a probe (30), three alternating rounds a width alone. The kernel arms the hart timer only
+  when its target changes, not for a slice's end that a call's or an interrupt's pause moved
+  ([the hart timer](../kernel/timer.md#the-hart-timer)). Each is named by the entry that makes it
+  (a kernel marking each entry, one window a width). No entry of the probe sends an idle hart an
+  interrupt. About 4 lock hand-offs a probe remain, each after a wake made by a loop that replies
+  and receives in two calls, `ipd`'s and the 9P skeleton's in `consrelay`
+  ([scheduling](../kernel/scheduling.md#residual-risks)): making those loops' turns one call
+  removes them. None of it is a timer interrupt for a wait answered before its timeout, which
+  leaves the timer nothing ([the hart timer](../kernel/timer.md#the-hart-timer)). The probe
+  interval follows from the loss model above, not from its cost.
 - **Ports.** A listened port belongs to its connection and the connections `new_connection` minted
   from it, not to grants; an ephemeral port is drawn at random and drawn again if in use.
 - **What is not there:** no IPv6, DHCP, DNS, UDP, raw or ICMP sockets, and no fragment reassembly (a
@@ -565,9 +562,9 @@ Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes
 - **A shared `ipd` is shared state.** Its clients share one stack's memory, timers and link; where
   that matters, each trust domain gets its own `ipd`.
 - **Probes scale with an account's sockets.** Each silent socket probes four times a minute, and
-  each probe costs the box about 26 to 30 interrupts and 32 to 36 SBI calls on rv64 ([what a probe
-  costs](#the-net-tree)): alice's 32 sockets, all silent, are about 2.1 probes a second, some 55 to
-  63 interrupts and 68 to 76 SBI calls a second across the machine, paid by `ipd`, `netd` and the
+  each probe costs the box about 10 to 16 interrupts and 14 to 19 SBI calls ([what a probe
+  costs](#the-net-tree)): alice's 32 sockets, all silent, are about 2.1 probes a second, some 21 to
+  34 interrupts and 29 to 40 SBI calls a second across the machine, paid by `ipd`, `netd` and the
   kernel. The manifest bounds it: the account's socket cap times the probe rate times the per-probe
   cost. The servers that pay it run at their weights
   ([R12 (scheduling)](../kernel/scheduling.md#r12-scheduling)), the card's interrupt is billed to

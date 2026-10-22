@@ -1,0 +1,26 @@
+description = "A server's turn stays on one hart (kernel/scheduling.md, \"A server's turn crosses harts\"): 1000 writable lend round trips against log-server at one and two harts; from the first message taken to the power-off, the checked kernel sent no idle hart a reschedule interrupt, halted no hart for the kernel lock and asked none to shoot a space down, and the round trips' guest time is under a bound per width"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# Built with the checks on: the count line is a checked build's (docs/testbench.md, "Checked builds").
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["log-server", "ipc-turns"]
+smp = [1, 2]
+poweroff = true
+timeout_secs = 60
+expect = [
+    # The time guard, guest time under icount, deterministic. Each width's bound is its one-hart
+    # figure plus twice its two-hart excess, the worst of three runs a width alone, rounded up to
+    # 0.05 s: rv64 2.121 s at one hart and 2.494 at two (2.121 + 2 x 0.372 = 2.866 -> 2.90 s);
+    # rv32 2.098 and 2.726 (2.098 + 2 x 0.628 = 3.354 -> 3.40 s). Before a server's turn was one
+    # entry, two harts took 3.404 and 3.838 s. The excess left (18 and 30 %) is QEMU's turn order
+    # between its vCPUs, not the kernel's work: the next line counts no hand-off (scheduling.md,
+    # "A hart waits for QEMU's turns").
+    'ok: 1000 writable lend round trips, (\d{1,6}|1\d{6}|2[0-8]\d{5}|2900000) us on rv64$|ok: 1000 writable lend round trips, (\d{1,6}|[12]\d{6}|3[0-3]\d{5}|3400000) us on rv32$',
+    # The witness: a checked build's count at power-off, from the first message a receiver took.
+    # Before, a reply that left its server running readied its caller for the idle hart, which then
+    # waited for the lock: 1001 idle wakes and 3998 lock halts on rv64 (4001 on rv32), and no
+    # shootdown, the lend's unmap finding the caller on no other hart.
+    '^hops since the first message: idle wakes 0, lock halts 0, shootdowns 0$',
+]
+forbid = ['\[ipc-turns\] FAIL', 'PANIC']

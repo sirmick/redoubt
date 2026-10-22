@@ -171,7 +171,8 @@ attack case passes only on a line the attacker cannot write:
   naming the caller by the badge the kernel delivers with the call, which the tester chose, and
   powers off. A case that names a `reporter` passes only if exactly one line starts
   `[server] done:` and it names the reporter's place; any other such line fails it, as does one
-  in a case with no `reporter`.
+  in a case with no `reporter`. Its `OFF` powers off without answering and prints nothing: it is
+  no verdict, but lets a program end a case whose last call must ready no thread (`ipc-turns`).
 - **`consoled`'s prefix, under `init`.** In a servers' case the real `init` holds the UART until
   `consoled` starts, and `consoled` starts every line written through a child's connection with
   that connection's `[con N]`, so only `init`'s lines are bare. The bench learns the reporter's N
@@ -290,7 +291,7 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 189 of the 360 run under `icount`: 182 so, six with a disk
+something in it waits on the host, and 191 of the 362 run under `icount`: 184 so, six with a disk
 at `icount = "shift=3"` (the rule for a disk is above), and `bench-qemu-early-exit`, whose `icount`
 is one QEMU refuses. What keeps the other 171 on the host's clock, a case counted under each it
 has: a disk or a userland disk (144 cases); host sockets, a `forward`, a `poke`, a peer or a dial
@@ -995,6 +996,14 @@ CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECK
 
 That run fails `bench-debug-assertions-off`, as it should; everything else must pass.
 
+At `system_reset` a checked kernel prints its counts, which a case may judge: whether every hart
+ran user code (`smp-boot`), the kernel lock's longest wait, each hart's device-interrupt claims,
+the halts skipped for an awaited interrupt, and its hand-offs across harts from the first message
+a receiver took (`hops since the first message: idle wakes N, lock halts N, shootdowns N`):
+reschedule interrupts sent to an idle hart, halts in the wait for the kernel lock and harts asked
+to shoot a space down. The boot's starts, before any message, are not counted. `ipc-turns` judges
+that line at 0 at two harts ([scheduling](kernel/scheduling.md#residual-risks)).
+
 `sched-trace` keeps the trace in a 64 MiB ring, and a trace that drops a record fails its case;
 `sched-trace-large` is the same ring at 256 MiB, and two cases build it. The containment gate
 does, at 576 MiB of RAM, since at the 1 ms slice its run of nine leases a slot writes about ten
@@ -1555,7 +1564,7 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
 - host:testbench::a_drain_that_never_ends_fails_at_the_bound
 - host:testbench::no_drain_seen_fails_at_the_bound
 - host:testbench::only_the_kernel_s_lines_open_a_drain_and_one_inside_is_named
-- host:testbench::answer_frames_are_counted_and_judged_per_frame
+- host:testbench::answer_frames_are_counted_and_judged_over_their_span
 - host:testbench::recipe_features_reach_only_the_named_program
 - host:testbench::only_launch_idle_probes_builds_the_fast_keep_alive
 
@@ -1629,23 +1638,28 @@ that would take the kernel's own trace, which prints only at a reset. `launch-id
 host-clock case, run in the quiet class.
 
 `launch-idle-probes` is the same machine with `ipd` built with its test-only `keep-alive-probes`, a
-silent socket probed every 2 s, so about 30 of the card's answer frames fall in the window. A
-recipe case's `recipe_features` gives some of its recipe's programs test-only features by package;
-the image's recipes name none, and only this case names this one. The bench counts the card's
-interrupts as answer frames, those within six traps of each other being one frame taken on several
-harts, and judges the window per frame (`[idle]`'s `min_frames`, `interrupts_per_frame`,
-`sbi_calls_per_frame`, `user_ecalls_per_frame`), the window's background included. So it is a
-per-frame guard, not the per-probe cost ([what a probe costs](servers/ipd.md#the-net-tree)), which
-is this window less `launch-idle`'s: about 23 to 26 interrupts and 29 to 33 SBI calls a probe on
-rv64. Its ceilings are idle ceilings, tighter than `launch-idle`'s twice the most: the most per
-frame measured alone, three rounds a width, plus the rounds' spread, rv32's, the wider, rounded
-up: 44 interrupts and 56 SBI calls a frame (the most 38.8 and 50.3, spreads 4.9 and 5.1), so a
-timer armed only when its target changes ([the hart timer](kernel/timer.md#the-hart-timer)) is
-guarded at rest; and user ecalls the most plus one, 33.1 a frame: 15 a probe plus about 17 a
-frame of background, which moves with real time. It is kept as the witness that a
-server's turn made one entry, or a device interrupt taken on one hart, must turn down for its own
-hops, and so that `launch-idle`'s ceilings are not the only reading of a frame's cost. It is a
-host-clock case in the quiet class.
+silent socket probed every 2 s, and a 64 s idle step, so 31 or more of the card's answer frames
+fall in the window. A recipe case's `recipe_features` gives some of its recipe's programs test-only
+features by package; the image's recipes name none, and only this case names this one. The bench
+counts the card's interrupts as answer frames: one within six traps of the last, or with no system
+call from user mode since it, is the same frame taken on another hart, since `netd` and `ipd` run
+for each frame before the next. It judges per frame (`[idle]`'s `frames`, `interrupts_per_frame`,
+`sbi_calls_per_frame`, `user_ecalls_per_frame`) over the span of exactly `frames` frames, from the
+first frame's first trap to the first trap of the frame after them, the background in that span
+included, and a window without that frame fails. About 19 of a frame's user ecalls are background
+that runs with time, so a count over however many frames the window happened to hold would move by
+a frame's worth with each one more or fewer; over a fixed span it does not. So it is a per-frame
+guard, not the per-probe cost ([what a probe costs](servers/ipd.md#the-net-tree)), which is a
+window less `launch-idle`'s: about 10 to 16 interrupts and 14 to 19 SBI calls a probe. Its
+ceilings are idle ceilings, tighter than `launch-idle`'s twice the most: the most per frame
+measured alone, three rounds a width, plus the rounds' spread, the wider width's, rounded up: 32
+interrupts and 40 SBI calls a frame (the most 26.0 and 34.7, spreads 5.8 and 5.1), so a timer armed
+only when its target changes ([the hart timer](kernel/timer.md#the-hart-timer)) is guarded at
+rest, and so is every hand-off across harts a probe's turns leave out; and 30.1 user ecalls (the
+most 30.0, spread 0.1: 11 a probe plus about 19 a frame of background). A server's turn made two
+calls again adds two user ecalls a probe and fails that ceiling. It is kept so that
+`launch-idle`'s ceilings are not the only reading of a frame's cost. It is a host-clock case in the
+quiet class.
 
 ### Against Redoubt's sshd
 

@@ -20,20 +20,24 @@ Written once, those answers are tested once and cannot drift between servers.
 
 ### `serve`
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (6)</summary>
 
 - host:redoubt-rt::serve_answers_calls_and_closes_what_a_send_brought
 - host:redoubt-rt::serve_survives_abandoned_and_exit_notices
 - host:redoubt-rt::serve_exits_ok_when_the_endpoint_dies
 - host:redoubt-rt::serve_exits_receive_failed_on_any_other_error
+- host:redoubt-rt::a_held_reply_is_made_with_the_next_receive
+- host:redoubt-rt::a_refused_turn_still_answers_the_call
 
 </details>
 
 A server that takes only calls runs `redoubt_rt::server::serve`, the one receive loop. Each call
-goes to the server's handler, which replies to it; a send is dropped and what it brought closed.
-The endpoint's death ends the server with `OK`, and any other failure to receive with
-`RECEIVE_FAILED` (3). A server whose handler must still reply or undo after an error keeps a
-loop of its own, closing a send's handles with `close_delivery`: `consoled`, `netd` and `ipd`.
+goes to the server's handler, which replies to it, or holds a handle-free reply for the loop's
+next receive (`typed::finish_held`; [replies and rollback](#replies-and-rollback)); a send is
+dropped and what it brought closed. The endpoint's death ends the server with `OK`, and any other
+failure to receive with `RECEIVE_FAILED` (3). A server whose handler must still reply or undo
+after an error keeps a loop of its own, closing a send's handles with `close_delivery`:
+`consoled`, `netd` and `ipd`. `netd`'s loop holds its replies as `serve` does.
 
 ### `admit`
 
@@ -594,6 +598,18 @@ them. If the kernel rejects the reply, the call is still open: `finish` answers 
 handle-free malformed reply, and if even that is rejected the server exits, so the caller gets
 `Dead` ([R4b (a server dies)](../kernel/ipc.md#r4b-a-server-dies)) rather than waiting for good.
 
+**A handle-free reply may be held to the loop's next receive, and nothing runs between the
+handler's return and that receive.** Nobody reads such a reply's outcome, since nothing it
+carries can be rolled back, so `typed::finish_held` closes what does not travel and hands the
+reply back to the loop, which makes it with its receive as one call, a server's turn
+(`Endpoint::receive_after`, `reply_receive`: [IPC](../kernel/ipc.md#a-servers-turn)). The caller
+answered then runs on this hart when the receive blocks, rather than being woken on another. A
+reply that carries handles is made at once by `finish`, as above, because its outcome decides a
+rollback. A turn the kernel refuses before anything is done leaves the call open: the loop
+finishes it alone, as `finish` does (the malformed reply if the kernel rejects that too), and
+then receives alone. `serve` (with `blkd`'s and `verityd`'s handlers) and `netd`'s loop hold
+their replies; the 9P skeleton's loop, `ipd`, `sshd` and `keyd` reply at once (a residual below).
+
 ```mermaid
 stateDiagram-v2
     [*] --> Provisional: reserve, admit State,<br/>commit (handle minted)
@@ -903,6 +919,10 @@ its `Rflush`, never after.
   apart and then parks it ([the steward](steward.md#failure-and-restart)); a connection so parked
   keeps its `State` in the account's bucket it was admitted in until the server answers a call of
   the steward's, or restarts.
+- **Some loops still reply and receive in two calls.** The 9P skeleton's loop, `ipd` and `sshd`
+  make each handle-free reply alone and then receive, so the caller they answer may be woken on
+  another hart ([scheduling](../kernel/scheduling.md#residual-risks)), until they hold their
+  replies as `serve` does. `keyd` replies at once by design: its grants read their outcome.
 - **Rollback ends at provisional state.** A client that abandons a request after the server
   performed a non-provisional effect (a file write) keeps the effect without learning of it.
 - **Admission counts objects, not bytes.** Bytes are the file server's to meter (`littlefsd`'s and

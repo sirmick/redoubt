@@ -237,6 +237,34 @@ impl Names {
             S::MapFixed { addr, len, flags } => format!("{} {len:#x} {flags}", a(*addr)),
             S::DeviceInfo { h: x } => h(*x),
             S::ConsoleHold { h: x, hold } => format!("{} {hold}", h(*x)),
+            S::ReplyReceive { h: x, timeout, max_transfer, msg_id, words: w, handles } => format!(
+                "{} {} {max_transfer} m:{msg_id} {} {}",
+                x.map_or("-".to_string(), h),
+                Names::time(*timeout),
+                words(w),
+                hs(handles)
+            ),
+            S::SendReceive {
+                h: x,
+                timeout,
+                max_transfer,
+                endpoint,
+                words: w,
+                handles,
+                transfer,
+                send_timeout,
+            } => {
+                format!(
+                    "{} {} {max_transfer} {} {} {} {} {}",
+                    x.map_or("-".to_string(), h),
+                    Names::time(*timeout),
+                    h(*endpoint),
+                    words(w),
+                    hs(handles),
+                    range(transfer),
+                    Names::time(*send_timeout)
+                )
+            }
         };
         if args.is_empty() { c.name().to_string() } else { format!("{} {args}", c.name()) }
     }
@@ -336,6 +364,18 @@ impl Names {
             Ret::Random => "ok random".into(),
             Ret::Device { kind, a, b, flags } => format!("ok device {kind} {a:#x} {b:#x} {flags}"),
             Ret::Word(w) => format!("ok word {w}"),
+            // What the first half did, then the receive half's result as `receive`'s line says it.
+            Ret::Turn { first, half } => {
+                let first = match first {
+                    TurnFirst::Nothing => "nothing".to_string(),
+                    TurnFirst::Replied { delivered, installed_mask } => format!(
+                        "reply delivery={} mask={installed_mask}",
+                        if *delivered { "delivered" } else { "discarded" }
+                    ),
+                    TurnFirst::Sent => "sent".to_string(),
+                };
+                format!("turn {first} then {}", self.result(pid, None, half, k))
+            }
         }
     }
 }
@@ -571,6 +611,24 @@ pub fn parse_call(t: &[Token]) -> Result<Syscall, String> {
         "map_fixed" => S::MapFixed { addr: v(0)?, len: v(1)?, flags: v(2)? },
         "device_info" => S::DeviceInfo { h: v(0)? },
         "console_hold" => S::ConsoleHold { h: v(0)?, hold: v(1)? },
+        "reply_receive" => S::ReplyReceive {
+            h: opt(0)?,
+            timeout: v(1)?,
+            max_transfer: v(2)?,
+            msg_id: v(3)?,
+            words: words(n(4)?)?,
+            handles: list(n(5)?)?,
+        },
+        "send_receive" => S::SendReceive {
+            h: opt(0)?,
+            timeout: v(1)?,
+            max_transfer: v(2)?,
+            endpoint: v(3)?,
+            words: words(n(4)?)?,
+            handles: list(n(5)?)?,
+            transfer: range(n(6)?)?,
+            send_timeout: v(7)?,
+        },
         other => return Err(format!("unknown call {other}")),
     })
 }

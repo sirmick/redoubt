@@ -72,7 +72,7 @@
 use redoubt_sys::{Error, Handle, Handles, ReceivedHandles, ReplyOutcome};
 use redoubt_wire::Error as WireError;
 
-use crate::ipc::{Caller, Request, Words};
+use crate::ipc::{Caller, Held, Request, Words};
 
 /// A generated protocol: its request, reply and error types and their codecs, in the server's
 /// direction (decode a request, encode a reply). The caller's direction is
@@ -270,6 +270,34 @@ pub fn finish(mut request: Request, outcome: &Outcome) -> Result<ReplyOutcome, E
             Err(error)
         }
     }
+}
+
+/// [`finish`] for a serving loop's handler: a reply that carries no handles is held for the loop's
+/// next receive ([`crate::ipc::Endpoint::receive_after`]) instead of made now, since nothing reads
+/// its outcome; what the outcome says to close is closed now, before it is made, as `finish`
+/// closes what does not travel. A reply with handles is made at once by `finish`, so the
+/// provisional records its outcome decides roll back as before (servers/serving.md, "Replies and
+/// rollback").
+pub fn finish_held(mut request: Request, outcome: &Outcome) -> Finished {
+    if !outcome.send.as_slice().is_empty() {
+        return Finished::Made(finish(request, outcome));
+    }
+    // As in `finish`: the outcome alone says what closes.
+    request.handles = ReceivedHandles::new();
+    for handle in outcome.close.as_slice() {
+        let _ = crate::handle::close(*handle);
+    }
+    Finished::Held(request.hold(outcome.words))
+}
+
+/// What [`finish_held`] did with a call.
+#[derive(Debug)]
+#[must_use = "a held reply is made by the receive that takes it"]
+pub enum Finished {
+    /// Replied to at once, as [`finish`] replies.
+    Made(Result<ReplyOutcome, Error>),
+    /// Held for the loop's next receive.
+    Held(Held),
 }
 
 #[cfg(test)]

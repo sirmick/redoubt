@@ -5,8 +5,8 @@
 
 use libfuzzer_sys::fuzz_target;
 use redoubt_sys::{
-    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Call, Number, RECEIVED_SLOTS, REGS, Received,
-    ReceivedBody, USAGE_SLOTS, Usage, decode_result, encode_result,
+    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Call, FIRST_SLOTS, FirstHalf, Number, RECEIVED_SLOTS,
+    REGS, Received, ReceivedBody, USAGE_SLOTS, Usage, decode_result, encode_result,
 };
 
 /// Fills `N` slots from little-endian bytes; missing bytes are 0.
@@ -22,7 +22,7 @@ fn slots<const N: usize>(bytes: &[u8]) -> [u64; N] {
 
 fuzz_target!(|data: &[u8]| {
     let Some((&selector, bytes)) = data.split_first() else { return };
-    match selector % 7 {
+    match selector % 8 {
         0 => {
             let regs = slots::<REGS>(bytes);
             if let Ok(call) = Call::decode(&regs) {
@@ -30,7 +30,7 @@ fuzz_target!(|data: &[u8]| {
             }
         }
         1 => {
-            let number = Number::ALL[usize::from(selector / 7) % Number::ALL.len()];
+            let number = Number::ALL[usize::from(selector / 8) % Number::ALL.len()];
             let regs = slots::<REGS>(bytes);
             if let Ok(value) = decode_result(number, &regs) {
                 assert_eq!(encode_result(&Ok(value)), regs);
@@ -53,6 +53,13 @@ fuzz_target!(|data: &[u8]| {
             let rec = slots::<BODY_SLOTS>(bytes);
             if let Ok(body) = ReceivedBody::decode(&rec) {
                 assert_eq!(body.encode(), rec);
+            }
+        }
+        7 => {
+            // A turn's first half, a reply's or a send's by the selector's next bit.
+            let rec = slots::<FIRST_SLOTS>(bytes);
+            if let Ok(first) = FirstHalf::decode(selector & 8 != 0, &rec) {
+                assert_eq!(first.encode(), rec);
             }
         }
         4 => {

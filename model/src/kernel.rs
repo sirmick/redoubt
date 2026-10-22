@@ -488,6 +488,19 @@ pub struct Thread {
     pub record: Record,
     /// Present only while executing call; None disposition represents a call without a lend.
     pub call_lend: Option<LendDisposition>,
+    /// Present only while in a turn (`reply_receive`, `send_receive`).
+    pub turn: Option<Turn>,
+}
+
+/// Where a thread is in a turn (kernel/ipc.md, "A server's turn").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Turn {
+    /// A `send_receive` whose message waits for a taker. Taken, it receives on `source` (the
+    /// handle it named and what that handle named then, none for a sleep: a kernel reference,
+    /// kept with the message); failed, the turn ends with nothing done.
+    Sending { source: Option<(u64, Handle)>, timeout: u64, max_transfer: u64 },
+    /// The first half is done.
+    Done(TurnFirst),
 }
 
 /// A lend or transfer in flight.
@@ -671,6 +684,20 @@ pub struct Kernel {
 type R<T> = Result<T, Error>;
 
 fn vpn(addr: u64) -> u64 { addr / PAGE_SIZE }
+
+/// A message's decoding: its endpoint register, its buffer's shape, then its body's handle count
+/// and handles. Returns the buffer.
+fn decode_message(h: u64, handles: &[u64], buffer: Option<Buffer>) -> R<Option<Buffer>> {
+    decode_handle(h)?;
+    let buffer = decode_range(buffer)?;
+    if handles.len() > MAX_MSG_HANDLES {
+        return Err(Error::TooLarge);
+    }
+    for x in handles {
+        decode_handle(*x)?;
+    }
+    Ok(buffer)
+}
 
 /// Encoding: a register holding a handle must be an index: not `NO_HANDLE`, at most `u32::MAX`.
 pub fn decode_handle(raw: u64) -> R<u64> {
@@ -1396,6 +1423,7 @@ impl Kernel {
                 current: None,
                 record: Record::Owned,
                 call_lend: None,
+                turn: None,
             },
         );
         let p = self.processes.get_mut(&pid).unwrap();
@@ -1477,6 +1505,7 @@ impl Kernel {
                 result = Ok(Ret::Call(CallCompletion { status: result.map(|_| ()), lend, reply: None }));
             }
         }
+        let turn = t.turn.take();
         t.wait = None;
         t.deadline = None;
         let pid = t.pid;
@@ -1490,6 +1519,19 @@ impl Kernel {
             if let Ok(Ret::Call(c)) = &mut result {
                 c.lend = LendDisposition::None;
             }
+        }
+        // A turn's result carries what its first half did; while its message still waited, that
+        // is nothing.
+        let first = match turn {
+            None => None,
+            Some(Turn::Done(first)) => Some(first),
+            Some(Turn::Sending { .. }) if self.broken(Mutation::TurnSendDispositionLies) => {
+                Some(TurnFirst::Sent)
+            }
+            Some(Turn::Sending { .. }) => Some(TurnFirst::Nothing),
+        };
+        if let Some(first) = first {
+            result = self.turn_result(tid, first, result);
         }
         self.ghost.flows.push(Flow::Woken { tid, result: result.clone() });
         self.wakes.push(Wake { pid, tid, result });
@@ -1998,6 +2040,10 @@ impl Kernel {
         self.ghost.delivered(rtid, rpid, mid, &msg);
         self.wake(rtid, Ok(Ret::Message(msg)));
         match m.kind {
+            // A turn's send goes on to its receive half.
+            MsgKind::Send if matches!(self.threads[&m.sender_tid].turn, Some(Turn::Sending { .. })) => {
+                self.continue_turn(m.sender_tid)
+            }
             MsgKind::Send => self.wake(m.sender_tid, Ok(Ret::Unit)),
             MsgKind::Call => {
                 let t = self.threads.get_mut(&m.sender_tid).unwrap();
@@ -2851,6 +2897,21 @@ impl Kernel {
                 done(got)
             }
             S::ConsoleHold { h, hold } => done(self.console_hold(pid, *h, *hold).map(|_| Ret::Unit)),
+            S::ReplyReceive { h, timeout, max_transfer, msg_id, words, handles } => {
+                self.reply_receive(pid, tid, *h, *timeout, *max_transfer, *msg_id, *words, handles)
+            }
+            S::SendReceive { h, timeout, max_transfer, endpoint, words, handles, transfer, send_timeout } => {
+                self.send_receive(
+                    pid,
+                    tid,
+                    (*h, *timeout, *max_transfer),
+                    *endpoint,
+                    *words,
+                    handles,
+                    *transfer,
+                    *send_timeout,
+                )
+            }
         }
     }
 
@@ -3518,14 +3579,22 @@ impl Kernel {
         buffer: Option<Buffer>,
         lend: bool,
     ) -> R<(u64, Vec<Handle>, Option<(u64, u64)>)> {
-        let h = decode_handle(h)?;
-        let buffer = decode_range(buffer)?;
-        if handles.len() > MAX_MSG_HANDLES {
-            return Err(Error::TooLarge);
-        }
-        for x in handles {
-            decode_handle(*x)?;
-        }
+        let buffer = decode_message(h, handles, buffer)?;
+        let (e, via, hs, range) = self.message_args(pid, h, handles, buffer, lend)?;
+        self.permit_message(pid, e, via)?;
+        Ok((e, hs, range))
+    }
+
+    /// A message's argument stage: the endpoint, the handles, the buffer.
+    #[allow(clippy::type_complexity)]
+    fn message_args(
+        &mut self,
+        pid: u64,
+        h: u64,
+        handles: &[u64],
+        buffer: Option<Buffer>,
+        lend: bool,
+    ) -> R<(u64, Handle, Vec<Handle>, Option<(u64, u64)>)> {
         let (e, via) = self.lookup_endpoint(pid, h)?;
         let mut hs = Vec::new();
         for x in handles {
@@ -3547,6 +3616,11 @@ impl Kernel {
                 Some((first, n))
             }
         };
+        Ok((e, via, hs, range))
+    }
+
+    /// A message's permission and resource stages: R1, then R2's cap.
+    fn permit_message(&mut self, pid: u64, e: u64, via: Handle) -> R<()> {
         // R1: between two user budgets, only equal label sets; the receiving side is the endpoint's
         // owner.
         let sender = &self.budgets[&self.budget_of(pid).unwrap()];
@@ -3587,7 +3661,7 @@ impl Kernel {
             self.ghost.flows.push(Flow::Busy { endpoint: e, key: ghost_key });
             return Err(Error::Busy);
         }
-        Ok((e, hs, range))
+        Ok(())
     }
 
     /// Queue a message on its endpoint, block the sender, and try to deliver.
@@ -3781,24 +3855,53 @@ impl Kernel {
         if !self.record_valid(pid, tid, RECEIVED_SLOTS, false) {
             return Outcome::Done(Err(Error::InvalidArgument));
         }
-        let h = match decode_optional_handle(h) {
-            Ok(Some(h)) => h,
-            Ok(None) => {
-                self.block(tid, Wait::Sleep, timeout);
-                return Outcome::Blocked;
+        match self.receive_source(pid, h) {
+            Err(e) => Outcome::Done(Err(e)),
+            // Only a badge-0 handle is a receive right.
+            Ok((_, true)) => Outcome::Done(Err(Error::NotPermitted)),
+            Ok((source, false)) => self.receive_on(tid, source, timeout, max_transfer),
+        }
+    }
+
+    /// Whether `tid`'s `receive` on `h` would pass every check before it begins: its record, its
+    /// handle. The generator fuses only such a receive into a turn.
+    pub fn receive_would_begin(&self, pid: u64, tid: u64, h: Option<u64>) -> bool {
+        self.record_valid(pid, tid, RECEIVED_SLOTS, false)
+            && matches!(self.receive_source(pid, h), Ok((_, false)))
+    }
+
+    /// `receive`'s handle at the argument stage: none (a sleep), or the handle and what it names,
+    /// a badge-0 endpoint or an IRQ (`BadHandle`, then `WrongObject`); beside it, whether stage 3
+    /// refuses it, a badged endpoint (`NotPermitted`).
+    #[allow(clippy::type_complexity)]
+    fn receive_source(&self, pid: u64, h: Option<u64>) -> R<(Option<(u64, Handle)>, bool)> {
+        let Some(h) = decode_optional_handle(h)? else { return Ok((None, false)) };
+        let hd = self.lookup(pid, h)?;
+        match hd.object {
+            Object::Endpoint(_) => {
+                Ok((Some((h, hd)), hd.badge != 0 && !self.broken(Mutation::ReceiveWithBadgedHandle)))
             }
-            Err(e) => return Outcome::Done(Err(e)),
-        };
-        let hd = match self.lookup(pid, h) {
-            Ok(x) => x,
-            Err(e) => return Outcome::Done(Err(e)),
+            Object::Device(d) if matches!(self.devices[&d].kind, DeviceKind::Irq { .. }) => {
+                Ok((Some((h, hd)), false))
+            }
+            _ => Err(Error::WrongObject),
+        }
+    }
+
+    /// The receive itself, every check passed: `tid` waits on `source` and takes what is there.
+    fn receive_on(
+        &mut self,
+        tid: u64,
+        source: Option<(u64, Handle)>,
+        timeout: u64,
+        max_transfer: u64,
+    ) -> Outcome {
+        let Some((h, hd)) = source else {
+            self.block(tid, Wait::Sleep, timeout);
+            return Outcome::Blocked;
         };
         match hd.object {
             Object::Endpoint(e) => {
-                // Only a badge-0 handle is a receive right.
-                if hd.badge != 0 && !self.broken(Mutation::ReceiveWithBadgedHandle) {
-                    return Outcome::Done(Err(Error::NotPermitted));
-                }
                 // At MAX_OPEN_CALLS the process takes no calls, but still sends and notices (R4a);
                 // `pump` sees to it.
                 if self.broken(Mutation::ReceiveDropsOpenCalls) {
@@ -3810,7 +3913,7 @@ impl Kernel {
                 self.poke(e);
                 Outcome::Blocked
             }
-            Object::Device(d) if matches!(self.devices[&d].kind, DeviceKind::Irq { .. }) => {
+            Object::Device(d) => {
                 // R5: unmask when the receive begins; return when `fired` is set, clearing it.
                 self.ghost.irq_receive_begins(d);
                 if !self.broken(Mutation::R5NoUnmaskOnReceive) {
@@ -3831,7 +3934,7 @@ impl Kernel {
                 self.devices.get_mut(&d).unwrap().waiters.push_back(tid);
                 Outcome::Blocked
             }
-            _ => Outcome::Done(Err(Error::WrongObject)),
+            _ => unreachable!("receive_source names an endpoint or an IRQ"),
         }
     }
 
@@ -3851,6 +3954,13 @@ impl Kernel {
         for x in handles {
             decode_handle(*x)?;
         }
+        let (msg_id, hs) = self.reply_check(pid, tid, msg_id, handles)?;
+        Ok(self.reply_act(tid, msg_id, words, hs))
+    }
+
+    /// `reply`'s argument stage: the open call `msg_id` names (`InvalidArgument`), then the
+    /// handles. Nothing after these fails.
+    fn reply_check(&self, pid: u64, tid: u64, msg_id: u64, handles: &[u64]) -> R<(u64, Vec<Handle>)> {
         let Some(msg_id) = self.open_call_of(tid, msg_id) else {
             return Err(Error::InvalidArgument);
         };
@@ -3858,6 +3968,11 @@ impl Kernel {
         for x in handles {
             hs.push(self.lookup(pid, *x)?);
         }
+        Ok((msg_id, hs))
+    }
+
+    /// The reply to open call `msg_id`, every check passed.
+    fn reply_act(&mut self, tid: u64, msg_id: u64, words: [u64; WORDS], hs: Vec<Handle>) -> Ret {
         let t = self.threads.get_mut(&tid).unwrap();
         t.serving.retain(|m| *m != msg_id);
         if t.current == Some(msg_id) {
@@ -3868,7 +3983,7 @@ impl Kernel {
         if !m.caller_waiting {
             self.unmap_lend_in_server(msg_id, true);
             self.close_call(msg_id);
-            return Ok(Ret::Replied { delivered: false, installed_mask: 0 });
+            return Ret::Replied { delivered: false, installed_mask: 0 };
         }
         // Return the lend before inspecting the output record, which may be inside it.
         self.unmap_lend_in_server(msg_id, false);
@@ -3920,7 +4035,159 @@ impl Kernel {
             mask,
         });
         self.wake(m.sender_tid, Ok(Ret::Call(completion)));
-        Ok(Ret::Replied { delivered, installed_mask: mask })
+        Ret::Replied { delivered, installed_mask: mask }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The turns (kernel/ipc.md, "A server's turn").
+
+    /// `reply_receive(h, timeout, max_transfer, msg_id, words, handles)`: every check either half
+    /// makes before anything is done, in the stages' order and by argument position within one
+    /// (the receive's handle before the reply's arguments), and nothing changed by a refusal;
+    /// then the reply, then the receive.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reply_receive(
+        &mut self,
+        pid: u64,
+        tid: u64,
+        h: Option<u64>,
+        timeout: u64,
+        max_transfer: u64,
+        msg_id: u64,
+        words: [u64; WORDS],
+        handles: &[u64],
+    ) -> Outcome {
+        let checked = (|| {
+            // Decoding: the receive's handle register, its record, then the reply's slots.
+            decode_optional_handle(h)?;
+            if !self.record_valid(pid, tid, RECEIVED_SLOTS, false) || msg_id == 0 {
+                return Err(Error::InvalidArgument);
+            }
+            if handles.len() > MAX_MSG_HANDLES {
+                return Err(Error::TooLarge);
+            }
+            for x in handles {
+                decode_handle(*x)?;
+            }
+            let (source, badged) = self.receive_source(pid, h)?;
+            let (mid, hs) = self.reply_check(pid, tid, msg_id, handles)?;
+            if badged {
+                return Err(Error::NotPermitted);
+            }
+            Ok((source, mid, hs))
+        })();
+        let (source, mid, hs) = match checked {
+            Ok(x) => x,
+            Err(e) => return Outcome::Done(self.turn_result(tid, TurnFirst::Nothing, Err(e))),
+        };
+        let first = if self.broken(Mutation::TurnReplyLost) {
+            TurnFirst::Replied { delivered: true, installed_mask: 0 }
+        } else {
+            let mark = self.ghost.flows.len();
+            let Ret::Replied { delivered, installed_mask } = self.reply_act(tid, mid, words, hs) else {
+                unreachable!("a reply answers Replied")
+            };
+            self.ghost.turn_replied(tid, mark);
+            TurnFirst::Replied { delivered, installed_mask }
+        };
+        self.threads.get_mut(&tid).unwrap().turn = Some(Turn::Done(first));
+        self.begin_turn_receive(tid);
+        let outcome = self.receive_on(tid, source, timeout, max_transfer);
+        self.turn_outcome(tid, outcome)
+    }
+
+    /// `send_receive(h, timeout, max_transfer, endpoint, words, handles, transfer, send_timeout)`:
+    /// the checks as [`Kernel::reply_receive`]'s, `send`'s in its row's order; then the message is
+    /// queued. Taken, its sender goes on to the receive half ([`Kernel::continue_turn`]); failed,
+    /// the turn ends with the send's error, nothing done.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_receive(
+        &mut self,
+        pid: u64,
+        tid: u64,
+        (h, timeout, max_transfer): (Option<u64>, u64, u64),
+        endpoint: u64,
+        words: [u64; WORDS],
+        handles: &[u64],
+        transfer: Option<Buffer>,
+        send_timeout: u64,
+    ) -> Outcome {
+        let checked = (|| {
+            decode_optional_handle(h)?;
+            if !self.record_valid(pid, tid, RECEIVED_SLOTS, false) {
+                return Err(Error::InvalidArgument);
+            }
+            let buffer = decode_message(endpoint, handles, transfer)?;
+            let (source, badged) = self.receive_source(pid, h)?;
+            let (e, via, hs, range) = self.message_args(pid, endpoint, handles, buffer, false)?;
+            if badged {
+                return Err(Error::NotPermitted);
+            }
+            self.permit_message(pid, e, via)?;
+            Ok((source, e, hs, range))
+        })();
+        let (source, e, hs, range) = match checked {
+            Ok(x) => x,
+            Err(e) => return Outcome::Done(self.turn_result(tid, TurnFirst::Nothing, Err(e))),
+        };
+        self.threads.get_mut(&tid).unwrap().turn = Some(Turn::Sending { source, timeout, max_transfer });
+        self.ghost.turn_sending.insert(tid);
+        self.enqueue(pid, tid, MsgKind::Send, endpoint, e, words, hs, range, send_timeout)
+    }
+
+    /// A `send_receive`'s message was taken: its receive half begins in the taker's step, with no
+    /// wake in between, its timeout from now. An endpoint or IRQ gone since is the receive half's
+    /// `Dead`.
+    fn continue_turn(&mut self, tid: u64) {
+        let Some(Turn::Sending { source, timeout, max_transfer }) = self.threads[&tid].turn.clone() else {
+            return;
+        };
+        let t = self.threads.get_mut(&tid).unwrap();
+        t.turn = Some(Turn::Done(TurnFirst::Sent));
+        t.wait = None;
+        t.deadline = None;
+        self.begin_turn_receive(tid);
+        let live = source.is_none_or(|(_, hd)| match hd.object {
+            Object::Endpoint(e) => self.endpoints.contains_key(&e),
+            Object::Device(d) => self.devices.contains_key(&d),
+            _ => false,
+        });
+        if !live {
+            return self.wake(tid, Err(Error::Dead));
+        }
+        if let Outcome::Done(result) = self.receive_on(tid, source, timeout, max_transfer) {
+            self.wake(tid, result);
+        }
+    }
+
+    /// A turn's receive half begins: the thread has no current call until it takes one (R21).
+    fn begin_turn_receive(&mut self, tid: u64) {
+        if !self.broken(Mutation::ReceiveKeepsCurrent) {
+            self.threads.get_mut(&tid).unwrap().current = None;
+        }
+        self.ghost.receive_begins(tid);
+    }
+
+    /// The receive half answered at once: the turn ends with that answer.
+    fn turn_outcome(&mut self, tid: u64, outcome: Outcome) -> Outcome {
+        match outcome {
+            Outcome::Done(result) => {
+                let Some(Turn::Done(first)) = self.threads.get_mut(&tid).unwrap().turn.take() else {
+                    unreachable!("a turn's receive half follows its first half")
+                };
+                Outcome::Done(self.turn_result(tid, first, result))
+            }
+            other => other,
+        }
+    }
+
+    /// A turn's whole result (R13): what its first half did, with the receive half's result or
+    /// the error that stopped it.
+    fn turn_result(&mut self, tid: u64, first: TurnFirst, half: R<Ret>) -> R<Ret> {
+        let status = half.as_ref().map(|_| ()).map_err(|e| *e);
+        let done = self.ghost.turn_ended(tid);
+        self.ghost.flows.push(Flow::Turn { tid, first, status, done });
+        Ok(Ret::Turn { first, half: alloc::boxed::Box::new(half) })
     }
 
     /// `serve(msg_id)`: `msg_id` is an open call of the caller's thread; it becomes the thread's

@@ -26,9 +26,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use redoubt_rt::abi::{Error, Handle, Labels, ReceivedHandles};
+use redoubt_rt::abi::{Handle, Labels, ReceivedHandles};
 use redoubt_rt::ipc::{Caller, Request, Words};
-use redoubt_rt::server::typed::{Answer, Outcome, Protocol, TypedServer, answer, finish};
+use redoubt_rt::server::typed::{Answer, Finished, Outcome, Protocol, TypedServer, answer, finish_held};
 use redoubt_rt::server::{Access, check};
 use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::blkd::{
@@ -89,11 +89,12 @@ impl<T: Transport> BlockServer<T> {
     /// One slot per GPT entry, in entry order; slot *i* is badge *i* + 1.
     pub fn roots(&self) -> &[Option<Range>] { &self.roots }
 
-    /// Answers one call and replies to it.
-    pub fn serve(&mut self, mut request: Request) -> Result<(), Error> {
+    /// Answers one call: replies to it, or holds a reply with no handles for the serving loop's
+    /// next receive (`redoubt_rt::server::serve`).
+    pub fn serve(&mut self, mut request: Request) -> Finished {
         let (caller, words, handles) = (request.caller, request.words, request.handles);
         let outcome = answer_with(self, &caller, &words, &handles, request.lend());
-        finish(request, &outcome).map(|_| ())
+        finish_held(request, &outcome)
     }
 
     /// The range the caller's badge names, or `not_permitted`: a badge past the end of the array

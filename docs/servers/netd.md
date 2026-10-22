@@ -51,7 +51,7 @@ The table: [libs/wire/tables/netif.md](../../libs/wire/tables/netif.md).
 
 ### Rings and slots
 
-<details><summary>Status: built · tested (9)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
 - host:redoubt-netd::an_honest_device_comes_up_with_two_features_and_its_mac
 - host:redoubt-netd::bring_up_refuses_and_resets
@@ -62,6 +62,7 @@ The table: [libs/wire/tables/netif.md](../../libs/wire/tables/netif.md).
 - host:redoubt-netd::spurious_interrupts_deliver_nothing
 - host:redoubt-netd::a_frame_completed_before_the_first_wait_without_an_interrupt_is_delivered
 - host:redoubt-netd::a_frame_completed_silently_during_a_drain_is_delivered_before_the_next_wait
+- host:redoubt-netd::the_last_frame_of_a_drain_goes_on_with_the_wait
 
 </details>
 
@@ -85,7 +86,10 @@ The table: [libs/wire/tables/netif.md](../../libs/wire/tables/netif.md).
   ([R56 (no earlier frame leaks)](#r56-no-earlier-frame-leaks)). The transmit queue asks for no
   interrupts.
 - **Interrupts only say when to look.** The receive queue is drained before every wait, so a lost
-  interrupt delays nothing and a spurious one delivers nothing.
+  interrupt delays nothing and a spurious one delivers nothing. The last frame a drain finds goes
+  to `ipd` with the wait, in one call (`send_receive` on the interrupt handle,
+  [IPC](../kernel/ipc.md#a-servers-turn)): `ipd`, readied by the send, runs on this hart when the
+  wait blocks, and when `ipd` takes the frame later the receive thread is not woken to wait.
 - **A DMA page never leaves `netd`.** No path lends, transfers or maps one; the kernel refuses to
   anyway ([devices](../kernel/devices.md#dma_alloc)).
 
@@ -154,7 +158,8 @@ flowchart TB
   then starts the receive thread. It owns the transmit queue, answers `netif` calls, and waits on
   nothing but its own `receive`.
 - **The receive thread** takes its half out of `netd`'s own memory, so no address travels in a
-  message. It waits on the interrupt, drains the receive queue and sends each frame to `ipd`. It
+  message. It waits on the interrupt, drains the receive queue and sends each frame to `ipd`, the
+  last with its next wait. It
   tells the serving thread only that the device is broken, on a badge drawn at random above 2^63
   that carries no data.
 - **Every way out stops the device.** The receive thread resets it and reports on a lie, a fault
@@ -264,6 +269,12 @@ Status: built · partly tested: the exit codes (`NO_DEVICE`, `BAD_ARGS`, `NO_RES
 - **A frame flood costs `netd`'s CPU** at its large manifest weight. Under a flood the receive thread
   drains without waiting on the interrupt, paced only by each send to `ipd` (up to 50 ms), and its
   drops fall on every connection `ipd` serves.
+- **A frame the device completes without an interrupt while the last frame is sent waits.** The
+  drain's last, empty pass is the re-check before that send, not before the wait the send carries
+  on to. A completion that raises the interrupt is taken at once (the source is level, and the
+  wait's unmask fires it, [R5 (interrupts)](../kernel/devices.md#r5-interrupts)); one that
+  raises none waits for the next interrupt, where the drain before every plain wait would have
+  found it.
 - **A reset stops the device for everyone.** One lie ends the network for every principal until the
   device is brought up again; `netd` is not restarted to do that.
 

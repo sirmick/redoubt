@@ -17,8 +17,8 @@ use core::ptr::null_mut;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 use redoubt_rt::abi::Error;
-use redoubt_rt::handle::{Dma, Irq, Mmio, time_now};
-use redoubt_rt::ipc::Buffer;
+use redoubt_rt::handle::{Dma, Endpoint, Irq, Mmio, time_now};
+use redoubt_rt::ipc::{Buffer, Sent, Words};
 
 use crate::RxPart;
 use crate::ring::{REGION_LEN, REGION_PAGES};
@@ -208,6 +208,28 @@ impl Transport for Device {
     /// A clock that fails saturates rather than reads 0, so a deadline computed from it is never
     /// silently in the far future.
     fn now_us(&self) -> u64 { time_now().unwrap_or(u64::MAX) }
+}
+
+impl Device {
+    /// Sends `words` with `page` to `to` as a `send` with `send_timeout`, then waits for the
+    /// interrupt as [`Transport::wait_irq`], in one call (kernel/ipc.md, "A server's turn"). A send
+    /// that fails drops its page, as a frame nobody takes is dropped, and the wait is made alone.
+    pub fn send_then_wait(
+        &self,
+        to: &Endpoint,
+        words: &Words,
+        page: Buffer,
+        send_timeout: u64,
+        timeout_us: u64,
+    ) -> Result<(), Fault> {
+        let irq = self.irq.as_ref().ok_or(Fault::Kernel)?;
+        match to.send_then_wait(words, &[], Some(page), send_timeout, irq, timeout_us) {
+            Sent::Taken(Ok(())) => Ok(()),
+            Sent::Taken(Err(Error::Timeout)) => Err(Fault::Timeout),
+            Sent::Taken(Err(_)) => Err(Fault::Kernel),
+            Sent::Not(..) => self.wait_irq(timeout_us),
+        }
+    }
 }
 
 /// The receive thread's half, between [`start_rx_thread`] and [`take_rx_part`]. Only ever null

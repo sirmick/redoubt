@@ -179,6 +179,9 @@ impl Number {
             Number::DeviceInfo => set(&[BadHandle, WrongObject]),
             // `WrongObject`: not the console's MMIO device. `Busy`: another process holds it.
             Number::ConsoleHold => set(&[BadHandle, WrongObject, Busy]),
+            // A turn's row is its two halves' rows (kernel/abi.md).
+            Number::ReplyReceive => Number::Reply.errors().with(Number::Receive.errors()),
+            Number::SendReceive => Number::Send.errors().with(Number::Receive.errors()),
         };
         let row = if row.has(BadHandle) && !matches!(self, Number::HandleClose) {
             row.with(DEAD_ENTRY)

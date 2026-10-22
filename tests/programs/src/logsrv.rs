@@ -139,15 +139,28 @@ fn text(pages: rd::Pages, len: usize) -> &'static str {
 }
 
 /// Serve the log endpoint for ever: `PRINT`, `PRINT_AND_KEEP`, `SUM` and `UPPERCASE`, and any
-/// call `extra` answers (it returns whether it replied).
+/// call `extra` answers (it returns whether it replied). Each reply this loop makes is held for
+/// the receive that follows it and made with it, as one call (kernel/ipc.md, "A server's turn").
 pub fn serve(mut extra: impl FnMut(&Message) -> bool) -> ! {
     let rx = LOG_RX.load(Ordering::Relaxed);
+    let mut held: Option<(u64, rd::Body)> = None;
     loop {
-        let m = match rd::receive(Some(rx), FOREVER, 1) {
+        let got = match held.take() {
+            None => rd::receive(Some(rx), FOREVER, 1),
+            Some((id, body)) => match rd::reply_receive(id, &body, Some(rx), FOREVER, 1) {
+                Ok((rd::FirstDone::Replied(_), got)) => got,
+                // Nothing was done: the reply and the receive, alone.
+                _ => {
+                    rd::reply(id, &body).ok();
+                    rd::receive(Some(rx), FOREVER, 1)
+                }
+            },
+        };
+        let m = match got {
             Ok(Received::Message(m)) => m,
             // The caller is gone; the reply only frees the call.
             Ok(Received::Abandoned(id)) => {
-                rd::reply(id.get(), &rd::body([0; rd::WORDS])).ok();
+                held = Some((id.get(), rd::body([0; rd::WORDS])));
                 continue;
             }
             _ => continue,
@@ -161,7 +174,7 @@ pub fn serve(mut extra: impl FnMut(&Message) -> bool) -> ! {
         match (words[0], m.kind) {
             (op::PRINT, MessageKind::Call { lend: Some(pages) }) => {
                 console::relay(m.badge, text(pages, words[1]));
-                rd::reply(id, &rd::body([0; rd::WORDS])).ok();
+                held = Some((id, rd::body([0; rd::WORDS])));
             }
             (op::PRINT_AND_KEEP, MessageKind::Send { transfer: Some(pages) }) => {
                 say(Line::MovedPage(pages.addr));
@@ -169,19 +182,20 @@ pub fn serve(mut extra: impl FnMut(&Message) -> bool) -> ! {
                 rd::unmap(pages.addr, pages.npages.get() * rd::PAGE_SIZE).ok();
             }
             (op::SUM, MessageKind::Call { .. }) => {
-                rd::reply(id, &rd::body([words[1] + words[2] + words[3], 0, 0, 0])).ok();
+                held = Some((id, rd::body([words[1] + words[2] + words[3], 0, 0, 0])));
             }
             (op::UPPERCASE, MessageKind::Call { lend: Some(pages) }) => {
                 let len = words[1].min(pages.npages.get() * rd::PAGE_SIZE);
-                // SAFETY: the kernel lent `pages` here writable until the reply below.
+                // SAFETY: the kernel lent `pages` here writable until the reply, which the next
+                // receive makes.
                 unsafe { core::slice::from_raw_parts_mut(pages.addr as *mut u8, len) }.make_ascii_uppercase();
-                rd::reply(id, &rd::body([0; rd::WORDS])).ok();
+                held = Some((id, rd::body([0; rd::WORDS])));
             }
             _ if extra(&m) => {}
             (other, kind) => {
                 say(Line::Unexpected(other));
                 if let MessageKind::Call { .. } = kind {
-                    rd::reply(id, &rd::body([rd::Error::InvalidArgument as usize, 0, 0, 0])).ok();
+                    held = Some((id, rd::body([rd::Error::InvalidArgument as usize, 0, 0, 0])));
                 }
             }
         }

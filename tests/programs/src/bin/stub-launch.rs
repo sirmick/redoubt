@@ -354,8 +354,10 @@ fn describe(notice: &Option<ExitNotice>) -> &'static str {
 }
 
 /// An upper bound on `fixture-child`'s size, for the mutable copies this bin patches (no `alloc`
-/// here, unlike the stub crate).
-const MAX_CHILD_ELF: usize = 4096;
+/// here, unlike the stub crate): two pages. The child is 4,344 bytes on rv64 and 4,084 on rv32,
+/// most of it `redoubt-sys`'s `syscall` with every call's result decoder inlined, a turn's
+/// included. At most three copies are alive at once, 24 KiB of this program's 128 KiB stack.
+const MAX_CHILD_ELF: usize = 2 * 4096;
 
 /// A program header field.
 #[derive(Clone, Copy)]
