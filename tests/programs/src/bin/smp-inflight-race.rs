@@ -7,9 +7,9 @@
 //!   RAM is nearly full: the allocations below empty the bitmap, and take the frames in flight back on
 //!   demand, any hart's.
 //! - **The attacker.** Each round, P maps `RUN` pages, and its writer W stores a pattern into all of them
-//!   without end on one hart while its unmapper U, on the other, unmaps them in one call: more than a hart
-//!   stages before a shootdown, so the call shoots P down early as well as at its end. W's next store faults,
-//!   which ends P, and P's other frames are retired at its end.
+//!   without end on one hart while its unmapper U, on the other, unmaps them a range at a time (one call
+//!   names at most `MAX_RANGE_PAGES`, kernel/memory.md R22), each call shooting P down at its end. W's next
+//!   store into an unmapped range faults, which ends P, and P's other frames are retired at its end.
 //! - **The witness.** All the while V, in a budget of its own, maps `CHECKED` pages, finds every word of them
 //!   zero, writes a marker into every word, and finds the markers unchanged a while later, then unmaps them.
 //!   With RAM nearly full, it gets the frames P let go, and the ones it let go itself, as soon as each is
@@ -28,7 +28,10 @@ use test_programs::sched::Bench;
 use test_programs::spawn;
 
 const WAIT: u64 = 5_000_000;
-/// The attacker's run: more than a hart stages before it shoots a process down (64).
+/// How long a filler may take to hold its budget: a range call's worth at a time, some two
+/// thousand calls for `users` on rv32 (kernel/memory.md, R22).
+const FILL_WAIT: u64 = 20_000_000;
+/// The attacker's run: ten ranges, unmapped a call at a time under the writer.
 const RUN: usize = 160;
 /// The witness's pages each turn.
 const CHECKED: usize = 32;
@@ -70,7 +73,7 @@ fn writer(run: usize) {
 }
 
 extern "C" fn attacker(_: usize) -> ! {
-    let run = rd::map_anon(RUN * rd::PAGE_SIZE, rd::rw()).unwrap_or_else(|_| rd::process_exit(1));
+    let run = rd::map_anon_run(RUN * rd::PAGE_SIZE, rd::rw()).unwrap_or_else(|_| rd::process_exit(1));
     let last = run + (RUN - 1) * rd::PAGE_SIZE;
     if rd::thread(writer, run).is_err() {
         rd::process_exit(2);
@@ -82,7 +85,7 @@ extern "C" fn attacker(_: usize) -> ! {
             rd::process_exit(3);
         }
     }
-    if rd::unmap(run, RUN * rd::PAGE_SIZE).is_err() {
+    if rd::unmap_run(run, RUN * rd::PAGE_SIZE).is_err() {
         rd::process_exit(4);
     }
     wait_forever()
@@ -90,15 +93,15 @@ extern "C" fn attacker(_: usize) -> ! {
 
 // --- The fillers (the judge's inbox in slot 1, the filler's own budget in slot 2) --------------------
 
-/// Map all but `keep` of `budget`'s free pages, the budget this process runs in, in big runs each
-/// leaving room for its page tables. Whether it got that far.
+/// Map all but `keep` of `budget`'s free pages, the budget this process runs in, a range at a time,
+/// leaving room for the page tables. Whether it got that far.
 fn hold(budget: u32, keep: u64) -> bool {
     loop {
         let free = rd::free(budget);
         if free <= keep + 16 {
             return true;
         }
-        let n = (free - keep - free / 256 - 8) as usize;
+        let n = ((free - keep - free / 256 - 8) as usize).min(rd::MAX_RANGE_PAGES);
         if rd::map_anon(n * rd::PAGE_SIZE, rd::rw()).is_err() {
             return false;
         }
@@ -108,7 +111,7 @@ fn hold(budget: u32, keep: u64) -> bool {
 /// Hold all of the budget it runs in, then say so.
 extern "C" fn filler(_: usize) -> ! {
     if hold(2, 0) {
-        let _ = rd::send_waiting(1, &rd::body([READY, 0, 0, 0]), None, WAIT);
+        let _ = rd::send_waiting(1, &rd::body([READY, 0, 0, 0]), None, FILL_WAIT);
     }
     test_programs::park()
 }
@@ -129,7 +132,8 @@ extern "C" fn witness(_: usize) -> ! {
         if matches!(rd::receive(Some(2), 1, 0), Ok(Received::Message(m)) if m.body.words[0] == STOP) {
             break;
         }
-        let pages = rd::map_anon(CHECKED * rd::PAGE_SIZE, rd::rw()).unwrap_or_else(|_| rd::process_exit(2));
+        let pages =
+            rd::map_anon_run(CHECKED * rd::PAGE_SIZE, rd::rw()).unwrap_or_else(|_| rd::process_exit(2));
         dirty += wrong(pages, |_| 0);
         let mark = |at: usize| MARK | at as u64;
         for i in 0..CHECKED * rd::PAGE_SIZE / 8 {
@@ -138,7 +142,7 @@ extern "C" fn witness(_: usize) -> ! {
         let start = rd::time_now().unwrap_or(0);
         while rd::time_now().unwrap_or(u64::MAX) < start + WATCH_US {}
         changed += wrong(pages, mark);
-        if rd::unmap(pages, CHECKED * rd::PAGE_SIZE).is_err() {
+        if rd::unmap_run(pages, CHECKED * rd::PAGE_SIZE).is_err() {
             rd::process_exit(3);
         }
         turns += 1;
@@ -179,7 +183,7 @@ pub extern "C" fn _start() -> ! {
         let pages = rd::free(parent).saturating_sub(keep);
         let filled = rd::create(parent, &rd::spec(pages, 1, 1)).is_ok_and(|f| {
             spawn::spawn(&image, f, exit, filler as *const () as usize, &[], &[inbox, f]).is_ok()
-                && matches!(rd::receive(Some(inbox), WAIT, 0), Ok(Received::Message(m)) if m.body.words[0] == READY)
+                && matches!(rd::receive(Some(inbox), FILL_WAIT, 0), Ok(Received::Message(m)) if m.body.words[0] == READY)
         });
         b.check(filled, format_args!("a filler holds budget {parent}'s free pages but {keep}"));
     }

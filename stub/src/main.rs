@@ -12,7 +12,7 @@
 use core::arch::asm;
 use core::panic::PanicInfo;
 
-use redoubt_sys::{Call, Error, MemFlags, PAGE_SIZE, Return, syscall};
+use redoubt_sys::{Call, Error, MemFlags, PAGE_SIZE, Return, range_chunks, syscall};
 use stub::{Either, STUB_ENTRY, process_exit, read_image};
 
 /// Exit codes the stub itself uses. Distinct from anything the started program can produce:
@@ -132,10 +132,12 @@ fn map_segment(segment: &stub::Segment) -> Result<(), Error> {
 }
 
 /// Maps zeroed pages at exactly `addr` in this process (kernel/memory.md, "`map_fixed`"). It never
-/// replaces a mapping: an occupied, unaligned or out-of-user-space range is `InvalidArgument` with
-/// nothing mapped.
+/// replaces a mapping: an occupied, unaligned or out-of-user-space range is `InvalidArgument`.
+/// One range call names at most `MAX_RANGE_PAGES` pages (kernel/memory.md, R22), so a segment is
+/// mapped, protected and unmapped a range at a time ([`range_chunks`]); a refused range leaves
+/// those before it mapped, which the exit that follows ends with the process.
 fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
-    nothing(&Call::MapFixed { addr, len, flags })
+    range_chunks(addr, len).try_for_each(|(addr, len)| nothing(&Call::MapFixed { addr, len, flags }))
 }
 
 /// One system call expecting `Return::Nothing`, exactly as `redoubt_rt::handle`'s wrappers do
@@ -149,10 +151,12 @@ fn nothing(call: &Call) -> Result<(), Error> {
 }
 
 fn set_flags(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
-    nothing(&Call::SetFlags { addr, len, flags })
+    range_chunks(addr, len).try_for_each(|(addr, len)| nothing(&Call::SetFlags { addr, len, flags }))
 }
 
-fn unmap(addr: usize, len: usize) -> Result<(), Error> { nothing(&Call::Unmap { addr, len }) }
+fn unmap(addr: usize, len: usize) -> Result<(), Error> {
+    range_chunks(addr, len).try_for_each(|(addr, len)| nothing(&Call::Unmap { addr, len }))
+}
 
 /// Rounds `len` up to a whole number of pages.
 fn page_align_up(len: usize) -> usize {

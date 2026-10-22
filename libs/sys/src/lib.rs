@@ -147,6 +147,26 @@ pub const WORDS: usize = 4;
 pub const MAX_MSG_HANDLES: usize = 4;
 /// Pages in one lend (= the 9P `msize`, 64 KiB; servers/wire.md).
 pub const MAX_LEND_PAGES: usize = 16;
+/// Pages one range call may name (`map_fixed`, `unmap`, `set_flags`, `process_map`), and the most
+/// `map_anon` maps of the run it places: the most whose worst kernel section fits one slice
+/// (kernel/memory.md, R22).
+pub const MAX_RANGE_PAGES: usize = 16;
+
+/// The ranges of at most `MAX_RANGE_PAGES` pages that cover `[addr, addr + len)`, in order, as
+/// `(start, length)`: how a caller splits a longer range into calls. An empty range is one,
+/// `(addr, 0)`, for the kernel to refuse.
+pub fn range_chunks(addr: usize, len: usize) -> impl Iterator<Item = (usize, usize)> {
+    const RANGE: usize = MAX_RANGE_PAGES * PAGE_SIZE;
+    (0..len.max(1)).step_by(RANGE).map(move |done| (addr + done, (len - done).min(RANGE)))
+}
+
+/// `TooLarge` for a range of `len` bytes over `MAX_RANGE_PAGES` pages, by arithmetic: the cap a
+/// range call checks after its range's shape and before any walk or charge (kernel/memory.md,
+/// R22).
+pub fn range_cap(len: usize) -> Result<(), Error> {
+    if len / PAGE_SIZE > MAX_RANGE_PAGES { Err(Error::TooLarge) } else { Ok(()) }
+}
+
 /// Threads per process.
 pub const MAX_THREADS: usize = 255;
 /// Labels per budget.

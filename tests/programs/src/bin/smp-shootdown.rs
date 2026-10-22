@@ -102,7 +102,7 @@ extern "C" fn checker(_: usize) -> ! {
     if !matches!(rd::receive(Some(2), WAIT, 0), Ok(Received::Message(m)) if m.body.words[0] == GO) {
         rd::process_exit(1);
     }
-    let pages = rd::map_anon(CHECKED * rd::PAGE_SIZE, rd::rw()).unwrap_or_else(|_| rd::process_exit(2));
+    let pages = rd::map_anon_run(CHECKED * rd::PAGE_SIZE, rd::rw()).unwrap_or_else(|_| rd::process_exit(2));
     let words = CHECKED * rd::PAGE_SIZE / 8;
     let start = rd::time_now().unwrap_or(0);
     let mut dirty = 0usize;

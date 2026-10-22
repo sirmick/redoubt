@@ -539,18 +539,20 @@ image can hurt only the process it was going to become.
 1. The launcher creates the child's budget and process (`process_create`) with an exit endpoint.
 2. It maps into the child, with `process_map`: the stub, read-only and executable, at
    `STUB_ENTRY` (`0x1FF0_0000`); a copy of the program's ELF image, read-write, placed 64 pages
-   at a time; the stack, zeroed, or painted with a pattern the bench reads when the launcher tags
-   it, as `init` tags each server's ([the memory budget](../testbench.md#the-memory-budget)); and
-   the startup block, read-only, naming the image with `image_addr` and `image_len`. Where each
-   goes is on [memory layout](../kernel/memory-layout.md#launcher-placement).
+   at a time, each batch moved a range at a time
+   ([R22 (range cost)](../kernel/memory.md#r22-range-cost)); the stack, zeroed, or painted with
+   a pattern the bench reads when the launcher tags it, as `init` tags each server's
+   ([the memory budget](../testbench.md#the-memory-budget)); and the startup block, read-only,
+   naming the image with `image_addr` and `image_len`. Where each goes is on
+   [memory layout](../kernel/memory-layout.md#launcher-placement).
 3. It starts the child's first thread at `STUB_ENTRY`, with the startup block's address as the
    argument, installing the child's handles.
 4. The stub reads `image_addr` and `image_len` from the block, checks that the image lies clear
    of the stub and the startup page and is at most `MAX_IMAGE_LEN`, and plans every `PT_LOAD`
    segment before mapping any (`stub::plan`, pure and allocation-free).
-5. It maps each segment at its link address with `map_fixed`, copies its bytes in, sets its final
-   permissions, unmaps the image copy, and jumps to the ELF's entry with the startup block's
-   address in `a0`. From then on the process is the program.
+5. It maps each segment at its link address with `map_fixed`, a range at a time, copies its bytes
+   in, sets its final permissions, unmaps the image copy, and jumps to the ELF's entry with the
+   startup block's address in `a0`. From then on the process is the program.
 
 **What the stub refuses,** whole, before mapping anything: an ELF that does not parse, is not
 `ET_EXEC`, is not RISC-V of the stub's own width, or has more than 64 program headers; a segment

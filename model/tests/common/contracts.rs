@@ -189,6 +189,30 @@ pub fn swept_index_stays_dead(mutation: Option<Mutation>) -> Result<(), String> 
     expect(again == b.min(m), "closed, the lowest dead index is free again")?;
     trace_roundtrip(&w, mutation)
 }
+/// `map_anon` of a run longer than a range (kernel/memory.md, R22): it maps the run's first
+/// `MAX_RANGE_PAGES` pages where the whole run fits, so at the call's end the run's pages past the
+/// mapped range are free for the caller's `map_fixed`. A gap at the search's start that holds a
+/// range but not the run is passed.
+pub fn a_long_run_is_placed_whole(mutation: Option<Mutation>) -> Result<(), String> {
+    let mut w = World::new(mutation);
+    let rw = FLAG_R | FLAG_W;
+    let addr = |r: Ret| match r {
+        Ret::Addr(a) => Ok(a),
+        r => Err(format!("expected an address, got {r:?}")),
+    };
+    // The search's start, a page; then a page taken 21 pages on: a gap of 20 pages after it.
+    let base = addr(w.value(1, Syscall::MapAnon { len: PAGE_SIZE, flags: rw })?)?;
+    w.value(1, Syscall::MapFixed { addr: base + 21 * PAGE_SIZE, len: PAGE_SIZE, flags: rw })?;
+    let run = 2 * MAX_RANGE_PAGES;
+    let at = addr(w.value(1, Syscall::MapAnon { len: run * PAGE_SIZE, flags: rw })?)? / PAGE_SIZE;
+    let space = &w.k.processes[&1].space;
+    expect(
+        space.range(at..at + MAX_RANGE_PAGES).count() as u64 == MAX_RANGE_PAGES,
+        "the first range mapped",
+    )?;
+    expect(space.range(at + MAX_RANGE_PAGES..at + run).next().is_none(), "the rest of the run free")?;
+    trace_roundtrip(&w, mutation)
+}
 /// `budget_reap` (kernel/budgets.md, R10): each call destroys one child of the budget, with
 /// everything below it, and says how many are left; the budget stays, and once the last child is
 /// gone its usage is what it was before the first carve (I10 per child). A child's handle reaps
@@ -456,6 +480,7 @@ pub fn ipc_contracts(mutation: Option<Mutation>) -> Result<(), String> {
     bad_record_takes_nothing(mutation)?;
     trace_roundtrip(&destruction_delivers_at_its_end(mutation)?, mutation)?;
     reap_empties_and_keeps(mutation)?;
+    a_long_run_is_placed_whole(mutation)?;
     for taken in [false, true] {
         let mut w = World::new(mutation);
         let (ep, h, server) = w.setup()?;

@@ -87,6 +87,11 @@ const ADDS_HANDLE: Errors = set(&[OutOfMemory]).with(HANDLE_LIMIT);
 /// out of pages.
 const HANDLE_LIMIT: Errors = set(&[TooLarge]);
 
+/// A call that takes a range refuses one of more than `MAX_RANGE_PAGES` pages with `TooLarge`
+/// (kernel/memory.md, R22), as a lend past `MAX_LEND_PAGES` is; `map_anon`'s length is a run's,
+/// placed whole and mapped a range at most, and is not refused for its size.
+const RANGE_LIMIT: Errors = set(&[TooLarge]);
+
 impl Number {
     /// Whether this call can return `error`: the errors of its row in kernel/abi.md's error
     /// table (in what order they are checked is the spec's), plus decoding's general
@@ -98,7 +103,7 @@ impl Number {
     fn errors(self) -> Errors {
         let row = match self {
             Number::MapAnon => set(&[InvalidArgument, OutOfMemory]),
-            Number::Unmap | Number::SetFlags => set(&[InvalidArgument]),
+            Number::Unmap | Number::SetFlags => set(&[InvalidArgument]).with(RANGE_LIMIT),
             Number::MapDevice => set(&[BadHandle, WrongObject, OutOfMemory]),
             Number::DmaAlloc => set(&[BadHandle, WrongObject, InvalidArgument, NotPermitted, OutOfMemory]),
             Number::ThreadCreate => set(&[TooManyThreads, OutOfMemory]),
@@ -109,7 +114,9 @@ impl Number {
                 set(&[BadHandle, WrongObject, InvalidArgument, NotPermitted, OutOfProcesses])
                     .with(ADDS_HANDLE)
             }
-            Number::ProcessMap => set(&[BadHandle, WrongObject, InvalidArgument, NotPermitted, OutOfMemory]),
+            Number::ProcessMap => {
+                set(&[BadHandle, WrongObject, InvalidArgument, NotPermitted, OutOfMemory]).with(RANGE_LIMIT)
+            }
             Number::ProcessStart => set(&[BadHandle, TooLarge, WrongObject, NotPermitted, OutOfMemory]),
             // `NotPermitted`: the budget is not the caller's or below it; `LabelDenied`: R1 from
             // that budget to the caller.
@@ -168,7 +175,7 @@ impl Number {
             Number::BudgetUsage => set(&[BadHandle, WrongObject, LabelDenied]),
             Number::TimeNow | Number::Random => set(&[]),
             Number::SystemReset => set(&[BadHandle, InvalidArgument, WrongObject]),
-            Number::MapFixed => set(&[InvalidArgument, OutOfMemory]),
+            Number::MapFixed => set(&[InvalidArgument, OutOfMemory]).with(RANGE_LIMIT),
             Number::DeviceInfo => set(&[BadHandle, WrongObject]),
             // `WrongObject`: not the console's MMIO device. `Busy`: another process holds it.
             Number::ConsoleHold => set(&[BadHandle, WrongObject, Busy]),

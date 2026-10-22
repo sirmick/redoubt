@@ -79,12 +79,13 @@ calls, made in the bench by a user-class parent, and the stub
 2. It maps the **loader stub** into the process at its fixed address: a flat binary, the same for
    everyone, which needs no parsing to map.
 3. It copies the program's ELF bytes into the process as data, 64 pages at a time, each batch
-   into fresh pages it then moves in, so a launcher never holds more than one batch, writes the
-   startup block (namespace, named handles, arguments) into a page mapped read-only, and starts
-   the process at the stub with the startup page's address as its argument.
+   into fresh pages it then moves in a range call's worth at a time, so a launcher never holds
+   more than one batch, writes the startup block (namespace, named handles, arguments) into a
+   page mapped read-only, and starts the process at the stub with the startup page's address as
+   its argument.
 4. The stub, running inside the new process's own budget, parses the ELF from memory, maps its
-   segments at their link addresses (code executable, never writable), frees the image pages,
-   and jumps to the entry point.
+   segments at their link addresses a range at a time (code executable, never writable), frees
+   the image pages, and jumps to the entry point.
 
 The launcher copies bytes and never parses an ELF, so a malicious ELF can at most compromise the
 process it was going to become. The stub refuses, by exiting: segments that overlap each other,
@@ -276,7 +277,7 @@ and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle on it.
 
 ### `redoubt-rt`, the native runtime
 
-<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (33)</summary>
+<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (40)</summary>
 
 - bench:rt-build
 - bench:net-tcp
@@ -311,6 +312,13 @@ and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle on it.
 - host:redoubt-rt::a_refused_thread_is_not_waited_for
 - host:redoubt-rt::prepared_locks_make_no_endpoint_when_contended
 - host:redoubt-rt::a_refused_endpoint_leaves_a_working_lock
+- host:redoubt-rt::a_long_run_is_one_run_mapped_a_range_at_a_time
+- host:redoubt-rt::a_run_is_placed_by_one_search_past_every_gap_too_short_for_it
+- host:redoubt-rt::a_run_before_the_search_s_start_is_found_after_the_wrap
+- host:redoubt-rt::a_run_no_gap_holds_is_out_of_memory_with_nothing_mapped
+- host:redoubt-rt::a_refused_extension_gives_back_its_ranges_and_searches_again
+- host:redoubt-rt::a_run_the_budget_cannot_hold_leaves_nothing_mapped
+- host:redoubt-rt::a_run_of_one_range_is_one_call
 
 </details>
 
@@ -323,7 +331,7 @@ the loader stub.
 | --- | --- |
 | `start` | the entry point (`entry!`, and `first_entry!` for `init`), exit codes (`OK` 0, `PANIC` 101, `BAD_STARTUP` 102) and the panic handler |
 | `startup` | the startup block, parsed defensively ([sessions](sessions.md#how-a-program-reads-its-namespace)) |
-| `handle` | typed handles and the system calls that are not IPC |
+| `handle` | typed handles and the system calls that are not IPC; a range over `MAX_RANGE_PAGES` mapped, moved and unmapped a range at a time, and a long `map_anon` kept one run (below) |
 | `ipc` | lends and transfers, `call`, `send`, `receive`, `reply`, `serve` |
 | `heap` | the global allocator, over `map_anon`, or over one arena mapped once (`fix_heap`, for `init`'s [bound](../kernel/budgets.md#the-tree-from-the-boot-manifest)); capped at the startup block's `heap_pages` ([init](../servers/init.md#the-startup-block)), past which it refuses before `map_anon` is asked (an infallible allocation then panics, and the runtime exits with its panic code, 101: `heap-cap`); and a record of its cap and peak for the bench ([the memory budget](../testbench.md#the-memory-budget)) |
 | `path` | lexical path cleaning, so `..` never climbs above a root |
@@ -332,6 +340,23 @@ the loader stub.
 | `thread` | `spawn`: a closure on a thread of this process, with a stack that outlives it, placed by `map_fixed` in the thread-stack area ([memory layout](../kernel/memory-layout.md#regions)) above an unmapped guard page, so an overflow faults there and the kernel ends the process at once (`thread-stack-guard`) instead of writing over what `map_anon` placed below; painted before the thread starts, so the bench's memory scan reports its peak as `stack NAME thread N PEAK` ([the memory budget](../testbench.md#the-memory-budget)); `scope`: threads that borrow from their caller, all ended before it returns |
 | `sync` | a semaphore, a mutex and a condvar for the threads of one process, whose waiters sleep on an endpoint |
 
+- **A long range goes a range at a time.** A range call names at most `MAX_RANGE_PAGES` (16)
+  pages ([R22 (range cost)](../kernel/memory.md#r22-range-cost)), so `map_fixed`, `unmap` and
+  `Process::map` make one call a range (`redoubt_sys::range_chunks`): a refused `map_fixed`
+  unmaps the ranges before it, so it maps all of a run or none of it, and a refused
+  `Process::map` leaves the ranges it moved in the child, which has not started, and unmaps the
+  rest.
+- **A long run is one run.** The heap's large blocks, a `Buffer` and `init`'s arena are each one
+  run, however long. The kernel's `map_anon` places the whole run where all of it is free, by its
+  one search, and maps its first range; the runtime maps the ranges after it with `map_fixed`.
+  Nothing holds them free between the two calls, so a page taken there meanwhile, by a placement
+  the runtime does not make (`map_device`, `dma_alloc`, a lend landing from another thread),
+  refuses the extension: the runtime gives back what it mapped and asks again, and the kernel's
+  next search, starting where it placed the refused run, passes that page. The search ends as
+  the kernel's own one pass does, once the runs placed have wrapped back to the first's, with
+  `OutOfMemory` and nothing mapped. Every `map_anon` of the process takes one lock in the runtime,
+  the heap's and a `Buffer`'s alike, so no placement of the runtime's own lands in a run while it
+  is extended; a program on the runtime makes no `map_anon` of its own.
 - **Start and end.** `entry!(run)` receives the startup page's address from the loader stub,
   parses the block, and calls `run`; its return value is the exit code. A block that does not
   parse exits with `BAD_STARTUP`. A panic prints its message once on `/dev/cons`, if the program

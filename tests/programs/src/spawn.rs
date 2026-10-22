@@ -197,7 +197,7 @@ pub fn start(
 /// Copy this program's image into fresh pages and hand each run of equally-permissioned pages to
 /// the child at the address it has here.
 pub fn give_image(process: u32, image: &Image) -> Result<(), Error> {
-    let scratch = rd::map_anon(image.pages * rd::PAGE_SIZE, rd::rw())?;
+    let scratch = rd::map_anon_run(image.pages * rd::PAGE_SIZE, rd::rw())?;
     for page in 0..image.pages {
         if image.flags[page] != 0 {
             copy(scratch + page * rd::PAGE_SIZE, image.base + page * rd::PAGE_SIZE, rd::PAGE_SIZE);
@@ -212,7 +212,7 @@ pub fn give_image(process: u32, image: &Image) -> Result<(), Error> {
         }
         if flags != 0 {
             let len = (end - page) * rd::PAGE_SIZE;
-            rd::process_map(
+            rd::process_map_run(
                 process,
                 scratch + page * rd::PAGE_SIZE,
                 image.base + page * rd::PAGE_SIZE,
@@ -228,9 +228,9 @@ pub fn give_image(process: u32, image: &Image) -> Result<(), Error> {
 /// The child's stack: read-write, never executable, at a fixed address it knows nothing about
 /// (its stack pointer arrives in a register).
 fn give_stack(process: u32) -> Result<(), Error> {
-    let scratch = rd::map_anon(STACK_PAGES * rd::PAGE_SIZE, rd::rw())?;
+    let scratch = rd::map_anon_run(STACK_PAGES * rd::PAGE_SIZE, rd::rw())?;
     let len = STACK_PAGES * rd::PAGE_SIZE;
-    rd::process_map(process, scratch, STACK_TOP - len, len, rd::rw())
+    rd::process_map_run(process, scratch, STACK_TOP - len, len, rd::rw())
 }
 
 /// The startup page (servers/init.md, "The startup block"): one ordinary page, mapped

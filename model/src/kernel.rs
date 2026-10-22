@@ -780,6 +780,26 @@ impl Kernel {
 
     fn broken(&self, m: Mutation) -> bool { self.mutation == Some(m) }
 
+    /// A range call names at most `MAX_RANGE_PAGES` pages: over it is `TooLarge`, before any walk
+    /// or charge (kernel/memory.md, R22).
+    fn range_cap(&self, pages: u64) -> R<()> {
+        if pages > MAX_RANGE_PAGES && !self.broken(Mutation::R22RangeCapIgnored) {
+            return Err(Error::TooLarge);
+        }
+        Ok(())
+    }
+
+    /// A range call of `pid`'s begins its first walk over `pages` pages. R22: the kernel holds the
+    /// lock for the range's pages, so a walk over more than `MAX_RANGE_PAGES` is a violation,
+    /// whatever refused or did not refuse the call before it.
+    fn range_walk(&mut self, pid: u64, pages: u64) {
+        if pages > MAX_RANGE_PAGES {
+            self.ghost.violations.push(alloc::format!(
+                "R22: process {pid}'s range call walked {pages} pages, over MAX_RANGE_PAGES"
+            ));
+        }
+    }
+
     // ---------------------------------------------------------------------------------------
     // Queries used by the generator, the trace and the property checks.
 
@@ -2777,15 +2797,16 @@ impl Kernel {
     /// "`dma_alloc`"), armed against `device` and every device the process has already mapped
     /// (ghost, I16).
     ///
-    /// Each failure is `OutOfMemory`, in the kernel's order: `map_anon` places the run first and
-    /// then pays for its pages; `dma_alloc` takes one of the device's `MAX_RUNS` runs, pays for the
-    /// pages, and only then places them. Either then pays for the page tables.
-    fn map_fresh(&mut self, pid: u64, n: u64, flags: u64, dma: Option<u64>) -> R<(u64, u64)> {
+    /// Each failure is `OutOfMemory`, in the kernel's order: `map_anon` places a run of `run` pages
+    /// first, of which it maps the first `n`, and then pays for those; `dma_alloc` takes one of the
+    /// device's `MAX_RUNS` runs, pays for the pages, and only then places them. Either then pays
+    /// for the page tables.
+    fn map_fresh(&mut self, pid: u64, n: u64, run: u64, flags: u64, dma: Option<u64>) -> R<(u64, u64)> {
         let oom = Error::OutOfMemory;
         let b = self.budget_of(pid).ok_or(Error::Dead)?;
         let start = match dma {
             None => {
-                let start = self.place(pid, n, Area::Default).ok_or(oom)?;
+                let start = self.place(pid, run, Area::Default).ok_or(oom)?;
                 if n > self.free_pages(b) {
                     return Err(oom);
                 }
@@ -2832,20 +2853,29 @@ impl Kernel {
         Ok((start * PAGE_SIZE, RAM_BASE + first * PAGE_SIZE))
     }
 
-    /// `map_anon(len, flags) -> addr`: pages charged; not W+X; zeroed.
+    /// `map_anon(len, flags) -> addr`: pages charged; not W+X; zeroed. `len` is a run's length, the
+    /// one range argument that may exceed `MAX_RANGE_PAGES`: the run is placed where all of it is
+    /// free, and its first `MAX_RANGE_PAGES` pages at most are mapped (R22), the rest left free for
+    /// the caller's `map_fixed`.
     pub fn map_anon(&mut self, pid: u64, len: u64, flags: u64) -> R<u64> {
         decode_flags(flags, false)?;
         if len == 0 || !len.is_multiple_of(PAGE_SIZE) {
             return Err(Error::InvalidArgument);
         }
         check_flags(flags, false)?;
-        self.map_fresh(pid, len / PAGE_SIZE, flags, None).map(|x| x.0)
+        let run = len / PAGE_SIZE;
+        let n = run.min(MAX_RANGE_PAGES);
+        let search = if self.broken(Mutation::R22MapAnonSearchesRange) { n } else { run };
+        self.range_walk(pid, n);
+        self.map_fresh(pid, n, search, flags, None).map(|x| x.0)
     }
 
     /// `unmap(addr, len)`: own mapping; not currently lent. A DMA frame's mapping goes, but the
     /// frame itself does not (held, and charged, until the process ends: kernel/devices.md).
     pub fn unmap(&mut self, pid: u64, addr: u64, len: u64) -> R<()> {
         let (first, n) = user_range(addr, len)?;
+        self.range_cap(n)?;
+        self.range_walk(pid, n);
         self.own_range(pid, first, n, |_| true)?;
         for v in first..first + n {
             let m = self.unmap_page(pid, v).unwrap();
@@ -2863,10 +2893,12 @@ impl Kernel {
     pub fn set_flags(&mut self, pid: u64, addr: u64, len: u64, flags: u64) -> R<()> {
         decode_flags(flags, self.broken(Mutation::R11SetFlagsAllowsWx))?;
         let (first, n) = user_range(addr, len)?;
+        self.range_cap(n)?;
         check_flags(flags, self.broken(Mutation::R11SetFlagsAllowsWriteOnly))?;
         // W^X per frame (R11): `EXECUTE` only on RAM the caller owns, never on device registers
         // or a `dma_alloc` frame.
         let exec_ok = flags & FLAG_X == 0 || self.broken(Mutation::R11ExecOnDeviceMemory);
+        self.range_walk(pid, n);
         self.own_range(pid, first, n, |m| exec_ok || !self.is_device_memory(m))?;
         let p = self.processes.get_mut(&pid).unwrap();
         for v in first..first + n {
@@ -2877,18 +2909,20 @@ impl Kernel {
 
     /// `map_fixed(addr, len, flags)`: as `map_anon`, but at exactly `addr`; never replaces a
     /// mapping (kernel/memory.md R11). Same order as the kernel: decode flags, the range
-    /// (`user_range`, page 0 included), the flags rule, the pages alone, cheaply (R22: a hostile
-    /// `map_fixed(0, USER_TOP)` must stay fast, never walking over pages it was never going to
-    /// afford), the whole range's overlap with any of `pid`'s mappings (`range_free`, before
+    /// (`user_range`, page 0 included), its size (`range_cap`), the flags rule, the pages alone, cheaply
+    /// (R22: a hostile `map_fixed(0, USER_TOP)` must stay fast, never walking over pages it was never
+    /// going to afford), the whole range's overlap with any of `pid`'s mappings (`range_free`, before
     /// anything is charged), then the pages and the page tables they need.
     pub fn map_fixed(&mut self, pid: u64, addr: u64, len: u64, flags: u64) -> R<()> {
         decode_flags(flags, false)?;
         let (first, n) = user_range(addr, len)?;
+        self.range_cap(n)?;
         check_flags(flags, false)?;
         let b = self.budget_of(pid).ok_or(Error::Dead)?;
         if n > self.free_pages(b) && !self.broken(Mutation::R22MapFixedWalksFirst) {
             return Err(Error::OutOfMemory);
         }
+        self.range_walk(pid, n);
         if !self.range_free(pid, first, n) && !self.broken(Mutation::R11MapFixedSkipsOverlap) {
             return Err(Error::InvalidArgument);
         }
@@ -2941,7 +2975,7 @@ impl Kernel {
         if !dma {
             return Err(Error::NotPermitted);
         }
-        let r = self.map_fresh(pid, npages, FLAG_R | FLAG_W, Some(d))?;
+        let r = self.map_fresh(pid, npages, npages, FLAG_R | FLAG_W, Some(d))?;
         self.ghost.flows.push(Flow::DeviceUsed { pid, device: d, quarantined });
         Ok(r)
     }
@@ -3198,10 +3232,12 @@ impl Kernel {
         let child = self.lookup_process(pid, process)?;
         let (s, n) = user_range(src, len)?;
         let (d, _) = user_range(dst, len)?;
+        self.range_cap(n)?;
         // The flags before the source, as the kernel checks them before it backs any page.
         if !self.broken(Mutation::R11ProcessMapSkipsFlags) {
             check_flags(flags, false)?;
         }
+        self.range_walk(pid, n);
         self.own_range(pid, s, n, |m| match m.backing {
             Backing::Frame(f) => self.frames[&f].dma.is_none(),
             _ => false,

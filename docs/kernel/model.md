@@ -24,11 +24,12 @@ Status: built · partly tested: independence from the kernel's source and the em
 - **Independent.** The crate is `no_std` with `alloc`, `#![forbid(unsafe_code)]`, and its
   `[dependencies]` table is empty: it links no kernel crate, not `redoubt-sys`, nothing from
   crates.io. It states its constants itself, with the kernel's names and values: `WORDS` (4),
-  `MAX_MSG_HANDLES` (4), `MAX_HANDLES` (4096), `MAX_LEND_PAGES` (16), `MAX_THREADS` (255),
-  `WAIT_CAP` (32), `MAX_OPEN_CALLS` (256), `SLICE` (1,000 µs), `STRIDE` (2^20). Two crates
-  use the model, each as a dev-dependency: `redoubt-stride`, for its differential test
-  ([below](#where-the-model-meets-the-kernels-code)), and the test bench, whose scheduling
-  oracle must reject traces from the model's scheduler with its tie rules broken.
+  `MAX_MSG_HANDLES` (4), `MAX_HANDLES` (4096), `MAX_LEND_PAGES` (16), `MAX_RANGE_PAGES` (16),
+  `MAX_THREADS` (255), `WAIT_CAP` (32), `MAX_OPEN_CALLS` (256), `SLICE` (1,000 µs), `STRIDE`
+  (2^20). Two crates use the model, each as a dev-dependency: `redoubt-stride`, for its
+  differential test ([below](#where-the-model-meets-the-kernels-code)), and the test bench,
+  whose scheduling oracle must reject traces from the model's scheduler with its tie rules
+  broken.
 - **One method per call.** `Kernel` in `model/src/kernel.rs` has one method for each call, with
   the call's name. Every argument arrives as a raw `u64`, as from user mode, and the checks run
   in the kernel's order: decoding as `redoubt-sys` decodes, then each argument from left to
@@ -319,7 +320,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 179 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 181 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -385,7 +386,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [R18 (device authority)](devices.md#r18-device-authority) | `R18DeviceByNumber`, `DeviceInfoWrongKind` | a device reached only through a handle to it; `device_info` naming the device the handle names |
 | [R20 (PID reuse)](processes.md#r20-pid-reuse) | `R20NoticePidReused` | no PID reused while a notice names it |
 | [R21 (crash blame)](processes.md#r21-crash-blame) | `BlameNobody`, `BlameNewestCall`, `ExitWithOpenCallsNotFaulted`, `CurrentNeverSet`, `ReceiveKeepsCurrent`, `ServeIgnored`, `ExitEndpointBadged`, `ExitNoticeDroppedIfNoReceiver` | blaming the current call's sender; how `receive` and `serve` set the current call; a badge-0 exit endpoint; a notice kept until received |
-| [R22 (range cost)](memory.md#r22-range-cost) | `R22MapFixedWalksFirst` | `map_fixed`'s pages refused by arithmetic before any walk |
+| [R22 (range cost)](memory.md#r22-range-cost) | `R22MapFixedWalksFirst`, `R22RangeCapIgnored`, `R22MapAnonSearchesRange` | `map_fixed`'s pages refused by arithmetic before any walk; a range of at most `MAX_RANGE_PAGES` pages, a longer one refused before any walk; `map_anon` of a longer run placed where all of it is free, its first range alone mapped |
 | [I3 (minted badges are non-zero and narrow)](invariants.md#i3-minted-badges-are-non-zero-and-narrow) | `MintFromUnservedMessage` | minting only from an open call of the caller's own thread |
 | [I4 (only badge-0 handles receive)](invariants.md#i4-only-badge-0-handles-receive) | `ReceiveWithBadgedHandle` | `receive` through a minted handle |
 | [I6 (labels only grow downward)](invariants.md#i6-labels-only-grow-downward) | `LabelsAddedByParentClass` | adding labels needs a system-class caller |

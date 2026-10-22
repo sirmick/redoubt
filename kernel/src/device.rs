@@ -422,7 +422,7 @@ impl MemoryManager {
         let slot = self.dma_slot_of(&d);
         let flags = redoubt_sys::MemFlags::READ | redoubt_sys::MemFlags::WRITE;
         let len = d.size as usize;
-        let at = self.map_run(pid, len / PAGE_SIZE, flags, Some(d.base as usize))?;
+        let at = self.map_run(pid, len / PAGE_SIZE, len / PAGE_SIZE, flags, Some(d.base as usize))?;
         if let Some(slot) = slot {
             self.dma_mapped(pid, slot);
         }
@@ -456,7 +456,7 @@ impl MemoryManager {
         // Charged and zeroed before anything is mapped (R6, R11).
         let phys = self.dma_new_run(pid, slot, npages)?;
         let flags = redoubt_sys::MemFlags::READ | redoubt_sys::MemFlags::WRITE;
-        match self.map_run(pid, npages, flags, Some(phys)) {
+        match self.map_run(pid, npages, npages, flags, Some(phys)) {
             Ok(at) => Ok((at, phys as u64)),
             Err(e) => {
                 self.dma_drop_run(slot, phys);

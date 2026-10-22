@@ -589,9 +589,10 @@ got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (26)</summary>
+<details><summary>Status: built · tested (27)</summary>
 
 - bench:sched-latency
+- bench:sched-range-hammer
 - bench:steward-latency
 - bench:steward-latency-n4
 - bench:steward-latency-n16
@@ -737,7 +738,7 @@ stated margin. The sweep's seeds and worst case are recorded here with the targe
 | driver wake: the RTC's time when the driver runs, less the alarm it set | p50 <= 15 ms, p99 <= 50 ms |
 | steward timer wake: `time_now` when it runs, less its timeout's deadline | p50 <= 15 ms, p99 <= 50 ms |
 | steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 25 ms, p99 <= 95 ms (from the fourth sweep below; the third sweep set the same 25 and 95 ms) |
-| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 40 ms (back from 54 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)) |
+| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 40 ms (back from 54 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)); on rv32 at two harts the real steward's reads 43 to 57 ms, recorded, not judged ([below](#responsiveness), [residual risks](#residual-risks)) |
 | R10 kernel time of one destruction, from the trace | p99 <= 30 ms (back from 39 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)) |
 | a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 95 + 30 = 125 ms, asserted as one sum by the post-check |
 | `budget_destroy`, call to return | p99 <= 51 ms: one round at N = 16, R10's 30 ms plus (runnable budgets + 2) slices, 21 of 1 ms (`destroy_call_p99_us`, judged net of audits as the wakes are) |
@@ -776,7 +777,8 @@ and 12.0 ms for the deadline notice, and a lease's end at most 9.8 and 16.6 ms; 
 rv32's driver wake at N = 16, 17.2 ms against 15 ms; rv64's is 12.6 ms. At four harts a wake can
 wait for the kernel lock behind three sections ([residual risks](#residual-risks)).
 `sched-lock-contention` holds the lock's order under R12's costliest call at two and four harts,
-and gates the driver's wake there, both targets at two harts and the p50 at four
+and records the driver's wake there beside the targets, not judged: under the range cap a wake
+waits a whole refused search, longer than the p50 target, until the search is bounded
 ([R78](#r78-fair-kernel-entry)).
 
 A slice end adds its own kernel time ([charging](#charging)). In the release build that is about
@@ -891,22 +893,22 @@ N = 1 / 2 / 3 / 4 / 16; each lease destroyed is a VM budget of 5,248 pages, and 
 the deadline notice and the destroy call carry 300-500 ms of the checked build's audits after
 such a destruction (subtracted, as every target is net):
 
-| Measure (net µs, N = 1 / 2 / 3 / 4 / 16; D = 8 at 16) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts (`--smp 2`, recorded, not gated) |
+| Measure (net µs, N = 1 / 2 / 3 / 4 / 16; D = 8 at 16) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts (N = 4: an earlier run, not re-measured, not judged) |
 | --- | --- | --- | --- | --- |
-| steward timer wake (p50/p99) | 965/1944, 789/3472, 1227/2555, 821/5165, 599/1405 | 727/1579, 1242/1843, 888/1167, 801/1507; N = 16 not run (a spinner dies, below) | 1761/5085, 2867/23003, 1901/4066, 2336/7692, 3592/5357 | 5563/5636, **31831**/35239 (the p50 missed, below), 4160/5396, 3284/40940; N = 16 not run |
-| steward decision wake (p50/p99) | 1156/8292, 17425/20974, 645/2230, 965/2000, 736/1532 | 30376/33376 (N = 1, recorded, not judged: below; 24235/28493 with the launch on the loop), 1202/1440, 969/2299, 775/1888 | 3474/18540, 1696/21203, 9798/25163, 3265/25254, 14107/29787 | 3963/4517, 4583/39824, 21757/40031, 3112/41174 |
-| deadline notice (p99; the sponsor's send returned, re-measured) | 17882, 18016, 19734, 18813, 14349 | 16303, 17365, 15288, 17349 | 30393, 32398, 24567, 27239, 29907 | 13021, 13996, 12731, 13997 (at the dequeue, not re-measured) |
-| `budget_destroy`, call to return (p50/p99) | 6012/8329, 6081/8372, 5016/8412, 5468/8354, 6204/8762 | 6710/10251, 5360/8315, 6404/7910, 6460/9557 | 8178/9787, 8390/11010, 7938/10401, 7800/11411, 7545/9390 | 11738/13577, 11350/14014, 11316/13198, 10016/16204 |
-| R10 (p99; the boots at N = 1 to 3 / 4 / 16, 99 / 35 / 31 destructions) | 9695 / 9716 / 4800 | 9651 / 9682 | 10042 / 9804 / 5490 | 9801 / 10063 |
-| a lease's end (worst decision wake p99 + R10, per boot) | 20974 + 9695 = 30669; 2000 + 9716 = 11716; 1532 + 4800 = 6332 | 40468 + 9651 = 50119; 1888 + 9682 = 11570 | 25163 + 10042 = 35205; 25254 + 9804 = 35058; 29787 + 5490 = 35277 | 40031 + 9801 = 49832; 41174 + 10063 = 51237 |
-| reply to the next receive (p50/p99, no target) | 8560/8679, 8722/9777, 9861/11494, 8699/10986, 11809/15021 | 8894/8949, 9278/11920, 9344/10578, 10614/12382 | 43647/48305, 23133/25010, 23952/36940, 26169/37061, 24355/32217 | 77231/80354, 39057/84666, 38811/50840, 39781/48369 |
+| steward timer wake (p50/p99) | 965/1944, 789/3472, 1227/2555, 821/5165, 599/1405 | 435/438, 552/555, 601/1231, 801/1507; N = 16 not run (a spinner dies, below) | 1761/5085, 2867/23003, 1901/4066, 2336/7692, 3592/5357 | 4751/5972, 4340/6680, 4311/11628, 3284/40940; N = 16 not run |
+| steward decision wake (p50/p99) | 1156/8292, 17425/20974, 645/2230, 965/2000, 736/1532 | 528/1029, 1072/1551, 1035/1549, 775/1888 | 3474/18540, 1696/21203, 9798/25163, 3265/25254, 14107/29787 | 3385/4950, 3131/5362, 3026/4860, 3112/41174 |
+| deadline notice (p99; the sponsor's send returned, re-measured) | 17882, 18016, 19734, 18813, 14349 | 16253, 17432, 18876, 17349 | 30393, 32398, 24567, 27239, 29907 | **43372**, **45317**, **56536** (recorded, not judged: below), 13997 (at the dequeue) |
+| `budget_destroy`, call to return (p50/p99) | 6012/8329, 6081/8372, 5016/8412, 5468/8354, 6204/8762 | 5468/8799, 6501/8884, 6739/8860, 6460/9557 | 8178/9787, 8390/11010, 7938/10401, 7800/11411, 7545/9390 | 12055/13673, 9636/12969, 9046/13885, 10016/16204 |
+| R10 (p99; the boots at N = 1 to 3 / 4 / 16, 99 / 35 / 31 destructions) | 9695 / 9716 / 4800 | 8796 / 9682 | 10042 / 9804 / 5490 | 8929 / 10063 |
+| a lease's end (worst decision wake p99 + R10, per boot) | 20974 + 9695 = 30669; 2000 + 9716 = 11716; 1532 + 4800 = 6332 | 1551 + 8796 = 10347; 1888 + 9682 = 11570 | 25163 + 10042 = 35205; 25254 + 9804 = 35058; 29787 + 5490 = 35277 | 5362 + 8929 = 14291; 41174 + 10063 = 51237 |
+| reply to the next receive (p50/p99, no target) | 8560/8679, 8722/9777, 9861/11494, 8699/10986, 11809/15021 | 105/106, 106/108, 107/110, 10614/12382 | 43647/48305, 23133/25010, 23952/36940, 26169/37061, 24355/32217 | 2427/3003, 2856/3829, 1974/3418, 39781/48369 |
 
 Each boot's trace fit its ring with nothing dropped: 4,841,622 / 2,876,371 / 1,022,850 records
 of 8,388,608 for the boots at N = 1 to 3 / 4 / 16 on rv64 at one hart, 5,525,840 / 3,711,105 /
-1,363,142 at two; 5,005,142 / 2,963,667 on rv32 at one hart, 5,979,365 / 3,932,389 at two. The
-real steward meets every target on rv64 at one and two harts, N = 1 to 16, and on rv32 at
-one hart, N = 1 to 4, each column one run at seed 3 with the cleanup steps on the steward's own
-thread ([steward](../servers/steward.md#failure-and-restart)): the timer wake's p99 at N = 3 and
+1,363,142 at two; 5,105,172 / 2,963,667 on rv32 at one hart, 6,233,716 / 3,932,389 at two. The
+real steward meets every target on rv64 at one and two harts, N = 1 to 16, on rv32 at one
+hart, N = 1 to 4, and on rv32 at two harts, N = 1 to 3, but the deadline notice's p99 (below),
+each column one run at seed 3 with the cleanup steps on the steward's own thread ([steward](../servers/steward.md#failure-and-restart)): the timer wake's p99 at N = 3 and
 4 is 2.6 and 5.2 ms on rv64, 1.2 and 1.5 ms on rv32, and the reply-to-receive p99 in those rounds
 11.5 and 11.0 ms, 10.6 and 12.4 ms, with no 100 ms retry in any sample. At N = 16 on rv64 at one
 hart the timer wake meets its targets, 0.6 ms at p50 and 1.4 at p99 (54.5 and 57.3 ms when the round
@@ -959,8 +961,8 @@ thirds without moving the launch. With the bound the rv32 rounds run: at one har
 meet every target, and at two harts N = 1 to 4 complete for the first time, their rows not
 judged, since that boot ends in the round after them before the reset dumps the trace the
 oracle judges from (below); they are judged when a run reaches the reset. The one-hart rv32
-column's rows at N = 1 to 4 are this run's; the launch's own spread beside three spinners on
-rv32 at one hart is 2.76 to 5.85 s over the thirteen launches of the round the bound was
+column's rows at N = 1 to 3 are re-measured under the range cap, N = 4 the earlier run's; the
+launch's own spread beside three spinners on rv32 at one hart is 2.76 to 5.85 s over the thirteen launches of the round the bound was
 derived from, with no step of the steward's differing between them.
 
 **Two rv32 rows are findings, not targets met.** With the deadline lease derived from the
@@ -984,17 +986,16 @@ all their modules on both widths at one and two harts and every one exits 0
 instant with no nearer timer, reached the oldest live lease's deadline, [the test bench](../testbench.md#the-case-file)).
 `steward-latency-n16` still runs on
 rv64 alone: its rv32 round was not re-measured with the cap, and the column says so until it
-is. At two harts on rv32 the N = 1 to 3 boot reaches the reset and is judged for the first
-time, and the N = 2 round misses the timer wake's p50, 31.8 ms against 15 (its p99 35.2 ms,
-met), the same within 30 µs over five boots (31,855, 31,835, 31,825, 31,832 and 31,831 µs),
-every other target of the boot met with `dropped 0` and the kernel lock waited for in 249 of
-1000 ticks; N = 1 is 5.6 ms and N = 3 4.2 ms, so the miss is the one-spinner round's: a kernel lock-contention finding at
-two harts (a wake can wait for the kernel lock there, [R78](#r78-fair-kernel-entry) and
-[residual risks](#residual-risks)), to be taken up on its own — why the round with one spinner,
-then a fix or a stated residual. The table carries the rv32 two-hart rows with their numbers,
-and rv32 is gated at one hart until it lands, rv64 at both. The `a device interrupt returned
-without its claim` rejection of the rv32 two-hart trace, one run in two at this seed before, met
-neither rv32 two-hart boot here. Before the steward's console lines were queued and written through one kept
+is. At two harts on rv32 the N = 1 to 3 boot reaches the reset and is judged: its N = 2 round's
+timer wake reads 4.0 and 4.3 ms at p50 in two runs, where the same boot on a kernel without the
+range cap reads 38.0 ms, the wake falling due inside a lease's loader stub's one 39.8 ms
+`map_fixed` of beamlet's text. **One two-hart rv32 cell is a finding, recorded, not judged:** the
+deadline notice's p99 at N = 1 to 3 reads 43.4 / 45.3 / 56.5 ms, and on a kernel without the
+range cap 41.9 / 41.9 / 56.1, against 40 (the target unmoved), measured at the sponsor's send as
+the other columns are. Taking the notice apart term by term on that boot, against one hart and rv64 at
+two, is its own package, which judges the cell. The `a device interrupt returned without its
+claim` rejection of the rv32 two-hart trace, one run in two at this seed before, met neither
+rv32 two-hart boot here. Before the steward's console lines were queued and written through one kept
 fid at the loop's turn ([steward](../servers/steward.md#failure-and-restart)), the steward
 reached its wait with the console round trips of the reply it had just given on its pass (each
 line an attach, open, write and close at `consoled`), the timer wake's p50 missed on every width
@@ -1002,24 +1003,14 @@ and hart count (23 to 61 ms), and at two harts the decision wake's p50 and the d
 p99 missed too; the reply-to-receive gap was 34-56 ms at one hart and 94-162 at two. Now a call's
 records go before its reply, one write each, and the gap (the last row, recorded, no target) is
 the loop's own work and the reply's hand-over to the caller, with no console call in it. The
-two-hart figures are gated as the stand-in's are, and the rv32 two-hart row's miss of the timer
-wake's p50 at N = 2, every sample near 40 ms with the one spinner's VM live before the round at
-N = 3 ran, is the finding above, judged now. **The same finding at one hart on rv32, one cell:**
-the decision wake at N = 1 is a bare 30 ms receive timeout that sleeps 53 to 62 ms with exactly
-one lease VM running (the round's own, just launched and spinning) and wakes 1 to 3 ms late
-beside a second, the steward doing nothing in the window; it measured 24,235 / 28,493 µs with
-the launch on the steward's loop, 0.8 ms under the 25 ms p50, and 30,376 / 33,376 with the
-launch on the steward's launch thread ([the steward](../servers/steward.md#leases)), whose
-report lands the loop's receive about 10 ms earlier against the VM's first run; the same tree
-with the launch put back on the loop measured 23,300 / 31,843, so the thread moved the phase of
-a pathological wake, not the wake (the 20 ms timer wake at N = 1 is 2.2 to 3 ms late with the
-thread, 0.8 without, within its 15 ms). The cell is recorded, not judged (`record=` on the case,
-the target unmoved; the table above carries both numbers), the one-runnable-VM timeout wake
-being the scheduler finding above: a sleeper's timeout that does not end the running VM's slice,
-the timer apparently armed for the slice's end rather than the nearest timeout, visible only
-when nothing else switches. Landing the phase under by putting `process_start` back on the loop
-would be designing to pass an anomalous wake, and is not done. The cases stay out of the whole run, by name, until
-the two-hart rows pass on both widths. The destructions judged are those before the probe's
+two-hart figures are gated as the stand-in's are. **The one-hart rv32 decision wake at N = 1 is one kernel
+section's.** The wake, a bare 30 ms receive timeout, reads 528 / 1,029 µs, judged with the rest.
+On a kernel without the range cap it reads about 30 ms at p50 (30,376 / 33,376 µs), over the
+25 ms target: a lease's loader stub maps beamlet's 835-page text in one `map_fixed`, 39.8 ms on
+rv32 with interrupts off, and the wake falls due inside it. With the cap
+([R22 (range cost)](memory.md#r22-range-cost)) the stub maps a range at a time, each call within
+about a slice. The cases
+stay out of the whole run, by name. The destructions judged are those before the probe's
 `LATENCY-END` (99 in the N = 1 to 3 boot, 165 over the three); the sixteen after it in each boot
 (the marker-file exits reaping the leases) are recorded and not judged.
 
@@ -1388,10 +1379,22 @@ the picked thread's user time: it starts when the thread returns to user mode, s
 work between the pick and that return, however long, never uses it up, and a picked thread runs
 its slice unless a budget deadline fires at the return.
 
-A system call's kernel time is bounded by a constant plus a term linear in the pages it maps or
-the objects it names. It never depends on the extent of an address area or on what other processes
-hold. `map_anon`'s search is linear in the fixed-size area it searches, a constant, and never in
-`len` (`bench:map-anon-search-bound`). A RAM frame is taken from the free-frame bitmap and given
+A system call's kernel time is bounded by a constant plus a term linear in the objects it names
+and in the pages it maps, at most `MAX_RANGE_PAGES` pages a call, a constant: a range call's
+worst section at the cap is measured within one slice ([R22 (range cost)](memory.md#r22-range-cost),
+`bench:sched-range-hammer`), but for one overrun: `process_map` from untouched reservation pages,
+which it backs and zeroes inside the call, 1.4 to 1.8 slices at the cap, and which only the
+process the loader starts (`init`) can make. It never depends on the extent of an address area or on what other
+processes hold. `map_anon`'s search is linear in the fixed-size area it searches, a constant, and
+never in `len` (`bench:map-anon-search-bound`), but a walk for each start it tries, so a process
+that takes a page in every few pages of its own area makes each of its refusals cost up to 114 ms
+in a checked build (n = 2 on rv64; at most about 27 ms within a lease's 5,248 pages; the table
+is on [R22](memory.md#r22-range-cost)): with R10 ([budgets](budgets.md#r10-destruction)) it is one of
+three costs a slice does not bound. The third is a device owner's `dma_alloc` and `map_device`,
+linear in the pages asked for and bounded by the DMA pool (1,024 pages, about 48 ms on rv32 at
+its worst) and the device's registers, which only a driver `init`'s manifest names can make, and
+the image's drivers make once each at start or restart, for a few constant pages
+([R22](memory.md#r22-range-cost)). A RAM frame is taken from the free-frame bitmap and given
 back to it, so backing a page, a page table or an object costs no search of RAM, however much of it
 is in use (`bench:scan-bounds`). A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the
 platform's interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in
@@ -1548,50 +1551,61 @@ calls at once may take at most 2.2 times the calls in turn. Alone, twenty runs a
 forty of its runs fail it, the recorded negative runs.
 
 `bench:sched-lock-contention` holds the order in time, under R12's costliest call: on every hart
-but one a budget asks in a loop for a `map_anon` refused after a search of the whole area
-(`map-anon-search-bound`'s worst case, 9.6 ms of kernel time in a checked build), beside
-`sched-latency`'s driver stand-in. A kernel built with `lock-trace` records each wait's ticket,
-and the oracle requires the waits to take the lock in ticket order, each drawn behind fewer
-sections than harts ([the scheduler oracle](../testbench.md#the-scheduler-oracle)): at two harts
-1433 waits on rv64 and 1436 on rv32, each behind at most one section; at four harts
-(`sched-lock-contention-4`, three such budgets) 2240 and 2548, behind at most three. The driver's
-wake is gated on the [responsiveness](#responsiveness) targets at two harts, and on its p50 at
-four. Every started hart takes device interrupts ([boot](boot.md#hardware-abstraction)), so the
-alarm reaches the idle hart, which draws its ticket behind the search in progress and runs the
-driver itself: net of the audits its p50/p99 is 8.5/10.6 ms on rv64 and 8.5/10.4 ms on rv32 at two
-harts, against 15 and 50 ms. The wakes are bimodal, under 2 ms when the alarm falls between two
-searches and about 10 ms inside one, and the p50 is whichever mode holds half of them (another run
-read 1.5 and 1.7 ms). With the boot hart alone taking device interrupts they were 18.5/19.2 and
-18.3/19.1 ms: the alarm waited out the boot hart's search, and the woken hart drew its ticket after
-the searcher's next call. `bench:irq-boot-hart-only` is that kernel (`irq-boot-hart-only`, a
-debug-only feature) under the same targets, which the post-check must fail (20.2 ms gross p50 on
-both widths: its hammer lands on the boot hart); a checked build's count at power-off shows its
-boot hart claiming all 201 and the other hart's context taking none (no claim, and no claim that
-found nothing). The count is each hart's: its claims, its claims that found nothing (it trapped
+but one a budget asks in a loop for a `map_anon` of the most a range call may name, refused after
+a search of the whole area (a page taken in every 64 KiB window of the area, 4,096 pages of the
+budget's, so 4,096 starts: 22.6 ms of kernel time on rv64 and 17.0 ms on rv32 in a checked build,
+[R22](memory.md#r22-range-cost)), beside `sched-latency`'s driver stand-in. The budgets search
+until the window ends, which the program sizes from one search's length alone, and it checks
+that every driver wake fell inside the window, so each wake is measured under the load. A kernel
+built with `lock-trace` records each wait's ticket, and the oracle requires the waits to take the
+lock in ticket order, each drawn behind fewer sections than harts
+([the scheduler oracle](../testbench.md#the-scheduler-oracle)): at two harts 1447 waits on rv64
+and 1442 on rv32, each behind at most one section; at four harts (`sched-lock-contention-4`,
+three such budgets) 22,350 and 24,356, behind at most three. Every started hart takes device
+interrupts ([boot](boot.md#hardware-abstraction)), so the alarm reaches the idle hart, which
+claims it and runs the driver itself.
+
+**Under the range cap the driver wake's targets cannot be met here.** The driver reads the time
+and calls `receive` for its next alarm just after a wake, which a search's end let run; between
+the two calls the searching budget, back in user mode for 9 µs, has already drawn its next
+ticket, so the `receive` waits in ticket order behind one whole search, R78's one-section bound
+met exactly, and the alarm falls due inside it. A trace of every wake puts each one behind a
+section, phase-locked to the searches. Under the cap the shortest refused search is the one
+above, a page in every range-long window, and it is longer than the 15 ms p50 target: net of the
+audits the driver's p50/p99 read 21.4/21.9 ms on rv64 and 16.0/16.5 ms on rv32 (34.5/35.0 and
+23.3/23.8 ms with a page in every 32 KiB, 35.6 and 24.4 ms a search). So the case records the
+wake beside the 15 and 50 ms targets, which do not move, rather than judging it, until the search
+is bounded ([residual risks](memory.md#residual-risks)), which re-judges the family and its
+self-check. With the boot hart alone taking device interrupts a wake waits two searches, 44.1 ms
+on rv64 and 33.3 ms on rv32 at p50 net: the alarm waits out the boot hart's search, and the
+woken driver's `receive` then draws its ticket behind the next. `bench:irq-boot-hart-only` is
+that kernel (`irq-boot-hart-only`, a debug-only feature) under the same case, the self-check of
+the targets. A negative is judged only while its positive is, so it records its wake too, until
+the search is bounded; a checked build's count at power-off shows its boot hart claiming all 201
+and the other hart's context taking none (no claim, and no claim that found nothing). The count
+is each hart's: its claims, its claims that found nothing (it trapped
 for an alarm another hart claimed first) and their sum, the alarms its context took. The idle hart
 wins the claims, and which hart idles follows the boot's timing (claims 200 and 1 in one
 `sched-lock-contention` run; 29, 4, 168, 0 and 196, 1, 2, 2 in two `sched-lock-contention-4`
 runs), so the cases require what does not: `sched-lock-contention` and `sched-lock-contention-4`
 that a hart other than the boot hart took ten or more alarms, and `sched-lock-contention-4-mttcg`
-that every hart did. At four harts under `icount` the p50 (4.3 ms on rv64 and 5.3 ms on rv32 in
-one run) and the p99 (59.1 and 58.7 ms) wait for QEMU's turns and are recorded there, not gated
-([residual risks](#residual-risks)): rv32's p50 moved between 5 and 22 ms when a slice's end was
-made cheaper. It is judged where the harts run at once:
+that every hart did. At four harts under `icount` the p50 and p99 wait for QEMU's turns and are
+recorded there, not gated ([residual risks](#residual-risks)): a wake waits about five searches
+(113.0/113.5 ms on rv64, 86.1/86.6 ms on rv32). It is judged where the harts run at once:
 `bench:sched-lock-contention-4-mttcg` runs the same program under QEMU's multi-threaded TCG, in
 host time, and judges the driver wake's net p50 and p99 in searches of the same run alone, which
 the program times before its children start (`one search alone`): at most three at p50 and eight
 at p99. A ratio, because the host's speed moves both sides, and a wake waits behind at most three
-searches and the one in progress. Twenty runs alone on q's quiet cores read a p50 of 1.6 to 1.9
-searches and a p99 of 2.0 to 3.0, but for one run of each width at 6.1 (rv64) and 5.1 (rv32);
-twenty on the general cores read p99s of 3.8 to 6.2 and 3.2 to 5.1 (a search alone about 1.5 to
-1.9 ms and 1.3 ms). The p99 bound, at twice the four-search claim, cannot see a wake one or two
-searches longer: the `irq-boot-hart-only` kernel under the same case reads p99s of 5.4 to 7.1
-searches and passes it. Its p50, 3.7 to 4.9 searches against IRQ1's 1.6 to 1.9, fails the p50
-bound in all four recorded runs, so the p50 is the gate that sees that regression. The 15 and 50 ms
-targets are gated too, but on this host's TCG a search takes a fifth of its 9.6 ms of virtual
-time, so they hold for the twin as well (p99 7.5 to 10.9 ms); on hardware, where a search is its
-virtual length, the same count holds 50 ms while R12's costliest call stays under about 12 ms, and
-the twin's would not.
+searches and the one in progress. A quiet run of each width reads a p50 of 2.5 and 2.2 searches
+and a p99 of 5.5 and 2.7 (a search alone 3.1 and 2.2 ms). The bounds were set from twenty runs
+alone on q's quiet cores at a 9.6 ms search shape (a p50 of 1.6 to 1.9 searches and a p99 of 2.0
+to 3.0, but for one run of each width at 6.1 and 5.1). The p99 bound, at twice the four-search
+claim, cannot see a wake one or two searches longer: in those runs the `irq-boot-hart-only`
+kernel read p99s of 5.4 to 7.1 searches and passed it, and its p50, 3.7 to 4.9 searches, failed
+the p50 bound in all four, so the p50 is the gate that sees that regression. The 15 and 50 ms
+targets are printed beside them and recorded, as at two harts: on this host's TCG a search takes
+a fraction of its virtual length, but on hardware, where a search is its virtual length, a wake
+behind one already misses the p50 target under the cap.
 
 ### R23 (no test channels)
 
@@ -1652,7 +1666,7 @@ budget waiting to receive a call that never came from one blocked in a call out
 ([responsiveness](#responsiveness)), and placed a burst of the steward's notices between
 beamlet's serve thread and its VM ([the steward](../servers/steward.md#failure-and-restart));
 `irq-boot-hart-only`, whose boot hart alone
-takes device interrupts, for R78's negative case at two harts; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
+takes device interrupts, for R78's negative case at two harts (recorded under the range cap, as its positive is); `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
 `sched-capped-holds-floor`, whose floor counts the capped budgets, for R12's negative case at two
 harts; `sched-test-and-set-entry`, which replaces the kernel lock by test-and-set, and
 `sched-spin-entry`, which makes a hart wait for it spinning, each for one of
@@ -1748,6 +1762,11 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   under the 10 ms slice and stay; a lease's end from the steward's decision is at most 22.8 ms in
   the sweep against its 125 ms. A pinned seed repeats one run; a change that moves the phase can
   land on a worse one than the sweep saw, which the margin covers and a new sweep re-measures.
+- **The deadline notice misses its target on rv32 at two harts.** The real steward's notice reads
+  43.4 / 45.3 / 56.5 ms at p99 at N = 1 to 3 against 40, and 41.9 / 41.9 / 56.1 on a kernel
+  without the range cap, so the range cap neither causes nor cures it; the cell is recorded, not
+  judged, and is taken apart term by term on its own, against one hart and rv64 at two, which
+  then judges it ([responsiveness](#responsiveness)).
 - **Fair kernel entry is bounded by count, not time.** On several harts, R78 bounds the wait
   for the kernel lock by `MAX_HARTS` - 1 kernel sections, each as long as the call or
   destruction holding it: a long section delays every waiting hart by its length, which is one
@@ -1780,9 +1799,12 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   which printed the process's map a line a page holding the lock (837 ms for 4096 pages); and
   zeroing a frame a checked word at a time, five times a plain store loop. The wait for a
   shootdown's acknowledgements stays under the lock: it totals 0.9 ms over the whole containment
-  gate at two harts ([memory](memory.md#residual-risks)). A wake behind R12's costliest call waits at most the section in
-  progress at two harts (`sched-lock-contention`, [R78](#r78-fair-kernel-entry)): the idle hart
-  takes the device's interrupt and draws its ticket behind it.
+  gate at two harts ([memory](memory.md#residual-risks)). A wake behind R12's costliest call waits at most one section at
+  two harts (`sched-lock-contention`, [R78](#r78-fair-kernel-entry)): the idle hart takes the
+  device's interrupt and runs the woken driver itself. But the driver's next `receive` draws its
+  ticket behind the searching budget's next search, so under the range cap a loaded wake waits a
+  whole search, longer than the p50 target, until the search is bounded
+  ([memory](memory.md#residual-risks)); the case records the wake, not judged.
 - **Timer work billed to one budget can still take another's hart.** A timeout's or a deadline's
   work is billed to its payer, and its interrupt is armed on the payer's hart where the payer
   runs, so a one-thread victim on two harts, whom no pick can repay, no longer destroys a flood
@@ -1802,12 +1824,12 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   host thread, and a hart in a kernel section keeps its turn to the section's end. A device's
   line that rises while the idle hart is halted wakes it on time in virtual time, but the hart runs
   only when the running hart's turn ends, and then draws its ticket behind up to three sections. In
-  `sched-lock-contention-4` that leaves the driver wake's p99 at 59.1 ms on rv64 and 58.7 ms on
-  rv32 (other runs read 49.7 and 40.6), and its p50 at 5 or 22 ms on rv32 as the kernel's
-  timing moves which turn the wake lands behind, so both are recorded there, not gated: every long
+  `sched-lock-contention-4` the driver wake's p50 and p99 follow which turn the wake lands behind
+  as the kernel's timing moves, so both are recorded there, not gated: every long
   idle halt began with nothing pending, and the kernel cannot shorten another hart's turn. On harts
   that run at once the woken hart draws its ticket at the rise, and the four-hart p50 and p99 are
-  judged there, under QEMU's multi-threaded TCG ([R78](#r78-fair-kernel-entry)). Turns move
+  judged there in searches of the same run, under QEMU's multi-threaded TCG
+  ([R78](#r78-fair-kernel-entry)). Turns move
   shares too: at two harts on rv32, QEMU ends the heavy budget's hart's turn inside its slice
   end's time billed to nobody (the checked build's audit, or `kmain`'s expiry walk) at every
   slice, about 2,600 ticks a slice, so `sched-capped`'s late join reads 449 of 1000 against

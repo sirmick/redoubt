@@ -5,9 +5,9 @@ use core::num::{NonZeroU64, NonZeroUsize};
 
 pub use redoubt_sys::{
     Body, BudgetSpec, Call, Cause, DeviceInfo, Error, ExitNotice, FOREVER, Handle, Handles, Hold, Labels,
-    MAX_HANDLES, MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MemFlags, Message,
-    MessageKind, MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return,
-    USER_AREA_END, Usage, WAIT_CAP, WORDS,
+    MAX_HANDLES, MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_RANGE_PAGES, MAX_START_HANDLES,
+    MemFlags, Message, MessageKind, MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind,
+    Return, USER_AREA_END, Usage, WAIT_CAP, WORDS,
 };
 use redoubt_sys::{RECEIVED_SLOTS, USAGE_SLOTS};
 
@@ -104,6 +104,42 @@ pub fn unmap(addr: usize, len: usize) -> Result<(), Error> {
 
 pub fn set_flags(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
     redoubt_sys::syscall(&Call::SetFlags { addr, len, flags }).map(|_| ())
+}
+
+/// `call` on each range of `[0, len)` a range call may name ([`redoubt_sys::range_chunks`]), as
+/// offsets, stopping at the first refused: for a case's setup that maps, moves or gives back more
+/// than one call may name (kernel/memory.md, R22); the cases that test a range call itself make it
+/// whole.
+fn each_range(len: usize, call: impl FnMut((usize, usize)) -> Result<(), Error>) -> Result<(), Error> {
+    redoubt_sys::range_chunks(0, len).try_for_each(call)
+}
+
+/// One run of `len` bytes at an address the kernel chooses, however long: placed whole and its
+/// first range mapped by `map_anon`, the rest by `map_fixed` after it. Setup only: a page taken
+/// there meanwhile refuses the run (`InvalidArgument`), with its ranges given back, rather than
+/// searching on.
+pub fn map_anon_run(len: usize, flags: MemFlags) -> Result<usize, Error> {
+    let first = map_anon(len, flags)?;
+    let mut mapped = 0;
+    let made = each_range(len, |(at, n)| {
+        if at != 0 {
+            map_fixed(first + at, n, flags)?;
+        }
+        mapped = at + n;
+        Ok(())
+    });
+    match made {
+        Ok(()) => Ok(first),
+        Err(e) => {
+            let _ = unmap_run(first, mapped);
+            Err(e)
+        }
+    }
+}
+
+/// `unmap` of `[addr, addr + len)`, a range at a time ([`each_range`]).
+pub fn unmap_run(addr: usize, len: usize) -> Result<(), Error> {
+    each_range(len, |(at, n)| unmap(addr + at, n))
 }
 
 /// Read-write pages: what almost every caller wants.
@@ -422,6 +458,17 @@ pub fn process_create(budget: u32, exit_endpoint: u32) -> Result<u32, Error> {
 /// `process_map(h(process), src, dst, len, flags)`.
 pub fn process_map(process: u32, src: usize, dst: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
     redoubt_sys::syscall(&Call::ProcessMap { process: h(process), src, dst, len, flags }).map(|_| ())
+}
+
+/// `process_map` of `[src, src + len)` to `dst`, a range at a time ([`each_range`]).
+pub fn process_map_run(
+    process: u32,
+    src: usize,
+    dst: usize,
+    len: usize,
+    flags: MemFlags,
+) -> Result<(), Error> {
+    each_range(len, |(at, n)| process_map(process, src + at, dst + at, n, flags))
 }
 
 /// `process_start(h(process), entry, sp, arg, handles)`: the handles land in the child's

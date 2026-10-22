@@ -1,0 +1,27 @@
+description = "A range call holds the kernel at most about a slice (R22, kernel/memory.md; R12, kernel/scheduling.md): one budget maps and unmaps in a loop the longest range the kernel takes, every page table of it made afresh each time, asking first for more than a range call may name and refused it, beside the latency workload's driver stand-in on the goldfish RTC's alarm; every range call's kernel lock section in the window is within one slice net of the checked build's audits (`hold-trace`), and the driver wake meets its targets, p50 <= 15 ms and p99 <= 50 ms net of the audits, at one hart (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-range-hammer"]
+# One hart: under `icount` a lock section on several harts counts the other hart's instructions
+# too, so a range call's section would read the driver's turns, not the call (as `call-bounds`;
+# kernel/scheduling.md, "Residual risks"); and the driver then waits for the hammer's section on
+# its own hart, the wait the bound is for.
+smp = [1]
+keep_smp = true
+kernel_features = ["hold-trace"]
+post_check = "sched_oracle driver_wake_p50_us=15000 driver_wake_p99_us=50000"
+timeout_secs = 1200
+expect = [
+    '^\[range-hammer\] the hammer.s ranges mapped: [1-9]\d*$',
+    '^RANGE-SECTIONS \d+ \d+ \d+$',
+    '^\[range-hammer\] driver wake: .*: gross, audits included; net in the post-check',
+    '^\[range-hammer\] ok: the hammer mapped its ranges$',
+    '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
+    '^\[range-hammer\] ok: every driver wake fell inside the hammer.s window: the last at \d+ µs, the window.s end \d+$',
+    '^SCHED-RANGE-HAMMER TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[range-hammer\] FAIL']
+poweroff = true

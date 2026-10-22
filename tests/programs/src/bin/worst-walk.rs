@@ -46,7 +46,7 @@ fn sender(to: usize) { rd::send(to as u32, &rd::body([0; 4]), None, REPORT).expe
 extern "C" fn holder(_arg: usize) -> ! {
     let mut threads = 1;
     let mut error = 0;
-    match rd::map_anon((MAX_THREADS - 1) * rd::PAGE_SIZE, rd::rw()) {
+    match rd::map_anon_run((MAX_THREADS - 1) * rd::PAGE_SIZE, rd::rw()) {
         Ok(stacks) => {
             while threads < MAX_THREADS {
                 let stack = stacks + threads * rd::PAGE_SIZE - 16;

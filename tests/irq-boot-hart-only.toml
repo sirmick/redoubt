@@ -1,25 +1,25 @@
-description = "self-check of IRQ1's gate: `sched-lock-contention` at two harts on a kernel whose boot hart alone takes device interrupts (`irq-boot-hart-only`, as before every hart's PLIC context was enabled); the RTC's interrupt waits for the hammer's search on the boot hart and the woken hart then draws behind its next one, so the post-check must fail the driver wake's targets (kernel/scheduling.md, R78) (virtual time, checked build)"
+description = "self-check of IRQ1's gate: `sched-lock-contention` at two harts on a kernel whose boot hart alone takes device interrupts (`irq-boot-hart-only`, as before every hart's PLIC context was enabled); the boot hart alone claims the RTC's interrupt, and the driver wake's p50 and p99 are recorded beside their targets, not judged, as its positive's are (kernel/scheduling.md, R78) (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-lock-contention"]
-# The driver wake is gated at two harts. The miss depends on the hammer landing on the boot hart,
-# which follows the boot's timing (it does in this kernel's run); if it lands on the other hart the
-# idle boot hart takes the alarm, the targets are met, and the case fails loud, "passed, but must
-# fail", rather than passing quietly.
+# A negative is judged only while its positive is: under the range cap `sched-lock-contention`
+# records its wake figures, a search being longer than the p50 target, so this case records them
+# too, and its must-miss returns when the search is bounded (kernel/scheduling.md, R78).
 smp = [2]
 keep_smp = true
 # Test builds only: the trace ring with each lock wait's ticket, and the boot hart alone taking
 # device interrupts (never in a default kernel).
 kernel_features = ["lock-trace", "irq-boot-hart-only"]
-post_check = "sched_oracle driver_wake_p50_us=15000 driver_wake_p99_us=50000"
+post_check = "sched_oracle driver_wake_p50_us=15000 driver_wake_p99_us=50000 record=rv64:2:contention:driver_wake:p50 record=rv64:2:contention:driver_wake:p99 record=rv32:2:contention:driver_wake:p50 record=rv32:2:contention:driver_wake:p99"
 timeout_secs = 1200
-must_fail = '(?s)driver_wake \(\d+\): net .*?target missed'
 expect = [
     '^kernel: irq-boot-hart-only: device interrupts reach the boot hart alone$',
+    '^\[lock-contention\] ok: every hammer pinned its area before the window opened$',
     '^\[lock-contention\] 1 hammers. searches refused: \d+$',
     '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
+    '^\[lock-contention\] ok: every driver wake fell inside the hammers. window: the last at \d+ µs, the window.s end \d+$',
     '^SCHED-LOCK-CONTENTION TEST PASSED$',
     # The kernel's count: the boot hart claimed every device interrupt, and the other hart's context
     # took none, not even a claim that found nothing (recorded: claimed by hart [201, 0], found

@@ -1,8 +1,8 @@
 //! Attack test, attacker role: map and touch far more anonymous memory than the machine has
-//! RAM, in ever smaller chunks, until the kernel refuses even one page. Running out must be this
-//! process's `OutOfMemory`, not a kernel panic. It then gives everything back, leaves the
-//! survivor a call that its exit abandons, and exits; the verdict is that another process is
-//! still served afterwards (see `touch-beyond-ram-survivor`).
+//! RAM, in ever smaller chunks (each a run mapped a range at a time), until the kernel refuses
+//! even one page. Running out must be this process's `OutOfMemory`, not a kernel panic. It then
+//! gives everything back, leaves the survivor a call that its exit abandons, and exits; the
+//! verdict is that another process is still served afterwards (see `touch-beyond-ram-survivor`).
 
 #![no_std]
 #![no_main]
@@ -28,7 +28,7 @@ pub extern "C" fn _start() -> ! {
     let (mut count, mut total, mut chunk) = (0, 0, CHUNK);
     let mut refusal = None;
     while chunk > 0 && total < PAGES && count < regions.len() {
-        match rd::map_anon(chunk * rd::PAGE_SIZE, rd::rw()) {
+        match rd::map_anon_run(chunk * rd::PAGE_SIZE, rd::rw()) {
             Ok(at) => {
                 for page in 0..chunk {
                     rd::poke(at + page * rd::PAGE_SIZE, 0xa5);
@@ -44,7 +44,7 @@ pub extern "C" fn _start() -> ! {
         }
     }
     for &(at, len) in &regions[..count] {
-        rd::unmap(at, len).expect("give the pages back");
+        rd::unmap_run(at, len).expect("give the pages back");
     }
     if total >= PAGES {
         log!(logger, "[attacker] BREACH: mapped all {} pages", PAGES);

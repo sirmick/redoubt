@@ -142,11 +142,11 @@ fn read_programs(bundle: &Bundle) -> Result<([Option<Program>; MAX_PROGRAMS], us
 /// image from the bundle and a startup block at the stub's.
 fn give(process: u32, bytes: &[u8], at: usize, flags: MemFlags) -> Result<(), Error> {
     let len = bytes.len().max(1).next_multiple_of(rd::PAGE_SIZE);
-    let scratch = rd::map_anon(len, rd::rw())?;
+    let scratch = rd::map_anon_run(len, rd::rw())?;
     // SAFETY: `scratch` is `len` bytes this process has just mapped read-write, and
     // `bytes.len() <= len`; `bytes` is the bundle's or this program's, elsewhere.
     unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), scratch as *mut u8, bytes.len()) };
-    rd::process_map(process, scratch, at, len, flags)
+    rd::process_map_run(process, scratch, at, len, flags)
 }
 
 /// Wait for the exit notice of the program at a place, on the endpoint it alone was given, and
@@ -176,8 +176,8 @@ fn launch(budget: u32, exit: u32, image: &[u8], handles: &[u32]) -> Result<(), E
     give(process, STUB_BIN, STUB_ENTRY, MemFlags::READ | MemFlags::EXECUTE)?;
     give(process, image, IMAGE_AT, rd::rw())?;
     let stack_len = STACK_PAGES * rd::PAGE_SIZE;
-    let stack = rd::map_anon(stack_len, rd::rw())?;
-    rd::process_map(process, stack, STACK_TOP - stack_len, stack_len, rd::rw())?;
+    let stack = rd::map_anon_run(stack_len, rd::rw())?;
+    rd::process_map_run(process, stack, STACK_TOP - stack_len, stack_len, rd::rw())?;
     let block = StartupBuilder::new(handles.len() as u32)
         .image(IMAGE_AT, image.len())
         .finish()

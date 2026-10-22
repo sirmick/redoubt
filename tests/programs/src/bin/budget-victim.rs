@@ -33,7 +33,7 @@ pub extern "C" fn _start() -> ! {
             && u.processes_usage <= u.processes_limit
             && u.weight_carved <= u.weight_limit
     });
-    let at = rd::map_anon(victim::PAGES * rd::PAGE_SIZE, rd::rw()).expect("map_anon");
+    let at = rd::map_anon_run(victim::PAGES * rd::PAGE_SIZE, rd::rw()).expect("map_anon");
     for page in 0..victim::PAGES {
         rd::poke(at + page * rd::PAGE_SIZE, page as u64);
     }

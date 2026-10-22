@@ -194,19 +194,13 @@ fn lent_ranges(c: &mut Checker) {
     rd::unmap(page, PAGE_SIZE).expect("unmap the returned page");
 }
 
-/// A request over the budget's own free-pages count is refused before anything is allocated
-/// (the cheap "pages" check, R22), so this needs no filler and never approaches real
-/// physical RAM: asking for one more page than the whole budget can ever hold is refused by
-/// arithmetic alone, the same way a huge `len` is.
-fn exhausted_budget(c: &mut Checker) {
-    let u = rd::usage(rd::ROOT).unwrap();
-    let free = u.pages_limit - u.pages_usage;
-    let before = u.pages_usage;
-
-    let addr = 0x5003_0000;
-    let r = rd::map_fixed(addr, (free + 1) as usize * PAGE_SIZE, rd::rw());
-    c.check(r == Err(Error::OutOfMemory), "an exhausted budget is refused");
-    c.check(usage_pages() == before, "nothing charged when the budget is exhausted");
+/// A range of one page more than a range call may name (`MAX_RANGE_PAGES`, R22) is refused by its
+/// length alone, before any walk or charge, however free the range and the budget are.
+fn over_the_cap(c: &mut Checker) {
+    let before = usage_pages();
+    let r = rd::map_fixed(0x5003_0000, (rd::MAX_RANGE_PAGES + 1) * PAGE_SIZE, rd::rw());
+    c.check(r == Err(Error::TooLarge), "a range over the cap is refused by its length");
+    c.check(usage_pages() == before, "nothing charged");
 }
 
 /// What differs by width, stated once (kernel/memory-layout.md, "Sv32 and Sv39 compared").
@@ -260,8 +254,12 @@ mod width {
     pub const LAST_FREE: usize = 0x7FF0_0000 - PAGE_SIZE;
 }
 
-/// The "page tables" half of the charge check, which the "pages" half alone never reaches: a
-/// range whose pages fit but whose page tables do not (`width::AT`, `width::TABLES`).
+/// Both halves of the charge check, once the budget is brought to fewer free pages than a range
+/// holds. The "pages" half: a range of one page more than the budget has free is refused by
+/// arithmetic before anything is allocated (R22), over a mapped page too, since the pages come
+/// before the overlap walk (kernel/abi.md, `map_fixed`'s row). The "page tables" half, which the
+/// "pages" half alone never reaches: a range whose pages fit but whose page tables do not
+/// (`width::AT`, `width::TABLES`).
 fn page_table_charge(c: &mut Checker) {
     use width::{AT, FILL, FILL_END, SPAN, TABLES};
     const PAGES: u64 = 2;
@@ -285,10 +283,21 @@ fn page_table_charge(c: &mut Checker) {
             continue;
         }
         let (table, slot) = (filled / SLOTS, filled % SLOTS);
-        let n = short.min(SLOTS - slot);
+        let n = short.min(SLOTS - slot).min(rd::MAX_RANGE_PAGES);
         rd::map_fixed(FILL + table * SPAN + (1 + slot) * PAGE_SIZE, n * PAGE_SIZE, rd::rw()).expect("fill");
         filled += n;
     }
+
+    let over = (rd::free(rd::ROOT) + 1) as usize * PAGE_SIZE;
+    let before = usage_pages();
+    c.check(
+        rd::map_fixed(0x5003_0000, over, rd::rw()) == Err(Error::OutOfMemory),
+        "an exhausted budget is refused",
+    );
+    c.check(usage_pages() == before, "nothing charged when the budget is exhausted");
+    let r = rd::map_fixed(FILL, over, rd::rw());
+    c.check(r == Err(Error::OutOfMemory), "over a mapped page, the pages are refused before the overlap");
+    c.check(usage_pages() == before, "nothing charged");
 
     let before = usage_pages();
     let r = rd::map_fixed(AT, PAGES as usize * PAGE_SIZE, rd::rw());
@@ -312,10 +321,10 @@ fn page_table_charge(c: &mut Checker) {
         let base = FILL + table * SPAN;
         if table == 0 {
             if slots > 0 {
-                rd::unmap(base + PAGE_SIZE, slots * PAGE_SIZE).expect("unmap the filler");
+                rd::unmap_run(base + PAGE_SIZE, slots * PAGE_SIZE).expect("unmap the filler");
             }
         } else {
-            rd::unmap(base, (1 + slots) * PAGE_SIZE).expect("unmap the filler");
+            rd::unmap_run(base, (1 + slots) * PAGE_SIZE).expect("unmap the filler");
         }
     }
 }
@@ -328,21 +337,21 @@ fn page_table_charge(c: &mut Checker) {
 /// (kernel/timer.md, "Time").
 const BOUND_US: u64 = 10_000;
 
-/// A huge `map_fixed` must be refused at once: the pages check runs before `tables_needed` ever
-/// walks the range, and the overlap walk skips absent subtrees (R22). On Sv39 the range,
-/// `width::HUGE`, is free, so it is the budget check that refuses it, not an occupied page.
+/// A huge `map_fixed` must be refused at once: its length is over `MAX_RANGE_PAGES`, refused by
+/// arithmetic before `tables_needed` or the overlap walk ever reads the range (R22). On Sv39 the
+/// range, `width::HUGE`, is free, so nothing else would refuse it.
 ///
 /// Then the whole of user space from page 0, over this process's own image, heap and stack: the
-/// pages-alone check comes before the overlap walk (kernel/abi.md, `map_fixed`'s row), so it is
-/// `OutOfMemory`, not the overlap's `InvalidArgument`, and a length no budget can pay for never
-/// buys a walk of what is mapped.
+/// length comes before the overlap walk (kernel/abi.md, `map_fixed`'s row), so it is `TooLarge`,
+/// not the overlap's `InvalidArgument`, and a length over the cap never buys a walk of what is
+/// mapped.
 fn huge_len_is_prompt(c: &mut Checker) {
     let (addr, end) = width::HUGE;
     let before = usage_pages();
     let t0 = rd::time_now().unwrap();
     let r = rd::map_fixed(addr, end - addr, rd::rw());
     let elapsed = rd::time_now().unwrap() - t0;
-    c.check(r == Err(Error::OutOfMemory), "a huge len is refused");
+    c.check(r == Err(Error::TooLarge), "a huge len is refused");
     c.check(usage_pages() == before, "nothing charged");
     writeln!(c.0, "[map-fixed] huge len took {} us", elapsed).ok();
     c.check(elapsed < BOUND_US, "a huge len is refused within 10 ms");
@@ -351,15 +360,15 @@ fn huge_len_is_prompt(c: &mut Checker) {
     let t0 = rd::time_now().unwrap();
     let r = rd::map_fixed(0, USER_AREA_END, rd::rw());
     let elapsed = rd::time_now().unwrap() - t0;
-    c.check(r == Err(Error::OutOfMemory), "a huge len over mappings is refused before the overlap walk");
+    c.check(r == Err(Error::TooLarge), "a huge len over mappings is refused before the overlap walk");
     c.check(usage_pages() == before, "nothing charged");
     c.check(elapsed < BOUND_US, "a huge len over mappings is refused within 10 ms");
 }
 
 /// The other range calls over `width::HUGE`, whose first page is mapped (R22): `unmap`,
-/// `set_flags` and `process_map` stop at the first page that is not the caller's
-/// (`InvalidArgument`), and a lend longer than `MAX_LEND_PAGES` is `TooLarge` before any page is
-/// looked at. Each is refused within the bound, and changes nothing: the first page is still
+/// `set_flags` and `process_map` longer than `MAX_RANGE_PAGES`, and a lend longer than
+/// `MAX_LEND_PAGES`, are `TooLarge` before any page is looked at. Each is refused within the
+/// bound, and changes nothing: the first page is still
 /// mapped and still writable (a store that `set_flags` had made read-only would fault this
 /// program, and the case with it), and neither `root` nor the child's budget is charged.
 fn huge_ranges_are_prompt(c: &mut Checker) {
@@ -372,9 +381,9 @@ fn huge_ranges_are_prompt(c: &mut Checker) {
     let child = rd::process_create(budget, exit).expect("a child to map into");
     let endpoint = LEND_ENDPOINT.load(Ordering::Acquire) as u32;
     let calls: [(&str, Error, &dyn Fn() -> Result<(), Error>); 4] = [
-        ("unmap", Error::InvalidArgument, &|| rd::unmap(addr, len)),
-        ("set_flags", Error::InvalidArgument, &|| rd::set_flags(addr, len, MemFlags::READ)),
-        ("process_map", Error::InvalidArgument, &|| rd::process_map(child, addr, addr, len, rd::rw())),
+        ("unmap", Error::TooLarge, &|| rd::unmap(addr, len)),
+        ("set_flags", Error::TooLarge, &|| rd::set_flags(addr, len, MemFlags::READ)),
+        ("process_map", Error::TooLarge, &|| rd::process_map(child, addr, addr, len, rd::rw())),
         ("a lend", Error::TooLarge, &|| {
             rd::call(endpoint, &rd::body([0; 4]), rd::pages(addr, len / PAGE_SIZE), FOREVER).map(|_| ())
         }),
@@ -480,7 +489,7 @@ pub extern "C" fn _start(_: usize) -> ! {
     bad_flags(&mut c);
     occupied_ranges(&mut c);
     lent_ranges(&mut c);
-    exhausted_budget(&mut c);
+    over_the_cap(&mut c);
     page_table_charge(&mut c);
     huge_len_is_prompt(&mut c);
     huge_ranges_are_prompt(&mut c);

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use redoubt_layout::{DMA_POOL_PAGES, Pid};
-use redoubt_sys::{MemFlags, PAGE_SIZE, USER_AREA_END};
+use redoubt_sys::{MAX_RANGE_PAGES, MemFlags, PAGE_SIZE, USER_AREA_END};
 
 pub use crate::arch::mem::MemoryMapping;
 use crate::arch::process::Process;
@@ -1359,7 +1359,11 @@ impl MemoryManager {
     }
 
     /// `map_anon(len, flags) -> addr`: zeroed pages, charged to the caller's budget, at an
-    /// address the kernel chooses.
+    /// address the kernel chooses. `len` is a run's length, the one range argument that may exceed
+    /// `MAX_RANGE_PAGES`: the run is placed where all of it is free, by one search, and only its
+    /// first `MAX_RANGE_PAGES` pages at most are mapped, so the call holds the kernel for the
+    /// search and a range (R22). The rest of the run is the caller's to map, by `map_fixed`; nothing
+    /// holds it free meanwhile.
     pub fn map_anon(
         &mut self,
         pid: Pid,
@@ -1374,27 +1378,35 @@ impl MemoryManager {
         if flags == MemFlags::NONE || (flags.contains(MemFlags::WRITE) && !flags.contains(MemFlags::READ)) {
             return Err(bad);
         }
-        let at = self.map_run(pid, len / PAGE_SIZE, flags, None)?;
+        let run = len / PAGE_SIZE;
+        let at = self.map_run(pid, run.min(MAX_RANGE_PAGES), run, flags, None)?;
         sync_if_executable(pid, flags);
         Ok(at)
     }
 
-    /// Map `npages` pages at an address the kernel chooses (R11), with `flags`. `phys` is the
-    /// physical run to map (`map_device`'s registers, `dma_alloc`'s buffer), or `None` for
-    /// fresh RAM: a frame each, charged to `pid`'s budget and zeroed before the mapping exists
-    /// (R6, R11). The one way the kernel maps a range it chose the address of; on any failure
-    /// nothing is left mapped, and a run the caller passed in stays the caller's to free.
+    /// Map `npages` pages at an address the kernel chooses (R11), with `flags`: the first of a run
+    /// of `run` pages, placed where all `run` are free (`map_anon`'s; every other caller's run is
+    /// `npages`). `phys` is the physical run to map (`map_device`'s registers, `dma_alloc`'s
+    /// buffer), or `None` for fresh RAM: a frame each, charged to `pid`'s budget and zeroed before
+    /// the mapping exists (R6, R11). The one way the kernel maps a range it chose the address of;
+    /// on any failure nothing is left mapped, and a run the caller passed in stays the caller's to
+    /// free.
     pub fn map_run(
         &mut self,
         pid: Pid,
         npages: usize,
+        run: usize,
         flags: MemFlags,
         phys: Option<usize>,
     ) -> Result<usize, redoubt_sys::Error> {
         let oom = redoubt_sys::Error::OutOfMemory;
         let len = npages.checked_mul(PAGE_SIZE).ok_or(oom)?;
         let at = self
-            .find_virtual_address(core::ptr::null_mut(), len, MemoryType::Default)
+            .find_virtual_address(
+                core::ptr::null_mut(),
+                run.checked_mul(PAGE_SIZE).ok_or(oom)?,
+                MemoryType::Default,
+            )
             .map_err(|_| oom)? as usize;
         let ours = phys.is_none();
         for offset in (0..len).step_by(PAGE_SIZE) {
@@ -1443,6 +1455,7 @@ impl MemoryManager {
     /// table the range leaves mapping nothing is freed, and uncharged, too.
     pub fn unmap(&mut self, pid: Pid, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
         let end = Self::user_range(addr, len)?;
+        redoubt_sys::range_cap(len)?;
         for page in (addr..end).step_by(PAGE_SIZE) {
             self.owned_mapping(pid, page)?;
         }
@@ -1470,6 +1483,7 @@ impl MemoryManager {
     ) -> Result<(), redoubt_sys::Error> {
         let bad = redoubt_sys::Error::InvalidArgument;
         let end = Self::user_range(addr, len)?;
+        redoubt_sys::range_cap(len)?;
         if flags == MemFlags::NONE {
             return Err(bad);
         }
@@ -1496,10 +1510,10 @@ impl MemoryManager {
     /// `map_fixed(addr, len, flags)`: as `map_anon`, but at exactly `addr` (R11;
     /// kernel/memory.md, `map_fixed`) -- zeroed pages, charged to the caller's budget, that never
     /// replace a mapping. Checked in the order kernel/abi.md's row gives: the range
-    /// (`user_range`), then the flags (`check_map_flags`, shared with `process_map`, so W+X and
-    /// W-without-R are refused here and can never reach `map_page_inner`'s `.expect` below), then
-    /// the pages alone against the budget, by arithmetic, so a length no budget can pay for never
-    /// buys a walk (R22), then that range's overlap with any of the caller's mappings
+    /// (`user_range`), then its size (`range_cap`, R22), then the flags (`check_map_flags`, shared with
+    /// `process_map`, so W+X and W-without-R are refused here and can never reach `map_page_inner`'s
+    /// `.expect` below), then the pages alone against the budget, by arithmetic, so a length no budget
+    /// can pay for never buys a walk (R22), then that range's overlap with any of the caller's mappings
     /// (`range_available_in`, over the whole range before anything is charged or allocated, so
     /// nothing here needs a rollback), then the pages and the page tables they need. Only once
     /// all of that holds does the guaranteed-success mapping loop run, so a failure never leaves
@@ -1513,13 +1527,14 @@ impl MemoryManager {
     ) -> Result<(), redoubt_sys::Error> {
         let oom = redoubt_sys::Error::OutOfMemory;
         Self::user_range(addr, len)?;
+        redoubt_sys::range_cap(len)?;
         check_map_flags(flags)?;
         let npages = (len / PAGE_SIZE) as u64;
         // `pid` is the running caller, and only the kernel (which makes no syscalls) has no
-        // budget. Not an error: map_fixed's error set is InvalidArgument and OutOfMemory only.
+        // budget. Not an error: map_fixed's error set is InvalidArgument, TooLarge and OutOfMemory.
         let budget = self.budget_of(pid).expect("map_fixed: the running process has a budget");
-        // The pages alone first, cheaply, so a huge `len` that the budget could never pay for is
-        // refused before the overlap check or `tables_needed` walks it.
+        // The pages alone first, by arithmetic, so pages the budget could never pay for are refused
+        // before the overlap check or `tables_needed` walks the range.
         if npages > self.free_pages(budget) {
             return Err(oom);
         }

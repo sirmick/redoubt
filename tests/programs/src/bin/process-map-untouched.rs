@@ -46,9 +46,9 @@ impl Checker {
 
 fn pages_used(budget: u32) -> u64 { rd::usage(budget).unwrap().pages_usage }
 
-/// Map pages at `FILL` until `root` has at most one free page; the length mapped. Each call
-/// leaves room for the page tables it needs (one per 512 or 1024 pages, and a few above them), so
-/// none is refused.
+/// Map pages at `FILL` until `root` has at most one free page, a range at a time; the length
+/// mapped. Each call leaves room for the page tables it needs (one per 512 or 1024 pages, and a
+/// few above them), so none is refused.
 fn fill_root() -> usize {
     let mut len = 0;
     loop {
@@ -56,7 +56,7 @@ fn fill_root() -> usize {
         if free <= 1 {
             return len;
         }
-        let pages = if free > 64 { free - free / 256 - 8 } else { 1 };
+        let pages = if free > 64 { (free - free / 256 - 8).min(rd::MAX_RANGE_PAGES) } else { 1 };
         rd::map_fixed(FILL + len, pages * PAGE_SIZE, rd::rw()).expect("fill root");
         len += pages * PAGE_SIZE;
     }
@@ -117,7 +117,7 @@ pub extern "C" fn _start(_: usize) -> ! {
     let r = rd::process_map(child, third, DST + 0x10_0000, len, rd::rw());
     c.check(r == Err(Error::InvalidArgument), "a caller that cannot back its source is refused");
     c.check((pages_used(rd::ROOT), pages_used(budget)) == before, "nothing charged");
-    rd::unmap(FILL, filled).expect("unmap the filler");
+    rd::unmap_run(FILL, filled).expect("unmap the filler");
 
     // The call that goes ahead: the first source, still untouched, moves next to the taken page,
     // in the leaf table that already maps it, so the child pays for the pages and nothing else.

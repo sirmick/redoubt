@@ -58,10 +58,11 @@ pub mod abi {
     pub use redoubt_sys::{
         BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BodyOf, BudgetSpec, Call, CallOutcome, Cause, Error, ExitNotice,
         FOREVER, Handle, Handles, Hold, Labels, LendDisposition, List, MAX_DEPTH, MAX_HANDLES, MAX_LABELS,
-        MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MAX_THREADS, MemFlags, Message,
-        MessageKind, MintSource, NUMBER_BASE, Number, PAGE_SIZE, Pages, RECEIVED_SLOTS, REGS, Received,
-        ReceivedBody, ReceivedHandles, ReplyOutcome, ResetKind, Return, SLICE, STRIDE, Slot, USAGE_SLOTS,
-        USER_AREA_END, Usage, WAIT_CAP, WORDS, decode_result, encode_result, rv32, rv64,
+        MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_RANGE_PAGES, MAX_START_HANDLES, MAX_THREADS,
+        MemFlags, Message, MessageKind, MintSource, NUMBER_BASE, Number, PAGE_SIZE, Pages, RECEIVED_SLOTS,
+        REGS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome, ResetKind, Return, SLICE, STRIDE, Slot,
+        USAGE_SLOTS, USER_AREA_END, Usage, WAIT_CAP, WORDS, decode_result, encode_result, range_cap,
+        range_chunks, rv32, rv64,
     };
 }
 pub use redoubt_wire as wire;

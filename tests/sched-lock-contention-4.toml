@@ -17,12 +17,16 @@ kernel_features = ["hold-trace"]
 # 22.3 ms in four runs and 5.1 and 5.3 ms in two, where the kernel before read a steady 7.3 ms in
 # six; the p99 stayed 41 ms against 43 to 52. `sched-lock-contention-4-mttcg` judges both where
 # the harts run at once (rv32's p50 2,951 µs, 2.2 searches, in the same change's run).
+# Under the range cap they could not be judged here either: a wake waits a whole search in ticket
+# order, longer than the p50 target, until the search is bounded (kernel/scheduling.md, R78).
 post_check = "sched_oracle driver_wake_p50_us=15000 gate_harts=2"
 timeout_secs = 1200
 expect = [
+    '^\[lock-contention\] ok: every hammer pinned its area before the window opened$',
     '^\[lock-contention\] 3 hammers. searches refused: \d+$',
     '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
     '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
+    '^\[lock-contention\] ok: every driver wake fell inside the hammers. window: the last at \d+ µs, the window.s end \d+$',
     '^SCHED-LOCK-CONTENTION TEST PASSED$',
     # The kernel's count at power-off, each hart's: its claims, its claims that found nothing (its
     # context trapped for an alarm another hart claimed first), and their sum, the alarms its

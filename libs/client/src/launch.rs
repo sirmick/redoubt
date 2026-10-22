@@ -27,7 +27,9 @@ pub const STACK_PAGES: usize = 16;
 
 /// The most pages a launch holds at once: it copies the image and the stack into the child this
 /// many pages at a time (servers/init.md, "Launching through the loader stub"), and `init`'s
-/// bound counts one batch.
+/// bound counts one batch. The runtime maps and moves a batch a range call's worth at a time
+/// (`MAX_RANGE_PAGES`, kernel/memory.md R22): smaller batches cost the read path more calls, and
+/// 16-page ones made a launch 60 % longer.
 pub const PLACE_PAGES: usize = 64;
 
 /// The high half of each painted stack unit; the low half holds the server tag and unit index.

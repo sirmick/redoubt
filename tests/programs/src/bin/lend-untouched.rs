@@ -62,7 +62,7 @@ pub extern "C" fn _start() -> ! {
     log!(logger, "[untouched] transfer {:?}", moved);
 
     // (5) More memory than the machine has RAM: the caller's error, not a kernel panic.
-    let beyond = rd::map_anon(HUGE_PAGES * rd::PAGE_SIZE, rd::rw()).map(|_| ());
+    let beyond = rd::map_anon_run(HUGE_PAGES * rd::PAGE_SIZE, rd::rw()).map(|_| ());
     log!(logger, "[untouched] map beyond RAM: {:?}", beyond);
 
     // Survived every attempt. The clean power-off, which only this program can ask for, is the

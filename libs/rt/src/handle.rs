@@ -6,9 +6,11 @@
 //! a confusion. Handles are not closed on drop: a server keeps them in tables and hands out
 //! copies, and an implicit close would be an easy use-after-close. Close them with `close`.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use redoubt_sys::{
-    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, Hold, MAX_START_HANDLES, MemFlags,
-    PAGE_SIZE, ResetKind, Return, USAGE_SLOTS, Usage,
+    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, Hold, MAX_RANGE_PAGES, MAX_START_HANDLES,
+    MemFlags, PAGE_SIZE, ResetKind, Return, USAGE_SLOTS, Usage, range_chunks,
 };
 
 use crate::ipc::Buffer;
@@ -70,18 +72,88 @@ fn addr(result: Result<Return, Error>) -> Result<usize, Error> {
     }
 }
 
-/// Maps `len` bytes (whole pages) of zeroed memory; returns its address.
+/// The bytes one range call may name: `MAX_RANGE_PAGES` pages (kernel/memory.md, R22). A longer
+/// range is the runtime's to split, a range at a time ([`range_chunks`]).
+const RANGE: usize = MAX_RANGE_PAGES * PAGE_SIZE;
+
+/// Maps `len` bytes (whole pages) of zeroed memory; returns its address. One run, wherever its
+/// length: the kernel's `map_anon` places a run of `len` where all of it is free, by its one
+/// search, and maps its first range ([`RANGE`]); the ranges after it are mapped by `map_fixed`
+/// (kernel/memory.md, R22). Nothing holds them free between the two: a page taken there meanwhile,
+/// by a placement this lock does not cover (`map_device`, `dma_alloc`, a lend landing from another
+/// thread), refuses the extension, which gives back what it mapped and asks again, the kernel's
+/// next search starting where it placed the refused run, so it passes that page. The search ends
+/// as the kernel's one pass does: once the runs placed have wrapped (one below the one before), one
+/// at or past the first's means no gap holds the run, `OutOfMemory`, with nothing left mapped. A
+/// refusal needs a placement of the process's own that the lock does not cover, so repeated
+/// re-searches, and an `OutOfMemory` though a gap held the run before them, are the process's own
+/// doing, and the one pass bounds them.
+///
+/// The process's every `map_anon` through the runtime takes one lock ([`Placing`]), the heap's and
+/// a [`crate::ipc::Buffer`]'s alike, so no other placement of the runtime's lands in a run while it
+/// is extended; a program on the runtime makes no `map_anon` of its own.
 pub fn map_anon(len: usize, flags: MemFlags) -> Result<usize, Error> {
-    addr(syscall(&Call::MapAnon { len, flags }))
+    let _placing = Placing::take();
+    let (mut origin, mut last, mut wrapped) = (None, 0, false);
+    loop {
+        let first = addr(syscall(&Call::MapAnon { len, flags }))?;
+        if len <= RANGE {
+            return Ok(first);
+        }
+        wrapped |= origin.is_some() && first < last;
+        if wrapped && origin.is_some_and(|o| first >= o) {
+            let _ = unmap(first, RANGE);
+            return Err(Error::OutOfMemory);
+        }
+        origin.get_or_insert(first);
+        last = first;
+        match map_fixed(first + RANGE, len - RANGE, flags) {
+            Ok(()) => return Ok(first),
+            Err(e) => {
+                let _ = unmap(first, RANGE);
+                if e != Error::InvalidArgument {
+                    return Err(e);
+                }
+            }
+        }
+    }
+}
+
+/// The lock every [`map_anon`] of the process holds for its whole placement.
+struct Placing;
+
+static PLACING: AtomicBool = AtomicBool::new(false);
+
+impl Placing {
+    fn take() -> Placing {
+        while PLACING.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            core::hint::spin_loop();
+        }
+        Placing
+    }
+}
+
+impl Drop for Placing {
+    fn drop(&mut self) { PLACING.store(false, Ordering::Release); }
 }
 
 /// Maps `len` bytes (whole pages) of zeroed memory at exactly `addr`, which the kernel refuses
 /// (`InvalidArgument`, nothing mapped) if any page of the range is taken (kernel/memory.md,
-/// `map_fixed`). The runtime's own: only [`crate::thread::spawn`] calls it, to place a thread's
-/// stack above its guard page, and the pages are adopted by a [`Buffer`] at once. Public, it
-/// would let a program fill the thread-stack area under the runtime's placement.
+/// `map_fixed`). A range at a time ([`range_chunks`]): a refused range unmaps those before it, so
+/// the call maps all of `len` or none of it. The runtime's own: [`crate::thread::spawn`] calls it
+/// to place a thread's stack above its guard page, and [`map_anon`] to extend a run, and the pages
+/// are adopted by a [`Buffer`] at once. Public, it would let a program fill the thread-stack area
+/// under the runtime's placement.
 pub(crate) fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
-    nothing(syscall(&Call::MapFixed { addr, len, flags }))
+    for (at, n) in range_chunks(addr, len) {
+        if let Err(e) = nothing(syscall(&Call::MapFixed { addr: at, len: n, flags })) {
+            if at > addr {
+                let _ = unmap(addr, at - addr);
+            }
+            return Err(e);
+        }
+    }
+    Ok(())
 }
 
 /// Unmaps `len` bytes at `addr`. The runtime's own: only an owner of the pages (the heap, a
@@ -99,8 +171,12 @@ pub(crate) fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), 
 /// ```compile_fail
 /// redoubt_rt::handle::set_flags(0x1000, 4096, redoubt_rt::abi::MemFlags::READ);
 /// ```
+///
+/// A range at a time ([`range_chunks`]): a refused range stops the call, those before it
+/// unmapped. Its callers unmap only what they hold whole, so a refusal means the pages were
+/// already gone.
 pub(crate) fn unmap(addr: usize, len: usize) -> Result<(), Error> {
-    nothing(syscall(&Call::Unmap { addr, len }))
+    range_chunks(addr, len).try_for_each(|(at, n)| nothing(syscall(&Call::Unmap { addr: at, len: n })))
 }
 
 /// Starts a thread at `entry` with `arg` in its first argument register, on `stack`, which it
@@ -232,16 +308,22 @@ impl Process {
     }
 
     /// Moves `pages` to `dst` in the (unstarted) process: they are the child's from then on. It
-    /// takes the pages by their owner, so no other view of them is left behind; refused, they
-    /// are unmapped here.
+    /// takes the pages by their owner, so no other view of them is left behind. A range at a time
+    /// ([`range_chunks`]): refused, the pages not yet moved are unmapped here, and those moved before
+    /// stay in the child, which has not started, as a refused later `map` leaves the earlier.
     pub fn map(&self, pages: Buffer, dst: usize, flags: MemFlags) -> Result<(), Error> {
         let len = pages.npages() * PAGE_SIZE;
         let src = pages.into_pages();
-        let moved = nothing(syscall(&Call::ProcessMap { process: self.0, src: src.addr, dst, len, flags }));
-        if moved.is_err() {
-            drop(Buffer::adopt(src));
+        for (at, n) in range_chunks(src.addr, len) {
+            let to = dst + (at - src.addr);
+            if let Err(e) =
+                nothing(syscall(&Call::ProcessMap { process: self.0, src: at, dst: to, len: n, flags }))
+            {
+                let _ = unmap(at, src.addr + len - at);
+                return Err(e);
+            }
         }
-        moved
+        Ok(())
     }
 
     /// Starts the process at `entry` with stack `sp` and `arg` in its first thread's first
