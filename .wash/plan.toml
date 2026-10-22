@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 198
+revision = 207
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2928,8 +2928,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["SCHED5"]
   body = "PRIORITY UP (2026-10-20): launch as soon as SCHED5 lands, ahead of anything else on the kernel's memory path. Rulings: .wash/local/wave-2026-10-18-rulings.md 'SCHED5: map_anon's placement search', 'the search's true worst', 'the corrected hammer confirms it'. Found by SCHED5: after the per-call page cap every range call's pages are bounded, but map_anon's placement search (shared by map_device, dma_alloc and a received message's placement) costs one page-table walk per candidate start, so a refusal follows the starts, 65,536 / n for a page pinned per n-page window: 22 / 35 / 61 / 114 ms rv64 (16 / 24 / 38 / 68 rv32) for n = 16 / 8 / 4 / 2 (.wash/local/SCHED5-search-finding.md). A process buys it with its own budget: a lease about 25-30 ms a call, every wake and every other hart (R78) waiting. Consequence (SCHED5-cover.md): the two-hart contention gate's wake targets are unmeetable under the cap (the shortest refused search, 22.6 ms rv64 / 17.0 rv32, exceeds the 15 ms p50 target by R78's one-section bound), so sched-lock-contention, -4, -4-mttcg and irq-boot-hart-only record their wake figures until this node. Design, the implementer's choice with the reason: (a) a per-process free-run summary over the placement area kept in step with the page tables (a page is free only if its entry is empty: reservations and both sides of a loan are taken), read a word a level as the frame bitmap is, its memory per process stated and charged; or (b) a search that walks the tables once and iterates entries, removing the per-start walk. Acceptance: R12 loses its second exception; R22's search paragraph and table rewritten with the new bound; the model's contract and a mutation; map-anon-search-bound's bounds re-derived down; the contention family and the self-check judged again at their targets (record= removed), the self-check failing as it must. Tier A (kernel), size M, reviewer kernel-red-4 + simplifier + editor. Needs SCHED5."
-  state = "todo"
-  revision = 91
+  state = "done"
+  revision = 207
 
 [[node]]
   id = "K35"
@@ -2976,8 +2976,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["SCHED5"]
   body = "Found by SCHED5 (thread SCHED5-cause; ruling .wash/local/wave-2026-10-18-rulings.md 'SCHED5: rv32 two harts gated'). steward-latency on rv32 at two harts, each boot alone, deadline notice p99 net at N = 1 / 2 / 3: SCHED5's head 43.4 / 45.3 / 56.5 ms, base d66839252 41.9 / 41.9 / 56.1, target 40 (the sponsor told: the steward's lease_ended send returned, less the deadline). Pre-existing: the cell was never judged on rv32 at two harts (smp rv32 = [1] until SCHED5), and the page's 13-14 ms there were taken at the dequeue, before the notice was re-measured at the send. SCHED5 gates rv32 at [1, 2] with this cell recorded (record=rv32:2:N=k:deadline_notice:p99, k = 1-3) and the finding on scheduling.md. Investigation-first, no tuning: trace one rv32 two-hart boot (block-trace, hold-trace), take the worst notices apart into the kernel's destruction at the deadline (R10), the exit notice's delivery, the steward's turn to dequeue it (its weight is 1,000 since WEIGHT1), the send to the session and its return; compare the same parts at one hart (meets) and on rv64 at two harts (meets); name the term that grows at two harts on rv32 (a lock wait behind another hart's section as in SCHED5, an audit, the send's rendezvous). Then a fix, or the finding stated with its parts if it is a bound of R78's shape, brought to the Architect. Acceptance: the record= removed and the cell judged at 40 ms, or the stated finding approved. No target moves. Tier A if a kernel or steward change follows, else a page edit; size S-M; reviewer kernel-red-4. Needs SCHED5 (the gate and the record form)."
-  state = "todo"
-  revision = 100
+  state = "reported"
+  revision = 201
 
 [[node]]
   id = "B104"
