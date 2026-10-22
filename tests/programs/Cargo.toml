@@ -117,6 +117,7 @@ bin = [
     { name = "sched-round-robin", test = false },
     { name = "sched-server-busy", test = false },
     { name = "sched-share", test = false },
+    { name = "sched-slice-own-time", test = false },
     { name = "sched-sleep-gaming", test = false },
     { name = "sched-ties", test = false },
     { name = "sched-timer-entry", test = false },

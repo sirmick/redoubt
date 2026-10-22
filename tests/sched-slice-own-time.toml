@@ -1,0 +1,22 @@
+description = "A slice is the thread's own time (R12, kernel/scheduling.md, \"Preemption points\"): a sibling process's 31 waits, due at once inside one thread's slice each round, leave that thread its round-robin share of what its budget's two counting threads count, its slice paused for the expiry; the post-check requires the expiries inside the budget's time and each billed only to what it ended (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-slice-own-time"]
+# Test builds only: the trace ring (never in a default kernel). The oracle checks every timer
+# interrupt's billing and counts those whose expiry ended an item inside the marked budget's time,
+# the witness that the waits fell due in its slices: 127 (rv64) and 164 (rv32) measured, the rest
+# answered at the threads' own calls; the floor is about half the least.
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle expiries_in=2:60"
+# One hart: the round-robin that puts the waits in one thread's slice is one hart's.
+keep_smp = true
+timeout_secs = 300
+expect = [
+    '^\[slice-own-time\] ok: T counted \d+ of 1000 of the two threads. counts \(T \d+, C \d+\), at least 480$',
+    '^SCHED-SLICE-OWN-TIME TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[slice-own-time\] FAIL', 'PROGRAM HALT']
+poweroff = true
