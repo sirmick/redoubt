@@ -1,6 +1,6 @@
 # Environment and rules for every member launched 2026-10-20
 
-Main is 7a15bc867 (train 98: B103 two-hart notice judged in a host-time twin, B108, B107 checked natives). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
+Main is b6d28a6b6 (train 99: K35 exact timeout caches and the probe guard, B110 doccheck C14). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
 
 ## Shell
 

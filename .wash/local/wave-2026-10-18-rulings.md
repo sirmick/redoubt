@@ -2318,3 +2318,129 @@ the case's poll to 10 ms so main passes.
    10 ms poll's comment; K35's title and acceptance as restated on "K35 after the measurement".
    The sched-*/smp-* load run and the beamlet/net classes, not run in round 1, are the train's.
    Nothing else.
+
+### K37 design: two combined calls, whole results, the continuation; the witness is the entry count (architect-oct21, 2026-10-22)
+
+Design: .wash/local/K37-design.md. **Approved as shaped**, with the conditions below.
+
+1. **Two calls, not a flag on `receive`**: `reply_receive` 0x11e and `send_receive` 0x11f, each
+   "the first half, then `receive`" in one entry. The reason stands: each number's error row is
+   the sum of two existing rows, `can_return` stays one set per number, `receive`'s row and the
+   legacy sweep do not change. Registers: `a1`-`a5` `receive`'s unchanged, `a6` the 13-slot
+   first-half record (checked readable at decode, as every record), `a7` 0. Results: `a0` status,
+   `a1` the first-half disposition on every return (`reply`: 0 not replied, 1 discarded, 2
+   delivered; `send`: 0 not sent, 1 taken), `a2` the mask; `decode_result` refuses the impossible
+   combinations as listed. abi.md's unknown-number range follows.
+2. **R13 holds as the design orders it**: every error the first half can earn is checked before
+   anything is done (`a1` = 0, nothing changed, the current call not cleared, no transfer given
+   up); after the first half acts, only the receive half's own row returns, with `a1` naming what
+   was done, so "(Timeout, delivered, mask)" is one outcome. ipc.md's completion table gains the
+   turn's rows. Two sentences the page must carry: (i) the receive half's timeout runs from the
+   first half's completion (the taking, for a blocked send), each wait with its own deadline
+   (I13); (ii) `Dead` is told apart by `a1`: the send's endpoint destroyed while the send waits is
+   `Dead` with `a1` = 0 and the transfer back; the receive's endpoint gone when the receive half
+   starts or waits is `Dead` with `a1` = 1.
+3. **The continuation.** A blocked `send_receive` whose message is taken is not woken: its receive
+   half starts in the taker's entry (a fired IRQ answers it at once; otherwise it is marked
+   waiting with its own timeout and joins the endpoint's receivers), and the endpoint goes on
+   `pump_listed`, never pumped nested, so one entry stays one pump (R12). Condition: the receive
+   object kept in the IPC page (frame and id) is a kernel reference, not a handle, so R10's step 4
+   does not find the thread while it waits as a sender; the continuation compares the id and a
+   mismatch is `Dead` (`a1` = 1), never a kernel stop; a checked build asserts the disposition
+   against the row. The six new words fit below `W_LISTS` against `CONTEXT_OFFSET` (the existing
+   compile-time assert covers it; state the new count).
+4. **Model, fake, sys**: one table. The generator fuses a drawn `reply`/`send` with the same
+   thread's next drawn `receive` by a bit already drawn (no new RNG draws; show fixed seeds give
+   the same traces apart from the fused pairs); mutations `TurnReplyLost` and
+   `TurnSendDispositionLies`, listed on R13 (SECURITY.md's row equal to the section, C7).
+5. **The rt (Q-rt): explicit in the loops**, a held handle-free reply made with the loop's next
+   receive as `reply_receive`; replies carrying handles go at once (rollback unchanged); a held
+   half refused (`a1` = 0) completes with the Malformed fallback then a plain receive. Rule on
+   serving.md: a handle-free reply may be held to the loop's next receive, and nothing runs
+   between the handler's return and that receive. netd's rx thread forwards its last frame by
+   `send_receive` on its IRQ handle (K35's (b), here where it pays).
+6. **Q-red: the witness is the entry count.** K37's claim is that a server's turn is one entry;
+   user ecalls per frame measure that directly and deterministically (K35's windows spread 0.1
+   per frame), so **the user-ecall bound at worst + 1 is the red-on-main witness** (about 30-31
+   against main's 32.0-32.1), derived from three alone rounds a width as ruled for K35's guard
+   (worst + spread if they spread by more than 1). The hand-offs are the consequence, and their
+   per-frame count spreads too much across windows (15.9-22.7 a probe in K35's data) for a
+   worst+spread judge to be red on main from five fewer: **reported by the instrumented naming
+   and stated on ipd.md, not judged**. The consequence is judged where it is reliable:
+   `ipc-client`'s 1000 lend round trips at two harts within 1 % of one hart (2.07 against 2.02 s
+   today: red on main), the residual "A server's turn crosses harts" rewritten. Interrupt and SBI
+   ceilings re-derived at 2x the worst stay guards, said so. The ecall bound catches a turn that
+   became two entries again; the guards and ipc-client catch added hand-offs: say which catches
+   what on the case.
+Pages as listed in the note; abi.md's order-of-checks table gains both calls. Size M, Tier A.
+
+### K39 design: the slice pauses for every interrupt, thread-level (architect-oct21, 2026-10-22)
+
+Design: .wash/local/K39-report.md 'Design note'. **Ruling: the thread-level pause, as the
+implementer recommends; not the budget-level reading.** "Billed to another payer" in my ruling
+named the symptom seen; the rule's first clause is the rule: a slice is the thread's own time,
+its user time and its own calls. An interrupt is never the thread's doing, whoever pays for it,
+so its whole time leaves the slice. Reasons the note gives are right: K35's own trace was one
+budget (the budget-level rule would leave it), stride already evens budgets so the loss is the
+thread's round-robin turn, and a pause needs no `Sched::bill` hook with its double-count and
+stale-interrupt traps. The extra effect is accepted and stated: a device interrupt's claim and
+return, billed to the interrupted budget, leave its slice too.
+
+Shape, as written: pause `(end, at)` at every entry from user mode after `from_user` accrues; a
+call or exception resumes right after the entry's expiry (its own handling counts, as today); an
+interrupt resumes at its return in `leave` before `rearm`, `slice_end = now + (end - at)`; the
+decision is `end <= at` (over iff it ended before the trap); the trace's `=` records `(end, at)`
+so the oracle's code is unchanged and its comment and the page sentence "ends during the entry's
+own expiry counts as ended" change; an ended slice is not resumed; audits inside a pause are
+overwritten by the resume, not counted twice; billing untouched; only a due deadline preempts.
+Conditions: (i) the bound is stated on R12: a budget extends a running thread's slice only by
+kernel work billed to it (its own expiry) or to `system` (device work), which stride charges and
+R12's per-entry bound limits, so no share is gained; (ii) the residual (the return's steps after
+the arm, a few µs a entry) is measured and stated; (iii) the mutation `R12SliceCountsTimerWork`
+and K24-style contract, no gen.rs draws, listed on R12 (SECURITY.md C7); (iv) the case
+`sched-slice-own-time` as designed, both widths, one hart, checked: T/(T+C) at or above its
+round-robin share by the bench's margin, at least M expiries inside T's slices as the witness, the
+oracle checking A pays every expiry, shown red on main with the numbers, N sized from measurement
+and stated; (v) nobody-share and latency figures re-recorded if they move, no target moves. K37
+coordination as the note lists: K39 alone touches sched.rs's slice accounting.
+
+#### K39 condition (iv), the case's layout (architect-oct21, 2026-10-22)
+
+The attacker is a sibling process in the victim's own budget, not its own budget: across budgets
+stride decides when A's turn falls and main is barely red (T 468-499 of 1000); within one budget
+round-robin runs T right after A's threads and every deadline lands in T's slice (main 367 rv64 /
+330 rv32; K39 494 / 495; floor 480 = twice K39's worst shortfall, rounded; witness `expiries_in`
+at least 60, measured 127 / 164). Agreed, no overrule: the loss is the round-robin turn, so one
+budget is the honest reproducer. "A pays every expiry" is moot within one budget; the per-interrupt
+billing check stands on every interrupt; condition (i)'s cross-budget bound stays a stated bound.
+Residual 6.6 / 11.9 µs a return, stated.
+
+### K37 acceptance: ipc-client's two-hart figure (architect-oct21, 2026-10-22)
+
+Measured (.wash/local/handoffs/k37-implementer.md 'Measurements'): 1000 lend round trips, icount
+guest time rv64/rv32: main 2.166/2.194 s at one hart, 3.403/3.836 at two (+57/+75 %); K37
+2.121/2.097 and 2.492/2.723 (+17.5/+30 %); mttcg host time main +34-45 %, K37 +2-11 % (noise).
+Instrumented K37 at two harts: 0 idle wakes, 0 lock halts, 0 shootdowns over the 1000 turns on
+both widths. **The "within 1 %" I set came from the page's 2.07 against 2.02 s, which was not
+today's main; it is withdrawn and re-derived, not defended.** The remaining icount gap is QEMU's
+vCPU turns, which no kernel change reaches.
+
+**Ruling: (A) and (B), no (C).**
+- **(A) is the witness of the claim**: over the measured turns at two harts, idle wakes, lock
+  halts and shootdowns are each exactly 0, counted by a checked build and printed at the end as
+  `irq-boot-hart-only`'s external-interrupts line is (the existing pattern: a checked build's
+  count line, judged by the case; not a test channel into the kernel's behaviour). Deterministic,
+  exact, red on main (main has many of each). This is the consequence judged where it is
+  reliable; the mechanism count replaces the time ratio as the acceptance.
+- **(B) is the time guard**, deterministic under icount: an absolute two-hart bound per width,
+  derived as the kernel's one-hart figure plus twice its measured two-hart excess, rounded up to
+  0.05 s: rv64 2.121 + 2 x 0.371 = 2.86 → 2.90 s; rv32 2.097 + 2 x 0.626 = 3.35 → 3.40 s (from
+  three alone runs a width; re-derive from the worst). Red on main by 15-19 % on both widths
+  (3.403, 3.836). The one-hart figure is recorded beside it, not judged. The comment states the
+  derivation and the residual: the two-hart excess that remains (17-30 %) is QEMU's turn
+  mechanics (0 kernel events in (A)), so the bound is that artefact's, as scheduling.md's "A hart
+  waits for QEMU's turns" residual says for the share cases.
+- **(C) is not built**: (A) already proves the mechanism exactly, and a host-time ratio with
+  2-11 % of noise would add a weaker judge of the same thing.
+- **Pages**: scheduling.md's residual "A server's turn crosses harts" rewritten with today's
+  figures (main and K37, both modes) and the turns sentence; the stale 2.07/2.02 goes.
