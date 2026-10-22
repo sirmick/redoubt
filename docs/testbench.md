@@ -290,11 +290,11 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 188 of the 356 run under `icount`: 181 so, six with a disk
+something in it waits on the host, and 188 of the 357 run under `icount`: 181 so, six with a disk
 at `icount = "shift=3"` (the rule for a disk is above), and `bench-qemu-early-exit`, whose `icount`
-is one QEMU refuses. What keeps the other 168 on the host's clock, a case counted under each it
-has: a disk or a userland disk (141 cases); host sockets, a `forward`, a `poke`, a peer or a dial
-(72); input the host types on the console, `[[input]]` (28; under `icount` the rv32 UART lost a
+is one QEMU refuses. What keeps the other 169 on the host's clock, a case counted under each it
+has: a disk or a userland disk (142 cases); host sockets, a `forward`, a `poke`, a peer or a dial
+(73); input the host types on the console, `[[input]]` (28; under `icount` the rv32 UART lost a
 burst of it); and, for 13 of the 15 with none of these, a run whose purpose is the host's time
 (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `console-one-writer`,
 `deadline-placement` and every case named `-mttcg` but `beamlet-schedulers-mttcg` and
@@ -322,7 +322,7 @@ the host's load does not move a guest time, so its pass, and a failure the guest
 reports, are verdicts whatever ran beside it (a pinned seed adds only that the run repeats
 exactly). Its one exposure to the host's clock is `timeout_secs`, the bench's deadline for the
 boot: a case that only ran out of that deadline beside other work has no verdict, and is rerun
-alone. A boot case without `icount` (168 of them) keeps the host's clock in the guest, so load
+alone. A boot case without `icount` (169 of them) keeps the host's clock in the guest, so load
 lengthens every wait it makes: its pass is a verdict unless what it expects is a timeout or a
 bound on a time, and a failure beside other work has no verdict until it fails alone. Every
 bound a case states on a time, a step's, a probe's or a notice's, is the box's under one
@@ -1535,9 +1535,10 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
 
 ### The machine at rest
 
-<details><summary>Status: built · tested (11)</summary>
+<details><summary>Status: built · tested (15)</summary>
 
 - bench:launch-idle
+- bench:launch-idle-probes
 - host:testbench::the_log_is_counted_by_hart_and_name
 - host:testbench::a_rate_over_its_ceiling_fails
 - host:testbench::a_window_that_measured_nothing_fails
@@ -1548,6 +1549,9 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
 - host:testbench::a_drain_that_never_ends_fails_at_the_bound
 - host:testbench::no_drain_seen_fails_at_the_bound
 - host:testbench::only_the_kernel_s_lines_open_a_drain_and_one_inside_is_named
+- host:testbench::answer_frames_are_counted_and_judged_per_frame
+- host:testbench::recipe_features_reach_only_the_named_program
+- host:testbench::only_launch_idle_probes_builds_the_fast_keep_alive
 
 </details>
 
@@ -1617,6 +1621,22 @@ second on rv64 and 2.8 on rv32, at 0.002 cores; with the wait, those twelve wind
 3.5 at 0.001 to 0.003 cores. The measures are the hardware's view: they say how often the guest wakes, not which budget woke it;
 that would take the kernel's own trace, which prints only at a reset. `launch-idle` is a
 host-clock case, run in the quiet class.
+
+`launch-idle-probes` is the same machine with `ipd` built with its test-only `keep-alive-probes`, a
+silent socket probed every 2 s, so about 30 of the card's answer frames fall in the window. A
+recipe case's `recipe_features` gives some of its recipe's programs test-only features by package;
+the image's recipes name none, and only this case names this one. The bench counts the card's
+interrupts as answer frames, those within six traps of each other being one frame taken on several
+harts, and judges the window per frame (`[idle]`'s `min_frames`, `interrupts_per_frame`,
+`sbi_calls_per_frame`, `user_ecalls_per_frame`), the window's background included. So it is a
+per-frame guard, not the per-probe cost ([what a probe costs](servers/ipd.md#the-net-tree)), which
+is this window less `launch-idle`'s: about 26 to 30 interrupts and 32 to 36 SBI calls a probe on
+rv64. Its ceilings are twice the most per frame measured alone, three rounds a width, rounded up:
+85 interrupts and 106 SBI calls a frame (the most 42.1 and 53.0); and user ecalls the most plus
+one, 33.1 a frame: 15 a probe plus about 17 a frame of background, which moves with real time. It
+passes on main. It is kept as the witness that a server's turn made one entry, or a device
+interrupt taken on one hart, must turn down for its own hops, and so that the idle ceilings are not
+the only reading of a frame's cost. It is a host-clock case in the quiet class.
 
 ### Against Redoubt's sshd
 

@@ -1,0 +1,70 @@
+description = "A guard on what one keep-alive probe costs the launched system at rest (servers/ipd.md, \"The `/net` tree\"): launch-idle's machine, alice logged in over SSH and her prompt left alone for 60 s, with ipd built with its test-only feature keep-alive-probes so that her silent socket probes every 2 s, about thirty probes in the window. From QEMU's own log the bench counts the network card's answer frames, one a probe, and every hart's interrupts, the kernel's calls to the firmware (SBI) and the system calls from user mode, and judges each per frame, the window's background included, against twice the most measured alone (user ecalls: the most plus one). It passes on main; it is the witness the per-frame cost's removal must turn down. The measures are QEMU's, not the guest's"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# ipd probes a silent socket every 2 s instead of 15 s: the image's recipe names no features.
+recipe_features = { "redoubt-ipd" = ["keep-alive-probes"] }
+# Boot launch's own command line; the bench reaches QEMU's log through its monitor.
+# launch's command line but for one flag: its disks are attached cache=unsafe, as every case's
+# are, where ./launch keeps QEMU's default (docs/testbench.md "Disks and network cards").
+launch = true
+smp = [4]
+# The machine launch boots: four harts, launch's default.
+keep_smp = true
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# One login, then a minute at rest.
+timeout_secs = 900
+expect = [
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'sshd: login .*: refused',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+]
+
+# The idle step's window opens as launch-idle's does, once the frames in flight are back.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { idle = 60 },
+    { send = "\"still-\" <> \"here\"\n" },
+    { expect = '"still-here"' },
+]
+
+# A guard, per frame the card answered, every hart's and the window's background included; not
+# the per-probe cost, which is this window less launch-idle's over the frames between them
+# (servers/ipd.md, "The `/net` tree"; docs/testbench.md, "The machine at rest"). It passes on
+# main, and is kept as the witness that a server's turn made one entry, or a device interrupt taken
+# on one hart, must turn down for its own hops. Measured alone, three alternating rounds a width of
+# this commit's kernel and the one before its exact timeout caches, 30 frames every window:
+# interrupts 37.1 to 42.1 a frame on rv64 and 37.7 to 41.3 on rv32, SBI calls 48.1 to 53.0 and 48.9
+# to 52.2, user ecalls 32.0 to 32.1 on both. The ceilings are twice the most, rounded up, rv64's
+# (rv32's would be 83 and 105); user ecalls the most plus one, the rounds spreading by 0.1: 15 a
+# probe plus about 17 a frame of background, which moves with real time.
+[idle]
+min_frames = 25
+interrupts_per_frame = 85
+sbi_calls_per_frame = 106
+user_ecalls_per_frame = 33.1
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+
+[net]
+forward = [22]
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBKsjJ0K7SrOhNovUYV5ObQIkq3GgFrr4UgozLJd4c3"

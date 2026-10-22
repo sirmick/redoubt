@@ -214,7 +214,22 @@ impl Window {
             0 => String::new(),
             n => format!("; {n} drain(s) opened inside the window"),
         };
-        let summary = format!("{}{inside}", counts.summary(seconds, cores));
+        // Per frame the card answered: every hart's interrupts, the kernel's firmware calls and the
+        // system calls from user mode, the window's background included.
+        let interrupts = counts.interrupts.values().flat_map(|by| by.values()).sum::<u64>();
+        let sbi = counts.exceptions.get("supervisor_ecall").copied().unwrap_or(0);
+        let ecalls = counts.exceptions.get("user_ecall").copied().unwrap_or(0);
+        let per = |n: u64| n as f64 / counts.frames.max(1) as f64;
+        let frames = match counts.frames {
+            0 => String::new(),
+            n => format!(
+                "; {n} answer frames, per frame {:.1} interrupts, {:.1} SBI calls, {:.1} user ecalls",
+                per(interrupts),
+                per(sbi),
+                per(ecalls)
+            ),
+        };
+        let summary = format!("{}{frames}{inside}", counts.summary(seconds, cores));
         // The floors. A timeout whose payer runs nowhere is armed on one hart (kernel/timer.md,
         // "The hart timer"), so an idle hart may take no timer interrupt in a whole window; a
         // window in which no hart took one was not logged.
@@ -233,8 +248,7 @@ impl Window {
         }
         ensure!(nothing.is_empty(), "the idle window measured nothing: {} ({summary})", nothing.join("; "));
         let busiest = counts.interrupts.values().map(|by| by.values().sum::<u64>()).max().unwrap_or(0);
-        let ecalls = counts.exceptions.get("user_ecall").copied().unwrap_or(0);
-        let over = [
+        let mut over = [
             ("interrupts per hart", busiest as f64 / seconds, ceilings.interrupts_per_hart),
             ("user ecalls", ecalls as f64 / seconds, ceilings.user_ecalls),
             ("host cores", cores, ceilings.host_cores),
@@ -244,6 +258,22 @@ impl Window {
             ceiling.filter(|c| rate > *c).map(|c| format!("idle: {what} {rate:.3}/s over its ceiling {c}"))
         })
         .collect::<Vec<_>>();
+        if let Some(least) = ceilings.min_frames.filter(|least| counts.frames < *least) {
+            over.push(format!("idle: {} answer frames, fewer than {least}", counts.frames));
+        }
+        over.extend(
+            [
+                ("interrupts", per(interrupts), ceilings.interrupts_per_frame),
+                ("SBI calls", per(sbi), ceilings.sbi_calls_per_frame),
+                ("user ecalls", per(ecalls), ceilings.user_ecalls_per_frame),
+            ]
+            .into_iter()
+            .filter_map(|(what, rate, ceiling)| {
+                ceiling
+                    .filter(|c| rate > *c)
+                    .map(|c| format!("idle: {what} {rate:.1} a frame over its ceiling {c}"))
+            }),
+        );
         Ok((summary, (!over.is_empty()).then(|| over.join("; "))))
     }
 }
@@ -300,18 +330,32 @@ struct Counts {
     interrupts: BTreeMap<u64, BTreeMap<String, u64>>,
     /// Exceptions (`async:0`), every hart's, by name.
     exceptions: BTreeMap<String, u64>,
+    /// Device interrupts (`s_external`) in clusters: one within [`FRAME_TRAPS`] traps of the last
+    /// is the same source taken on another hart (every hart's context takes it, kernel/boot.md). At
+    /// rest the network card is the one source, and each cluster one frame it answered.
+    frames: u64,
 }
+
+/// Traps between two device interrupts that are one frame's, taken on two harts.
+const FRAME_TRAPS: usize = 6;
 
 impl Counts {
     fn parse(log: &str) -> Counts {
         let mut counts = Counts::default();
-        for line in log.lines().filter(|l| l.starts_with("riscv_cpu_do_interrupt:")) {
+        let mut last_external: Option<usize> = None;
+        for (at, line) in log.lines().filter(|l| l.starts_with("riscv_cpu_do_interrupt:")).enumerate() {
             let field = |key: &str| line.split([',', ' ']).find_map(|part| part.strip_prefix(key));
             let (Some(hart), Some(kind), Some(name)) = (field("hart:"), field("async:"), field("desc="))
             else {
                 continue;
             };
             let Ok(hart) = hart.parse() else { continue };
+            if kind == "1" && name == "s_external" {
+                if last_external.is_none_or(|last| at - last > FRAME_TRAPS) {
+                    counts.frames += 1;
+                }
+                last_external = Some(at);
+            }
             let by_name = match kind {
                 "1" => counts.interrupts.entry(hart).or_default(),
                 _ => &mut counts.exceptions,
@@ -536,12 +580,66 @@ some other line
     fn a_rate_over_its_ceiling_fails() {
         let (window, _dir) = window("ceilings", 2, LOG, Duration::from_millis(500));
         assert_eq!(window.judge(&Idle::default()).unwrap().1, None);
-        let tight = Idle { interrupts_per_hart: Some(1.5), user_ecalls: Some(1.0), host_cores: Some(0.4) };
+        let tight = Idle {
+            interrupts_per_hart: Some(1.5),
+            user_ecalls: Some(1.0),
+            host_cores: Some(0.4),
+            ..Idle::default()
+        };
         let why = window.judge(&tight).unwrap().1.unwrap();
         assert!(why.contains("interrupts per hart 2.000/s over its ceiling 1.5"), "{why}");
         assert!(why.contains("user ecalls 2.000/s over its ceiling 1"), "{why}");
         assert!(why.contains("host cores 0.500/s over its ceiling 0.4"), "{why}");
-        let loose = Idle { interrupts_per_hart: Some(2.0), user_ecalls: Some(2.0), host_cores: Some(0.5) };
+        let loose = Idle {
+            interrupts_per_hart: Some(2.0),
+            user_ecalls: Some(2.0),
+            host_cores: Some(0.5),
+            ..Idle::default()
+        };
+        assert_eq!(window.judge(&loose).unwrap().1, None);
+    }
+
+    /// The card's interrupts count as frames in clusters: one taken on two harts within a few traps
+    /// is one frame, one taken again further on another. Each per-frame ceiling and the fewest
+    /// frames fail the window when crossed.
+    #[test]
+    fn answer_frames_are_counted_and_judged_per_frame() {
+        let ext = |hart: u32| {
+            format!(
+                "riscv_cpu_do_interrupt: hart:{hart}, async:1, cause:0000000000000009, epc:0x80200000, tval:0x0, desc=s_external\n"
+            )
+        };
+        let sbi = "riscv_cpu_do_interrupt: hart:0, async:0, cause:0000000000000009, epc:0x80200000, tval:0x0, desc=supervisor_ecall\n";
+        // One frame on two harts, seven traps of other work, then a second frame on one hart.
+        let log = format!("{LOG}{}{}{}{}{}", ext(0), ext(1), sbi.repeat(7), ext(2), sbi);
+        assert_eq!(Counts::parse(&log).frames, 2);
+        let (window, _dir) = window("frames", 3, &log, Duration::from_millis(500));
+        let (summary, over) = window.judge(&Idle::default()).unwrap();
+        // 4 + 3 interrupts, 8 SBI calls and 2 user ecalls over 2 frames.
+        assert!(
+            summary.ends_with("; 2 answer frames, per frame 3.5 interrupts, 4.0 SBI calls, 1.0 user ecalls"),
+            "{summary}"
+        );
+        assert_eq!(over, None);
+        let tight = Idle {
+            min_frames: Some(3),
+            interrupts_per_frame: Some(3.0),
+            sbi_calls_per_frame: Some(3.9),
+            user_ecalls_per_frame: Some(0.5),
+            ..Idle::default()
+        };
+        let why = window.judge(&tight).unwrap().1.unwrap();
+        assert!(why.contains("idle: 2 answer frames, fewer than 3"), "{why}");
+        assert!(why.contains("idle: interrupts 3.5 a frame over its ceiling 3"), "{why}");
+        assert!(why.contains("idle: SBI calls 4.0 a frame over its ceiling 3.9"), "{why}");
+        assert!(why.contains("idle: user ecalls 1.0 a frame over its ceiling 0.5"), "{why}");
+        let loose = Idle {
+            min_frames: Some(2),
+            interrupts_per_frame: Some(3.5),
+            sbi_calls_per_frame: Some(4.0),
+            user_ecalls_per_frame: Some(1.0),
+            ..Idle::default()
+        };
         assert_eq!(window.judge(&loose).unwrap().1, None);
     }
 

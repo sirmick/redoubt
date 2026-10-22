@@ -326,6 +326,10 @@ pub struct Boot {
     /// data entries instead of `programs` and `file`: `image/boot.toml`, so that the bundle
     /// `./mkimage` packs is the one a case boots ([`Recipe`]).
     pub recipe: Option<PathBuf>,
+    /// With a `recipe`, test-only features for some of its programs, by package: the recipe itself
+    /// names none, so a feature reaches only the cases that ask for it.
+    #[serde(default)]
+    pub recipe_features: BTreeMap<String, Vec<String>>,
     /// Hart counts to run with. One run per entry, on every width or per width ([`Smp`]).
     #[serde(default = "default_smp")]
     pub smp: Smp,
@@ -520,8 +524,8 @@ impl BundleFile {
     }
 }
 
-/// The ceilings of an idle window ([`Boot::idle`]), each per second of it. None: measured and
-/// printed, not judged.
+/// The ceilings of an idle window ([`Boot::idle`]), each per second of it, or per frame the
+/// network card answered in it. None: measured and printed, not judged.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Idle {
@@ -531,6 +535,15 @@ pub struct Idle {
     pub user_ecalls: Option<f64>,
     /// QEMU's host CPU time, in host cores.
     pub host_cores: Option<f64>,
+    /// The fewest answer frames the window must hold: the card's interrupts, each frame's taken on
+    /// one hart or several at once (`idle.rs`, `Counts::frames`). With a per-frame ceiling.
+    pub min_frames: Option<u64>,
+    /// Every hart's interrupts, over the frames.
+    pub interrupts_per_frame: Option<f64>,
+    /// The kernel's calls to the firmware (SBI), every hart's, over the frames.
+    pub sbi_calls_per_frame: Option<f64>,
+    /// System calls from user mode, every hart's, over the frames.
+    pub user_ecalls_per_frame: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1005,6 +1018,22 @@ impl Case {
                 // Cases live in `tests/`, one below the workspace root.
                 let root = path.parent().and_then(Path::parent).context("a case outside tests/")?;
                 (boot.programs, boot.file) = Recipe::load(&root.join(recipe))?.contents()?;
+                for (wanted, with) in &boot.recipe_features {
+                    let program = boot.programs.iter_mut().find_map(|p| match p {
+                        Program::Package { package, features, .. } if package == wanted => Some(features),
+                        _ => None,
+                    });
+                    let features = program.with_context(|| {
+                        format!("in {}: the recipe has no package {wanted}", path.display())
+                    })?;
+                    features.clone_from(with);
+                }
+            } else {
+                ensure!(
+                    boot.recipe_features.is_empty(),
+                    "in {}: recipe_features without a recipe",
+                    path.display()
+                );
             }
         }
         case.check().with_context(|| format!("in {}", path.display()))?;
@@ -2181,5 +2210,68 @@ mod tests {
         let text = "description = \"d\"\nkind = \"fmt\"\nroots = []\nwhole_rum = false\n";
         let err = toml::from_str::<Case>(text).map(|_| ()).unwrap_err().to_string();
         assert!(err.contains("whole_rum"), "{err}");
+    }
+
+    /// A recipe case's `recipe_features` reach its program of that package and no other, and name
+    /// a package the recipe has or the case does not load.
+    #[test]
+    fn recipe_features_reach_only_the_named_program() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dir = std::env::temp_dir().join(format!("testbench-recipe-features-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::create_dir_all(dir.join("image")).unwrap();
+        std::fs::copy(root.join("image/boot.toml"), dir.join("image/boot.toml")).unwrap();
+        let case = |extra: &str| {
+            let path = dir.join("tests/c.toml");
+            let text = format!(
+                "description = \"d\"\nkind = \"boot\"\nrecipe = \"image/boot.toml\"\nexpect = []\n{extra}"
+            );
+            std::fs::write(&path, text).unwrap();
+            Case::load(&path)
+        };
+        let loaded = case("[recipe_features]\n\"redoubt-ipd\" = [\"keep-alive-probes\"]\n").unwrap();
+        let Kind::Boot(boot) = loaded.kind else { panic!("a boot case") };
+        for program in &boot.programs {
+            if let Program::Package { package, features, .. } = program {
+                let want: &[&str] = if package == "redoubt-ipd" { &["keep-alive-probes"] } else { &[] };
+                assert_eq!(features, want, "{package}");
+            }
+        }
+        let err = case("[recipe_features]\n\"redoubt-nothing\" = [\"f\"]\n").unwrap_err();
+        assert!(format!("{err:#}").contains("the recipe has no package redoubt-nothing"), "{err:#}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `ipd`'s test-only `keep-alive-probes` (servers/ipd.md, "The `/net` tree") is built by
+    /// `launch-idle-probes` and by nothing else in the tree: a probe every 2 s is that case's
+    /// measure and no system's. Neither the image's recipes nor any data file names it.
+    #[test]
+    fn only_launch_idle_probes_builds_the_fast_keep_alive() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut enabling = Vec::new();
+        for entry in std::fs::read_dir(root.join("tests")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "toml")
+                && std::fs::read_to_string(&path).unwrap().contains("\"keep-alive-probes\"")
+            {
+                enabling.push(path.file_name().unwrap().to_string_lossy().into_owned());
+            }
+        }
+        enabling.sort();
+        assert_eq!(enabling, ["launch-idle-probes.toml"]);
+        fn files_under(dir: &Path, found: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() { files_under(&path, found) } else { found.push(path) }
+            }
+        }
+        for dir in ["image", "tests/data"] {
+            let mut found = Vec::new();
+            files_under(&root.join(dir), &mut found);
+            for path in found {
+                let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
+                assert!(!text.contains("keep-alive-probes"), "{} names the feature", path.display());
+            }
+        }
     }
 }

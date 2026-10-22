@@ -67,7 +67,7 @@ q := $(here)q
 cases := $(sort $(basename $(notdir $(wildcard tests/*.toml))))
 quiet := rt-host-tests client-host-tests r4-host-tests bench-ssh-guest bench-ssh-loopback-deadlock
 quiet += steward-sub-budget-flood steward-ssh-two-principals steward-vault-session steward-vault-launch steward-session-ends
-quiet += steward-ssh-idle launch-idle
+quiet += steward-ssh-idle launch-idle launch-idle-probes
 # pipe-sixty-four: 64 pipelines on the host's clock; beside heavy load on rv32 an ended piped's
 # waiter can take longer than the VM's 1 s wait to hand its end over, and the seventh fresh piped
 # is refused emfile (tests/pipe-sixty-four.toml).
