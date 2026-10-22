@@ -86,15 +86,19 @@ file holds is typed, in the wire encoding ([wire](wire.md#the-encoding)), never 
   card's interrupt for the answer, `netd`'s receive thread's send to `ipd`, and `ipd`'s wake: 11
   system calls from user mode, 9 of them `ipd`'s and 2 `netd`'s, each of whose turns is one call
   (its reply with its next receive, its forward with its wait for the next interrupt:
-  [IPC](../kernel/ipc.md#a-servers-turn)). On an idle four-hart box it costs about 10 to 16
-  interrupts and 14 to 19 SBI calls in all, every hart's, on both widths:
+  [IPC](../kernel/ipc.md#a-servers-turn)). On an idle four-hart box it costs about 6 to 10
+  interrupts and 11 to 14 SBI calls in all, every hart's, on both widths:
   `bench:launch-idle-probes` builds `ipd` with its test-only `keep-alive-probes`, a probe every
   2 s, and the cost is its window less `launch-idle`'s over the card's answer frames between them,
-  one a probe (30), three alternating rounds a width alone. The kernel arms the hart timer only
+  one a probe (30), three alternating rounds a width alone against one `launch-idle` window a
+  width. The kernel arms the hart timer only
   when its target changes, not for a slice's end that a call's or an interrupt's pause moved
   ([the hart timer](../kernel/timer.md#the-hart-timer)). Each is named by the entry that makes it
   (a kernel marking each entry, one window a width). No entry of the probe sends an idle hart an
-  interrupt. About 4 lock hand-offs a probe remain, each after a wake made by a loop that replies
+  interrupt. The card's answer traps one hart, an idle one, which claims it and runs `netd`'s
+  receive thread itself ([boot](../kernel/boot.md#hardware-abstraction)), where with every
+  hart's context open it traps 1.67 to 1.87 harts a frame, each other hart taking the lock for a
+  claim of nothing. About 4 lock hand-offs a probe remain, each after a wake made by a loop that replies
   and receives in two calls, `ipd`'s and the 9P skeleton's in `consrelay`
   ([scheduling](../kernel/scheduling.md#residual-risks)): making those loops' turns one call
   removes them. None of it is a timer interrupt for a wait answered before its timeout, which
@@ -562,9 +566,9 @@ Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes
 - **A shared `ipd` is shared state.** Its clients share one stack's memory, timers and link; where
   that matters, each trust domain gets its own `ipd`.
 - **Probes scale with an account's sockets.** Each silent socket probes four times a minute, and
-  each probe costs the box about 10 to 16 interrupts and 14 to 19 SBI calls ([what a probe
-  costs](#the-net-tree)): alice's 32 sockets, all silent, are about 2.1 probes a second, some 21 to
-  34 interrupts and 29 to 40 SBI calls a second across the machine, paid by `ipd`, `netd` and the
+  each probe costs the box about 6 to 10 interrupts and 11 to 14 SBI calls ([what a probe
+  costs](#the-net-tree)): alice's 32 sockets, all silent, are about 2.1 probes a second, some 13 to
+  21 interrupts and 23 to 29 SBI calls a second across the machine, paid by `ipd`, `netd` and the
   kernel. The manifest bounds it: the account's socket cap times the probe rate times the per-probe
   cost. The servers that pay it run at their weights
   ([R12 (scheduling)](../kernel/scheduling.md#r12-scheduling)), the card's interrupt is billed to

@@ -396,8 +396,9 @@ destruction landing there; under icount, where the victim's slice end runs 0.7 m
 payer's exact-time interrupt in QEMU's turns and the 26 ms destruction cycle keeps that phase,
 `deadline-flood-billed-traced` read 114 of 1000 of the victim's charges with 16 deadlines and
 235 and 241 with 64 in two runs of one bundle on rv64 (0 in another, 0 and 1 on rv32), what the
-residual can cost under one clock. Device interrupts are placed by the controller, not the payer
-([IRQ1's residual](devices.md#residual-risks)). The deadline notice at two harts
+residual can cost under one clock. Device interrupts are taken by the idle hart that takes them
+while one idles, or by any hart while none does, not by the payer
+([boot](boot.md#hardware-abstraction)). The deadline notice at two harts
 (`sched-latency`, net p99 at N = 1, 4 and 16): before the placement 3,297, 3,409 and 3,764 µs on
 rv64, 3,985, 4,079 and 5,093 on rv32; with it 3,535, 3,428 and 3,758 and 3,933, 4,104 and 5,133,
 every move within the same program's p99 kernel section (10,167 ticks on rv64 and 11,053 on

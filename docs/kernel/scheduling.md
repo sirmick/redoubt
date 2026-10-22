@@ -442,7 +442,8 @@ Kernel time is billed as well:
   lets it charge only that and, for its return, the budget it interrupted: 60 alarms charged
   `system` 286,980 ticks on rv64 and 208,903 on rv32 in the checked build, 4,783 and 3,482 each,
   and the interrupted spinner 19,476 and 31,488 for their returns); one with no device object, to nobody; a device
-  interrupt that claims nothing, its source claimed first by another hart, is billed as a timer
+  interrupt that claims nothing, its source claimed first by another hart (or its context closed
+  since it trapped), is billed as a timer
   interrupt that ends no slice: the rest of it after its expiry is the budget its expiry billed
   last, or nobody's, never the budget it interrupted; so is one a deadline took at its entry: the
   expiry every entry answers first destroyed a budget, and the entering thread gave up the hart
@@ -1677,31 +1678,32 @@ window, so each wake is measured under the load. A kernel built with `lock-trace
 wait's ticket, and the oracle requires the waits to take the lock in ticket order, each drawn
 behind fewer sections than harts ([the scheduler oracle](../testbench.md#the-scheduler-oracle)):
 at two harts 1291 waits on rv64 and 1281 on rv32, each behind at most one section; at four
-harts (`sched-lock-contention-4`, three such budgets) 6109 and 7466, behind at most three. Every
-started hart takes device interrupts ([boot](boot.md#hardware-abstraction)), so the alarm
-reaches the idle hart, which claims it and runs the driver itself. The driver wake meets its
-targets, judged net of the audits: p50/p99 1.4/2.1 ms on rv64 and 1.5/2.4 ms on rv32 at two
-harts, 6.7/8.4 and 7.7/9.3 ms at four under `icount`, where a hart woken while another is in a
-section waits for that hart's QEMU turn ([residual risks](#residual-risks)).
+harts (`sched-lock-contention-4`, three such budgets) 6109 and 7466, behind at most three. While a hart
+idles, an idle hart alone takes device interrupts ([boot](boot.md#hardware-abstraction)), the
+driver's, which took the role when its `receive` unmasked the source, so the alarm reaches it, it
+claims it and runs the driver itself. The driver wake meets its targets, judged net of the audits:
+p50/p99 2.0/2.4 ms on rv64 and 2.6/3.6 ms on rv32 at two harts, 6.7/7.6 and 9.4/10.3 ms at four
+under `icount`, where a hart woken while another is in a section waits for that hart's QEMU turn
+([residual risks](#residual-risks)).
 
-That every started hart takes device interrupts saves a wake one kernel section: the idle hart
-claims the alarm at once, where the boot hart would first finish its own section, and the woken
-driver's `receive` draws its ticket behind one section, not two. Every section is at most about a
-slice, so that is under a millisecond, which the 15 and 50 ms targets cannot see under any load;
-the one load that makes a section longer, a destruction ([R10](budgets.md#r10-destruction)),
+That a driver's wake never waits for a busy hart's section is what the routing is for: the alarm
+is claimed on an idle hart, at once, where a busy hart would first finish its own section, and the
+woken driver's `receive` draws its ticket behind one section, not two. Every section is at most
+about a slice, so that is under a millisecond, which the 15 and 50 ms targets cannot see under any
+load; the one load that makes a section longer, a destruction ([R10](budgets.md#r10-destruction)),
 makes every wake wait the lock and misses the targets however the interrupts are routed. So the
-targets do not test the routing; its count does: a checked build's count at power-off
-gives each hart's claims, its claims that found nothing (it trapped for an alarm another hart
-claimed first) and their sum, the alarms its context took. The idle hart wins the claims, and
-which hart idles follows the boot's timing (claims 200 and 1 in a `sched-lock-contention` run;
-4, 3, 1, 193 on rv64 and 19, 151, 17, 14 on rv32 in `sched-lock-contention-4`), so the cases require
-what does not: `sched-lock-contention` and `sched-lock-contention-4` that a hart other than the
-boot hart took ten or more alarms, and `sched-lock-contention-4-mttcg` that every hart did. The
-hammer's section in user mode between its ranges is what makes the first hold: its hart traps
-for the alarms that rise while it is there. `bench:sched-lock-contention-4-mttcg` runs the
-four-hart program under QEMU's multi-threaded TCG, in host time, where the harts run at once, and
-judges the driver wake at the same targets: net p50/p99 0.9/1.3 ms on rv64 and 0.8/1.2 ms on
-rv32, alone on q's quiet cores, every hart taking 125 or more of the 200 alarms.
+targets do not test the routing; its counts do. A checked build's count at power-off gives each
+hart's claims, their total, its claims that found nothing (it trapped for an alarm another hart
+claimed first, or its context closed since) and their sum, the alarms its context took. The cases
+require every hart's claims that found nothing to be a single digit (0 in every run), and their
+post-check that the claims equal the interrupts the
+program's `receive`s took, the 200 alarms and the RTC probe's: none lost or taken twice where the
+open context moves. `bench:sched-lock-contention-4-mttcg` runs the four-hart program under QEMU's
+multi-threaded TCG, in host time, where the harts run at once, and judges the driver wake at the
+same targets: net p50/p99 1.2/1.7 ms on rv64 and 1.2/1.7 ms on rv32, alone on q's quiet cores,
+the idle hart claiming every alarm. Measured in a checked build, the moves cost 4.7 to 5.1 µs
+each in host time, two an alarm under this load (the driver's hart takes the role at its
+`receive` and opens every context when it picks the driver), and under 1 µs under `icount`.
 
 ### R23 (no test channels)
 
@@ -1937,7 +1939,12 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   over three runs a width; the two-hart cells are recorded in `steward-latency` and judged in
   `steward-latency-mttcg`, and the companions' at N = 4 and 16 on rv64 (27.2 and 29.9 ms) in
   their twins `steward-latency-n4-mttcg` and `steward-latency-n16-mttcg` (6.7 to 10.1 ms)
-  ([responsiveness](#responsiveness)). Turns fix the order harts take the
+  ([responsiveness](#responsiveness)). Turns move the driver's wake under the device
+  interrupts' taker too: the taker is halted, and runs when the running hart's turn ends, where
+  with every context open the busy harts trapped for the alarm, halted for the lock and ended their
+  turns at once; `sched-lock-contention`'s gross wake at two harts reads p50 2.3 ms against 1.5 on
+  rv64, the same with or without the taker's moves, and the harts at once read it 0.3 ms later
+  (below). Turns fix the order harts take the
   kernel lock too: in `sched-capped`'s second
   cap at three harts no timeout fires in the window, every interrupt is a slice end of the hart's
   own runner, and the three slice ends meet at the lock every slice in one order, so the heavy
@@ -1952,20 +1959,27 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   and 79 of its interrupts finding nothing due in one); it records them, and
   `sched-wake-no-preempt-harts-mttcg` judges them (41 to 78 on rv64 and 41 to 75 on rv32 over ten
   runs a width).
-- **Every hart pays for each device interrupt.** An unmasked source raises the external interrupt
-  on every hart's context, so each hart in user mode or idle when it rises traps, and all but one
-  take the kernel lock for a claim that finds nothing; a hart in the kernel at the rise returns to
-  a source already claimed and masked, and does not trap (`sched-lock-contention-4-mttcg` requires
-  every hart to take ten or more of its 200 alarms; under `icount` a hammer in the kernel at every
-  rise takes none, so `sched-lock-contention-4` requires only another hart's). Under multi-threaded TCG at four harts every
-  alarm traps the other three (518 to 577 such entries in a run of 200 alarms, twenty runs), each
-  holding the lock about 31 µs (p50; 50 µs at p90): at most three are ahead of a wake, about
-  0.15 ms of a p99 of 4 to 12 ms. So it is not routed for latency. At rest it costs more than
-  its claims: the network card's answer to one of `ipd`'s keep-alive probes is taken on 1.75 to
-  1.85 harts, and none of the probe's 4 lock hand-offs follows it in the instrumented windows
-  ([what a probe costs](../servers/ipd.md#the-net-tree)). Sending each
-  source to one idle hart (a busy hart's threshold above the sources' priority while one idles)
-  is the remedy for the claims that find nothing.
+- **Every hart pays for a device interrupt only when none idles.** While a hart idles, one idle
+  hart's context alone takes device interrupts ([boot](boot.md#hardware-abstraction)): at rest the
+  network card's answer to one of `ipd`'s keep-alive probes traps one hart (1.00 a frame in
+  `launch-idle-probes`, where every context open takes it on 1.67 to 1.87 harts), and no second
+  hart traps and takes the lock for a claim of nothing
+  ([what a probe costs](../servers/ipd.md#the-net-tree)). With no hart idle every context is open:
+  each hart in user mode when a source rises traps, and all but one take the kernel lock for a
+  claim that finds nothing; under multi-threaded TCG at four harts with every context open that is
+  518 to 577 such entries in a run of 200 alarms, each holding the lock about 31 µs (p50; 50 µs at p90), at most
+  three ahead of a wake, about 0.15 ms of a p99 of 4 to 12 ms. The routing has its own cost under
+  emulation: the taker is halted in `wfi` and runs when QEMU schedules it, or under `icount` when
+  its turn comes, where with every context open the busy harts' empty entries halt for the lock and
+  give their turns up at the rise. So the contention family's driver wake shifts later by under a
+  millisecond, the whole distribution and not its tail: in `sched-lock-contention-4-mttcg` on rv64
+  the gross wake's p10/p50/p90 read 691/938/1246 µs with every context open, 666/930/1181 on the
+  same kernel with the routing off, and 1085/1263/1554 with it on, with or without its moves
+  (5 µs each, two an alarm); under `icount` 0.5 to 0.8 ms (in one traced wake at two harts the lock
+  is free 191 µs after the alarm and the halted taker takes it at 686 µs, where the idle hart took
+  it at 197 with every context open). On hardware a halted hart wakes at the interrupt. The shift
+  is inside the 15 and 50 ms targets by two orders, which do not move; the share of it under
+  `icount` is a turn ([a hart waits for QEMU's turns](#residual-risks)).
 - **Some cases keep one hart.** A case that does not keep its hart count runs at the count the
   bench is given (`--smp`); these keep theirs (`keep_smp`), each for one of four reasons: a proof
   that reads one hart's slices; where a checked build's audits fall; a count with no trace, which
