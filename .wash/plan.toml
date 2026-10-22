@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 181
+revision = 182
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -3004,8 +3004,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["K36"]
   body = "Found by SCHED5's implementer (.wash/local/SCHED5-pipe64-identification.md): userland/otp/redoubt/src/jobs.rs served() makes piped's receive endpoint in the session VM, so the session's budget owns it; when piped's budget is destroyed only piped-owned endpoints' queues and piped's own calls fail, so a VM waiter that calls the endpoint after piped died blocks in the kernel for ever (no Dead wake names it), its place among MAX_WAITERS 6 is never freed, and every later pipeline waits FILE_WAIT_US and fails emfile. Pre-existing race (base 3/3 pass rv32 pipe-sixty-four), widened by SCHED5's timing (head 3/6): SCHED5 is held until this lands. io.rs Io::forget's doc ('the call fails at once') is false in this window. Options: (1) the child's endpoint owned by the child's budget, so destruction fails its queue and revokes the handle (implementer's recommendation); (2) the VM keeps the receive right and drains on forget; (3) the kernel fails calls on an endpoint with no receive right left; (4) a waiter timeout does not help. Architect rules the shape on thread B106-shape. Tier A; red review; a host test on the fake that fails on main, and pipe-sixty-four rv32 x10 alone on SCHED5's head as the witness."
-  state = "reported"
-  revision = 178
+  state = "done"
+  revision = 182
 
 [[node]]
   id = "K36"
