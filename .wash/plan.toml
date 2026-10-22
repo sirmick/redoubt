@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 225
+revision = 243
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2933,13 +2933,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "K35"
-  title = "One small frame costs an idle 4-hart box about 66 cross-hart interrupts and 84 SBI calls: the wake chain from ipd's timer through netd and back is bounded to a handful of wakes"
+  title = "One keep-alive probe costs an idle 4-hart box about 27 interrupts and 34 SBI calls, named by entry; a wait answered early leaves no stale timer interrupt, and the expiry reads only the due waits"
   template = "package"
   parent = "AGENTS"
   needs = ["B94"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'B94: the keep-alive's idle cost'. Found by B94's cost measurement (.wash/local/B94-idle-cost.md): four extra keep-alive probes a minute on one socket raise launch-idle's m_software on all four harts by about +4.4/s, supervisor ecalls +5.6/s, user ecalls +1.0/s: about 66 interrupts and 84 SBI calls per probe across the machine, while ipd itself wakes once per probe (fake clock: 12 wakes, 12 frames in 120 s). So the cost is the path's: ipd's timer wake, its transmit call to netd, the card's answer interrupt, netd's receive thread and its send to ipd, ipd's wake, each a cross-hart wake (lock hand-off and wake IPIs, IDLE2's shape) on an idle box. This is the box's per-packet cost at rest, paid by every packet of every idle session, and it is what put the derived keep-alive over the idle ceiling. Investigation-first with the trace: count the kernel entries, IPIs and SBI calls one probe round trip costs on 4 harts and name each (a wake sent to a halted hart, a lock hand-off, a timer re-arm, an interrupt claim); then bound the chain to what it needs (a handful of wakes), in the kernel's wake/IPI path or the drivers' threading, no behaviour change at the sockets. Acceptance: the per-probe cost re-measured on launch-idle, stated on ipd.md beside the keep-alive rule and on scheduling.md/idle pages if the kernel's path changes; the idle ceilings do not move; the keep-alive interval is not re-derived unless the loss model changes. Tier A (kernel, netd, ipd), size M, reviewer kernel-red-4 + simplifier + editor. Runs after B94."
-  state = "active"
-  revision = 198
+  state = "done"
+  revision = 243
 
 [[node]]
   id = "B100"
@@ -3061,8 +3061,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["B103"]
   body = "Ruled by the Architect on arch-n4-n16 (rulings file 'B109: the companions follow B103'). B103 (rulings 'B103: the two-hart deadline notice is judged where the harts run at once') found that under icount the other hart's turns are counted inside the steward's lease_ended send, so the two-hart deadline-notice p99 is an artefact there, and judged it in steward-latency-mttcg; its item 1 says a pass with artefact margin is no judgement. The companions still judge it under icount: scheduling.md's real-steward table has N=4 at 27.2 and N=16 at 29.9 ms on rv64 at two harts. Same shape as B103, two twins, since the trace ring is per boot and N=4/16 fit no boot with N=1-3: steward-latency-n4-mttcg (rv64 at [1,2]; rv32 at [1] as the companion is) and steward-latency-n16-mttcg (rv64 at [1,2]), no icount, host time, --quiet class, judging the deadline notice's p99 at 40 ms net, every other figure recorded (one case judges each cell); lease lengths from the twins' own measured launches; the icount companions record their two-hart deadline-notice cells with the turns reason. The negative question is inherited, not redone: if B103 built a negative the twins run it once; if B103 stated why none is cheap, B109 cites it and states the twins' sensitivity. Before landing: three alone runs per twin per width, N=16's host-time cost measured and stated (the companion's icount round is long; host time should be shorter, say so with the number). Pages: scheduling.md's real-steward table and the QEMU-turns residual (the companions' cells beside B103's), testbench.md's host-clock list. No target moves. Not Tier A: cases and pages; size S-M."
-  state = "todo"
-  revision = 223
+  state = "active"
+  revision = 233
 
 [[node]]
   id = "B110"
@@ -3070,5 +3070,15 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Found by B103's editor review (kernel-editor-2): testbench.md states the bench's case counts (total, boot cases, cases under icount, the host-clock list's count) by hand. They were stale on main before B103 (187 of 352 stated; 424 tests/*.toml at 328bcecff). Ruling: .wash/local/wave-2026-10-18-rulings.md, B109's section, 'Case counts': the count belongs to the docs gate. Build: one recount from the case files, and a redoubt-doccheck rule that testbench.md's stated counts equal the case files (total, boot, under icount, and host-clock if stated), failing the docs case when they drift, as C7 fails a SECURITY row. Fixture tests for the rule (a drifted count fails, the true count passes), red on the stale text. Not ahead of the kernel chain (K35, K37, K38). Tier B, size S. Reviewer: an editor."
+  state = "done"
+  revision = 230
+
+[[node]]
+  id = "K39"
+  title = "A thread's slice is its own time: kernel work inside it billed to another payer (a timer interrupt's expiry) shortens the slice today, so a sibling's due waits can starve a thread of its turn"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["K35"]
+  body = "Ruled by the Architect on arch-k35-expiry-starvation (rulings file 'K35 round 2: the expiry's time and the interrupted slice'). Found by K35's timeout-hint-exit on main (.wash/local/K35-report.md 'Red P2'): a waiter ran 19 us a turn and never progressed, 6,128 of 6,128 slice decisions over, because the timer interrupt's expiry (1,327 us median on main, reading all 253 of a sibling's timed waits) ran inside its slice and sched::slice_over compares now after the expiry with the slice's end. Billing is as designed (K20/R12: the interrupted budget pays none of it), but the slice is time, and the page is silent on kernel work in an interrupt inside a slice; K24 already excludes the pick's exit work. K35 bounds the expiry to the due waits plus the next (5 us median, 537 us max there), so the window narrows but stays: a deadline ending many waits at once (worst-walk: 250 due, about 8 ms) still takes the interrupted thread's slice, self-limited only by the attacker's share for re-arming. Rule: a slice is the thread's own time, its user time and its own calls; kernel work inside it billed to another payer extends the slice's end by that work (slice_end moves by the interval billed elsewhere), so the interrupted thread resumes with what it had; only a deadline due now preempts (R12 unchanged); nothing is charged twice. Pages: scheduling.md preemption points and the slice paragraph (K24's), R12 status, timer.md's expiry residual; the model if it holds slices as ticks (implementer states). Acceptance: a case, red on main and on K35's head: a sibling process with many timed waits due each slice beside a victim thread polling at 1 ms, the victim's progress count bounded below by its share; sched-* and smp-* counts kept; nobody-share figures re-recorded if they move, no target moves. Tier A (kernel), size S-M; kernel-red + simplifier + editor. After K35; rank against K37/K38 the orchestrator's."
   state = "todo"
-  revision = 224
+  revision = 239
