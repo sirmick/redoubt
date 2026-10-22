@@ -1,0 +1,371 @@
+1:  169b1d7b1 ! 1:  64a488a61 rt: range calls go a range at a time
+    @@ Commit message
+         A range call is to name at most MAX_RANGE_PAGES pages, so that none
+         holds the kernel longer than about a slice. Every caller splits a
+         longer range the same way, with redoubt_sys::range_chunks beside the
+    -    constant. The runtime's map_fixed, unmap and Process::map issue one
+    -    call a range, and a refused map_fixed unmaps the ranges before it, so
+    -    the call maps all of a run or none of it.
+    +    constant, and the fake kernel refuses one with redoubt_sys::range_cap,
+    +    which the kernel will share. The runtime's map_fixed, unmap and
+    +    Process::map issue one call a range, and a refused map_fixed unmaps
+    +    the ranges before it, so the call maps all of a run or none of it.
+     
+         The launcher's batch stays 64 pages, moved a range at a time: 16-page
+         batches made a launch 60 % longer. The launcher's tests count a batch's
+    @@ Commit message
+         Under Miri each run is its own allocation instead: one shared area made
+         the heap file run past five minutes, against under one.
+     
+    -    Size budget: libs/sys: MAX_RANGE_PAGES and range_chunks, the constant the range calls are split by and the one split (R22)
+    +    Size budget: libs/sys: MAX_RANGE_PAGES, range_chunks and range_cap, the constant the range calls are split by, the one split and the one refusal (R22)
+         Size budget: libs/rt: map_fixed, unmap and Process::map a range at a time (R22)
+     
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    @@ libs/client/tests/launch.rs: fn a_failed_read_refuses_the_launch_at_its_batch()
+      }
+     
+      ## libs/rt/fake/src/lib.rs ##
+    -@@ libs/rt/fake/src/lib.rs: use std::time::{Duration, Instant};
+    - 
+    - use redoubt_rt::abi::{
+    +@@ libs/rt/fake/src/lib.rs: use redoubt_rt::abi::{
+          BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Call, CallOutcome, Cause, Error, ExitNotice, FOREVER,
+    --    Handle, Handles, Hold, Labels, LendDisposition, MAX_START_HANDLES, MemFlags, Message, MessageKind,
+    --    MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome,
+    +     Handle, Handles, Hold, Labels, LendDisposition, MAX_START_HANDLES, MemFlags, Message, MessageKind,
+    +     MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome,
+     -    Return,
+    -+    Handle, Handles, Hold, Labels, LendDisposition, MAX_RANGE_PAGES, MAX_START_HANDLES, MemFlags, Message,
+    -+    MessageKind, MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles,
+    -+    ReplyOutcome, Return,
+    ++    Return, range_cap,
+      };
+      use redoubt_rt::ipc::{Request, Words};
+      use redoubt_rt::server::typed::{Outcome, finish};
+    @@ libs/rt/fake/src/lib.rs: fn end(s: &mut State, index: usize, cause: Cause, code:
+     +/// Not under Miri, which checks each access to an allocation against every pointer and thread
+     +/// that touched it: one area shared by a test's every run made `rt-miri`'s
+     +/// `heap_over_map_anon` run past five minutes, against under a minute with an allocation a run.
+    -+/// There each `MapAnon` run is an allocation of its own, as it was before areas.
+    ++/// There each `MapAnon` run is an allocation of its own, as it was before areas, and only a whole
+    ++/// run is unmapped or moved, so `rt-miri` tests no range call split a range at a time.
+     +#[derive(Default)]
+     +struct Area {
+     +    base: usize,
+    @@ libs/rt/fake/src/lib.rs: fn end(s: &mut State, index: usize, cause: Cause, code:
+     +        // its caller has just taken it out of its process's mappings, so it is freed once.
+     +        unsafe { dealloc(addr as *mut u8, Layout::from_size_align(len, PAGE_SIZE).unwrap()) };
+     +    }
+    -+}
+    -+
+    -+/// `TooLarge` for a range of more than `MAX_RANGE_PAGES` pages, as the kernel refuses one
+    -+/// (kernel/memory.md, R22), so a host test meets the cap the runtime splits its ranges by.
+    -+fn range_cap(len: usize) -> Result<(), Error> {
+    -+    if len / PAGE_SIZE > MAX_RANGE_PAGES { Err(Error::TooLarge) } else { Ok(()) }
+      }
+      
+      /// How long a wait only a change can end may see nothing change before the test is called stuck:
+    @@ libs/rt/src/lib.rs: pub mod abi {
+     +        MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_RANGE_PAGES, MAX_START_HANDLES, MAX_THREADS,
+     +        MemFlags, Message, MessageKind, MintSource, NUMBER_BASE, Number, PAGE_SIZE, Pages, RECEIVED_SLOTS,
+     +        REGS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome, ResetKind, Return, SLICE, STRIDE, Slot,
+    -+        USAGE_SLOTS, USER_AREA_END, Usage, WAIT_CAP, WORDS, decode_result, encode_result, range_chunks, rv32,
+    -+        rv64,
+    ++        USAGE_SLOTS, USER_AREA_END, Usage, WAIT_CAP, WORDS, decode_result, encode_result, range_cap,
+    ++        range_chunks, rv32, rv64,
+          };
+      }
+      pub use redoubt_wire as wire;
+    @@ libs/sys/src/lib.rs: pub const WORDS: usize = 4;
+     +    const RANGE: usize = MAX_RANGE_PAGES * PAGE_SIZE;
+     +    (0..len.max(1)).step_by(RANGE).map(move |done| (addr + done, (len - done).min(RANGE)))
+     +}
+    ++
+    ++/// `TooLarge` for a range of `len` bytes over `MAX_RANGE_PAGES` pages, by arithmetic: the cap a
+    ++/// range call checks after its range's shape and before any walk or charge (kernel/memory.md,
+    ++/// R22).
+    ++pub fn range_cap(len: usize) -> Result<(), Error> {
+    ++    if len / PAGE_SIZE > MAX_RANGE_PAGES { Err(Error::TooLarge) } else { Ok(()) }
+    ++}
+     +
+      /// Threads per process.
+      pub const MAX_THREADS: usize = 255;
+    @@ tests/size-budget.toml: max_lines = 362
+      name = "libs/sys"
+      paths = ["libs/sys/src"]
+     -max_lines = 1049
+    -+max_lines = 1054
+    ++max_lines = 1057
+      
+      [[crate]]
+      name = "libs/layout"
+2:  172b247a4 = 2:  954134b2e stub: a segment is mapped, protected and unmapped a range at a time
+3:  f0db7e809 = 3:  9e28a0dbd model: a range over MAX_RANGE_PAGES is TooLarge, after its shape and before any walk
+4:  dcf2fbd45 ! 4:  81e08475d kernel: no range call holds the kernel longer than about a slice
+    @@ Commit message
+         map_fixed, unmap, set_flags and process_map now refuse a range over
+         MAX_RANGE_PAGES pages with TooLarge. The check is arithmetic, after
+         the range's shape and before any walk or charge, as a lend past
+    -    MAX_LEND_PAGES is refused.
+    +    MAX_LEND_PAGES is refused, and is the fake kernel's own,
+    +    redoubt_sys::range_cap.
+     
+         map_anon's length is a run's. The kernel places the whole run by its
+         one search, as before the cap, and maps only its first MAX_RANGE_PAGES
+    @@ docs/kernel/abi.md: at 1.
+      | 10 | `Busy` | the sender's group already has `WAIT_CAP` (32) messages queued on the endpoint ([R2 (fair waiting)](ipc.md#r2-fair-waiting)) |
+      | 11 | `Refused` | the receiver's budget cannot pay for the message (R4) |
+     -| 12 | `TooLarge` | a count over its fixed limit: body handles, labels, the start list, a lend over `MAX_LEND_PAGES` (16), budget depth, `MAX_HANDLES` (4096) |
+    -+| 12 | `TooLarge` | a count over its fixed limit: body handles, labels, the start list, a lend over `MAX_LEND_PAGES` (16), a range over `MAX_RANGE_PAGES` (16) but `map_anon`'s run, budget depth, `MAX_HANDLES` (4096) |
+    ++| 12 | `TooLarge` | a count over its fixed limit: body handles, labels, the start list, a lend over `MAX_LEND_PAGES` (16), a range over `MAX_RANGE_PAGES` (16) except `map_anon`'s length, budget depth, `MAX_HANDLES` (4096) |
+      | 13 | `Timeout` | a blocking call's timeout passed |
+      | 14 | `Dead` | the object the call needs is gone: its endpoint was destroyed, its server died, or the handle it came through, or one it names, was revoked and is a dead entry ([handles](objects.md#handles), I17 (a swept index stays dead until closed)) |
+      
+    @@ docs/kernel/memory.md: by what the caller has, because the kernel runs a call to
+      | `process_map` | h(process), src, dst, len, flags | Move the caller's own RAM pages, contents and all, into a process that has not started, at `dst`, with `flags`. The child's budget pays for them and for the page tables that map them ([processes](processes.md)). |
+      
+     -A range is page-aligned and non-empty, and for every call but `map_anon` it lies below
+    -+A range is page-aligned and non-empty, at most `MAX_RANGE_PAGES` (16) pages long
+    -+([R22](#r22-range-cost)) but for `map_anon`'s, which is a run's, and for every call but
+    -+`map_anon` it lies below
+    - `USER_AREA_END` (the end of user space: 0x8000_0000, 2 GiB, on rv32; 0x40_0000_0000, 256 GiB,
+    - on rv64). Flags are `READ`, `WRITE` and `EXECUTE`: at least one, never `WRITE` with
+    - `EXECUTE`, never `WRITE` without `READ`. "The caller's own page" is a live user mapping that is
+    -@@ docs/kernel/memory.md: be made executable ([R11](#r11-memory)). A reservation not yet touched is not a
+    +-`USER_AREA_END` (the end of user space: 0x8000_0000, 2 GiB, on rv32; 0x40_0000_0000, 256 GiB,
+    +-on rv64). Flags are `READ`, `WRITE` and `EXECUTE`: at least one, never `WRITE` with
+    +-`EXECUTE`, never `WRITE` without `READ`. "The caller's own page" is a live user mapping that is
+    +-neither side of a loan and is credited to the caller in the kernel's frame ownership table (or
+    +-is a `dma_alloc` page of its own, or device registers it mapped). Only the RAM among them can
+    +-be made executable ([R11](#r11-memory)). A reservation not yet touched is not a mapping.
+    ++A range is page-aligned and non-empty, at most `MAX_RANGE_PAGES` (16) pages long except `map_anon`'s
+    ++length, which is a run's ([R22](#r22-range-cost)), and for every call but `map_anon` it lies below
+    ++`USER_AREA_END` (the end of user space: 0x8000_0000, 2 GiB, on rv32; 0x40_0000_0000, 256 GiB, on
+    ++rv64). Flags are `READ`, `WRITE` and `EXECUTE`: at least one, never `WRITE` with `EXECUTE`, never
+    ++`WRITE` without `READ`. "The caller's own page" is a live user mapping that is neither side of a
+    ++loan and is credited to the caller in the kernel's frame ownership table (or is a `dma_alloc` page
+    ++of its own, or device registers it mapped). Only the RAM among them can be made executable
+    ++([R11](#r11-memory)). A reservation not yet touched is not a mapping.
+    + 
+      Each call checks the whole range before it changes any page, so an error leaves every mapping
+      as it was and charges nothing. `process_map` counts the untouched pages of its source among what
+      the call must pay for, and backs them only once nothing can refuse it.
+     -The errors are `InvalidArgument` and `OutOfMemory`, and for `process_map` also `BadHandle`,
+    -+The errors are `InvalidArgument`, `TooLarge` (a range over `MAX_RANGE_PAGES`, never `map_anon`'s) and
+    ++The errors are `InvalidArgument`, `TooLarge` (a range over `MAX_RANGE_PAGES`, except `map_anon`'s length) and
+     +`OutOfMemory`, and for `process_map` also `BadHandle`,
+      `WrongObject` and `NotPermitted` (the child has started). The order of the checks, the same in
+      the kernel and the [model](model.md), is in the
+    @@ docs/kernel/memory.md: device registers, is read-write and never executable.
+     +- `map_fixed`, `unmap`, `set_flags` and `process_map` each name at most `MAX_RANGE_PAGES` pages:
+     +  a longer range is `TooLarge`, by arithmetic, after the range's shape and before any walk or
+     +  charge, as a lend past `MAX_LEND_PAGES` is. `map_anon`'s length is a run's, the one range
+    -+  argument that may be longer: it places the whole run by its search (below), as it did before
+    -+  the cap, and maps at most the run's first `MAX_RANGE_PAGES` pages, so the call holds the kernel
+    -+  for the search and a range, or maps nothing (`OutOfMemory`). The number is derived: the
+    ++  argument that may be longer: it places the whole run by its search (below) and maps at most the
+    ++  run's first `MAX_RANGE_PAGES` pages, so the call holds the kernel for the search and a range, or
+    ++  maps nothing (`OutOfMemory`). The number is derived: the
+     +  largest power of two whose worst section, a `map_fixed` whose every page table is absent so
+     +  the call makes them (two on Sv32 across a root entry, four on Sv39 across a gigabyte), measures
+     +  within one slice (`SLICE_US`, 1 ms) on the slower width, in a checked build under virtual time.
+    @@ docs/kernel/memory.md: device registers, is read-write and never executable.
+     +  costs a walk of its own, so a refusal's cost follows the starts, not only the pages read: a
+     +  process with a page taken in every n-page window of its area makes each refused n-page request
+     +  try 65,536 / n starts. In a checked build under virtual time, with every page table present
+    -+  (worst of three in one scratch run, about 5.4 µs a start on rv64 and 4.0 on rv32):
+    ++  (worst of three runs, about 5.4 µs a start on rv64 and 4.0 on rv32):
+     +
+     +  | n | pages taken | rv32 | rv64 |
+     +  | --- | --- | --- | --- |
+    @@ docs/userland/native.md: the loader stub.
+        parses the block, and calls `run`; its return value is the exit code. A block that does not
+        parse exits with `BAD_STARTUP`. A panic prints its message once on `/dev/cons`, if the program
+     
+    + ## kernel/src/device.rs ##
+    +@@ kernel/src/device.rs: impl MemoryManager {
+    +         let slot = self.dma_slot_of(&d);
+    +         let flags = redoubt_sys::MemFlags::READ | redoubt_sys::MemFlags::WRITE;
+    +         let len = d.size as usize;
+    +-        let at = self.map_run(pid, len / PAGE_SIZE, flags, Some(d.base as usize))?;
+    ++        let at = self.map_run(pid, len / PAGE_SIZE, len / PAGE_SIZE, flags, Some(d.base as usize))?;
+    +         if let Some(slot) = slot {
+    +             self.dma_mapped(pid, slot);
+    +         }
+    +@@ kernel/src/device.rs: impl MemoryManager {
+    +         // Charged and zeroed before anything is mapped (R6, R11).
+    +         let phys = self.dma_new_run(pid, slot, npages)?;
+    +         let flags = redoubt_sys::MemFlags::READ | redoubt_sys::MemFlags::WRITE;
+    +-        match self.map_run(pid, npages, flags, Some(phys)) {
+    ++        match self.map_run(pid, npages, npages, flags, Some(phys)) {
+    +             Ok(at) => Ok((at, phys as u64)),
+    +             Err(e) => {
+    +                 self.dma_drop_run(slot, phys);
+    +
+      ## kernel/src/mem.rs ##
+     @@
+      // SPDX-License-Identifier: Apache-2.0
+    @@ kernel/src/mem.rs
+      pub use crate::arch::mem::MemoryMapping;
+      use crate::arch::process::Process;
+     @@ kernel/src/mem.rs: impl MemoryManager {
+    -         if end > USER_AREA_END { Err(bad) } else { Ok(end) }
+          }
+      
+    -+    /// A range call names at most `MAX_RANGE_PAGES` pages (R22): over it is `TooLarge`, by
+    -+    /// arithmetic, before any walk or charge, so no range call holds the kernel longer than its
+    -+    /// worst section at the cap, measured within one slice (kernel/memory.md, "R22").
+    -+    pub fn range_cap(len: usize) -> Result<(), redoubt_sys::Error> {
+    -+        if len / PAGE_SIZE > MAX_RANGE_PAGES { Err(redoubt_sys::Error::TooLarge) } else { Ok(()) }
+    -+    }
+    -+
+          /// `map_anon(len, flags) -> addr`: zeroed pages, charged to the caller's budget, at an
+     -    /// address the kernel chooses.
+     +    /// address the kernel chooses. `len` is a run's length, the one range argument that may exceed
+    @@ kernel/src/mem.rs: impl MemoryManager {
+              }
+     -        let at = self.map_run(pid, len / PAGE_SIZE, flags, None)?;
+     +        let run = len / PAGE_SIZE;
+    -+        let at = self.map_run_in(pid, run.min(MAX_RANGE_PAGES), run, flags, None)?;
+    ++        let at = self.map_run(pid, run.min(MAX_RANGE_PAGES), run, flags, None)?;
+              sync_if_executable(pid, flags);
+              Ok(at)
+          }
+    -@@ kernel/src/mem.rs: impl MemoryManager {
+    + 
+    +-    /// Map `npages` pages at an address the kernel chooses (R11), with `flags`. `phys` is the
+    +-    /// physical run to map (`map_device`'s registers, `dma_alloc`'s buffer), or `None` for
+    +-    /// fresh RAM: a frame each, charged to `pid`'s budget and zeroed before the mapping exists
+    +-    /// (R6, R11). The one way the kernel maps a range it chose the address of; on any failure
+    +-    /// nothing is left mapped, and a run the caller passed in stays the caller's to free.
+    ++    /// Map `npages` pages at an address the kernel chooses (R11), with `flags`: the first of a run
+    ++    /// of `run` pages, placed where all `run` are free (`map_anon`'s; every other caller's run is
+    ++    /// `npages`). `phys` is the physical run to map (`map_device`'s registers, `dma_alloc`'s
+    ++    /// buffer), or `None` for fresh RAM: a frame each, charged to `pid`'s budget and zeroed before
+    ++    /// the mapping exists (R6, R11). The one way the kernel maps a range it chose the address of;
+    ++    /// on any failure nothing is left mapped, and a run the caller passed in stays the caller's to
+    ++    /// free.
+    +     pub fn map_run(
+    +         &mut self,
+    +         pid: Pid,
+              npages: usize,
+    ++        run: usize,
+              flags: MemFlags,
+              phys: Option<usize>,
+    -+    ) -> Result<usize, redoubt_sys::Error> {
+    -+        self.map_run_in(pid, npages, npages, flags, phys)
+    -+    }
+    -+
+    -+    /// [`Self::map_run`] of the first `npages` of a run of `run` pages, placed where all `run` are
+    -+    /// free.
+    -+    fn map_run_in(
+    -+        &mut self,
+    -+        pid: Pid,
+    -+        npages: usize,
+    -+        run: usize,
+    -+        flags: MemFlags,
+    -+        phys: Option<usize>,
+          ) -> Result<usize, redoubt_sys::Error> {
+              let oom = redoubt_sys::Error::OutOfMemory;
+              let len = npages.checked_mul(PAGE_SIZE).ok_or(oom)?;
+    @@ kernel/src/mem.rs: impl MemoryManager {
+          /// table the range leaves mapping nothing is freed, and uncharged, too.
+          pub fn unmap(&mut self, pid: Pid, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
+              let end = Self::user_range(addr, len)?;
+    -+        Self::range_cap(len)?;
+    ++        redoubt_sys::range_cap(len)?;
+              for page in (addr..end).step_by(PAGE_SIZE) {
+                  self.owned_mapping(pid, page)?;
+              }
+    @@ kernel/src/mem.rs: impl MemoryManager {
+          ) -> Result<(), redoubt_sys::Error> {
+              let bad = redoubt_sys::Error::InvalidArgument;
+              let end = Self::user_range(addr, len)?;
+    -+        Self::range_cap(len)?;
+    ++        redoubt_sys::range_cap(len)?;
+              if flags == MemFlags::NONE {
+                  return Err(bad);
+              }
+    @@ kernel/src/mem.rs: impl MemoryManager {
+          ) -> Result<(), redoubt_sys::Error> {
+              let oom = redoubt_sys::Error::OutOfMemory;
+              Self::user_range(addr, len)?;
+    -+        Self::range_cap(len)?;
+    ++        redoubt_sys::range_cap(len)?;
+              check_map_flags(flags)?;
+              let npages = (len / PAGE_SIZE) as u64;
+              // `pid` is the running caller, and only the kernel (which makes no syscalls) has no
+    @@ kernel/src/process.rs: pub fn process_map(
+          // (kernel/abi.md): not W+X, and not writable without readable. It comes before the source
+          // is backed, so a refused call leaves nothing charged (kernel/memory.md).
+          let pages = whole_pages(src, dst, len)?;
+    -+    crate::mem::MemoryManager::range_cap(len)?;
+    ++    redoubt_sys::range_cap(len)?;
+          crate::mem::check_map_flags(flags)?;
+          // The source must be the caller's own RAM, mapped and not lent out, or a reservation of its
+          // own not yet touched. Checked whole before any page moves, because a later failure would
+     
+      ## libs/rt/fake/src/lib.rs ##
+    +@@ libs/rt/fake/src/lib.rs: use std::time::{Duration, Instant};
+    + 
+    + use redoubt_rt::abi::{
+    +     BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Call, CallOutcome, Cause, Error, ExitNotice, FOREVER,
+    +-    Handle, Handles, Hold, Labels, LendDisposition, MAX_START_HANDLES, MemFlags, Message, MessageKind,
+    +-    MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome,
+    +-    Return, range_cap,
+    ++    Handle, Handles, Hold, Labels, LendDisposition, MAX_RANGE_PAGES, MAX_START_HANDLES, MemFlags, Message,
+    ++    MessageKind, MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles,
+    ++    ReplyOutcome, Return, range_cap,
+    + };
+    + use redoubt_rt::ipc::{Request, Words};
+    + use redoubt_rt::server::typed::{Outcome, finish};
+     @@ libs/rt/fake/src/lib.rs: fn end(s: &mut State, index: usize, cause: Cause, code: u32) {
+          s.exits_due.push_back((exit, notice));
+      }
+    @@ libs/rt/fake/src/lib.rs: fn end(s: &mut State, index: usize, cause: Cause, code:
+      /// Not under Miri, which checks each access to an allocation against every pointer and thread
+      /// that touched it: one area shared by a test's every run made `rt-miri`'s
+      /// `heap_over_map_anon` run past five minutes, against under a minute with an allocation a run.
+    --/// There each `MapAnon` run is an allocation of its own, as it was before areas.
+    +-/// There each `MapAnon` run is an allocation of its own, as it was before areas, and only a whole
+    +-/// run is unmapped or moved, so `rt-miri` tests no range call split a range at a time.
+     +/// There each `MapAnon` run is an allocation of its own, as it was before areas, of the range it
+    -+/// maps; no test there maps a run longer than a range, which `MapFixed` would have to extend.
+    ++/// maps: `rt-miri` maps no run longer than a range, which `MapFixed` would have to extend, and
+    ++/// splits no range call a range at a time, since only a whole run is unmapped or moved there.
+      #[derive(Default)]
+      struct Area {
+          base: usize,
+    @@ libs/rt/src/handle.rs: fn addr(result: Result<Return, Error>) -> Result<usize, E
+     +/// thread), refuses the extension, which gives back what it mapped and asks again, the kernel's
+     +/// next search starting where it placed the refused run, so it passes that page. The search ends
+     +/// as the kernel's one pass does: once the runs placed have wrapped (one below the one before), one
+    -+/// at or past the first's means no gap holds the run, `OutOfMemory`, with nothing left mapped.
+    ++/// at or past the first's means no gap holds the run, `OutOfMemory`, with nothing left mapped. A
+    ++/// refusal needs a placement of the process's own that the lock does not cover, so repeated
+    ++/// re-searches, and an `OutOfMemory` though a gap held the run before them, are the process's own
+    ++/// doing, and the one pass bounds them.
+     +///
+     +/// The process's every `map_anon` through the runtime takes one lock ([`Placing`]), the heap's and
+     +/// a [`crate::ipc::Buffer`]'s alike, so no other placement of the runtime's lands in a run while it
+    @@ tests/size-budget.toml: kind = "size-budget"
+      name = "kernel"
+      paths = ["kernel/src"]
+     -max_lines = 10889
+    -+max_lines = 10911
+    ++max_lines = 10899
+      
+      [[crate]]
+      name = "loader"
+    @@ tests/size-budget.toml: max_lines = 364
+      [[crate]]
+      name = "libs/sys"
+      paths = ["libs/sys/src"]
+    --max_lines = 1054
+    -+max_lines = 1057
+    +-max_lines = 1057
+    ++max_lines = 1060
+      
+      [[crate]]
+      name = "libs/layout"

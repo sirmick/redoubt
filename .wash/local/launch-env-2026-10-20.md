@@ -1,6 +1,6 @@
 # Environment and rules for every member launched 2026-10-20
 
-Main is 4750dd61c (train 92: B101, the kernel lock wakes only the next ticket). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
+Main is 4c2c063e8 (train 95: K36 dead entries, B106 endpoint owners, B105 checked VM allocation). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
 
 ## Shell
 

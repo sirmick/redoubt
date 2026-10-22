@@ -385,3 +385,117 @@ branch `sched5-pre-k36` (08de6f1e5).
 
 Still to run after train 95: the prebuild, the witness (pipe-sixty-four rv32 x10 alone) and the
 load run.
+
+## map_anon ruling built (head dcf2fbd45, base main 4c2c063e8)
+
+The ruling is "SCHED5: a long run is placed by the kernel's search and mapped a range at a time".
+Range-diff from c7ccb88ae, the head before the ruling: `.wash/local/SCHED5-range-diff-r4.txt`.
+The finding is in `.wash/local/SCHED5-heap-allocation-identification.md`.
+
+**Commit 1, rt** ("rt: range calls go a range at a time"):
+- `map_fixed`, `unmap` and `Process::map` go a range at a time. `map_anon` is a plain call again:
+  no `Placing`, no `place()`, no filler.
+- The fake keeps its per-process area, uncapped for `MapAnon`, and unmaps or moves any part of a
+  mapping, as the kernel does.
+- The area is an anonymous `mmap`, zeroed lazily. `alloc_zeroed` at a page's alignment had written
+  64 MiB a process, which made client `aio` timing tests fail 1 to 2 runs in 4 in parallel; that
+  was so at the original commit 1 too. After the change: 5/5 at main's 12.00 s.
+- libs/rt ceiling 4144.
+
+**Commit 3, model:**
+- `map_anon` places the whole run and maps `min(len, 16)`.
+- Contract `a_long_run_is_placed_whole` in `ipc_contracts`.
+- Mutation `R22MapAnonSearchesRange`; `Mutation::ALL` 181.
+- check_order: `map_anon` leaves the over-cap group; new test
+  `map_anon_takes_a_run_longer_than_a_range_and_maps_one_range_of_it`.
+- model.md: the count and the R22 row. Ceiling 11526.
+
+**Commit 4, kernel:**
+- The kernel: `map_run_in` searches for the run and maps the first range.
+- libs/sys: `map_anon` has no `TooLarge`; the `MAX_RANGE_PAGES` doc.
+- The rt: `map_anon` under `Placing` extends with `map_fixed`. A refused extension unmaps and
+  searches again; the one-pass termination stays.
+- The fake: places the run and maps the first range.
+- `libs/rt/tests/ranges.rs`, seven tests: the filler tests are gone, and
+  `a_refused_extension_gives_back_its_ranges_and_searches_again` tests the re-search.
+- `rd::map_anon_run` passes the whole length.
+- map-anon-search-bound: its over-cap line now places the run at the area's start with its first
+  range alone mapped. Its bound and target are unchanged.
+- map-anon-placement: back to main's version.
+- Pages: memory.md (the call table, the range rule, `TooLarge`, "Where `map_anon` puts pages",
+  R22's bullet and status), abi.md, native.md (status 40, "A long run is one run"), and
+  SECURITY.md's R22 row.
+- Ceilings: kernel 10911, libs/sys 1057, libs/rt 4182.
+
+**Gates at dcf2fbd45, rc 0 each:**
+- size-budget, docs, formatting, unsafe-budget;
+- host-tests, model-host-tests, beamlet-lookup-host;
+- blkd, consrelay, erofsd, fileserver, init, ipd, littlefsd, net, netd, piped, sshd, steward,
+  walfsd host-tests;
+- rt-miri;
+- `cargo test -p redoubt-rt -p redoubt-sys -p stub -p redoubt-fake-kernel`;
+- `cargo test -p redoubt-client` three times;
+- the R22 mutations in `mutations_are_caught`, all three caught;
+- prebuilt.
+
+**Timing witness, alone on an empty q:**
+
+| Case | Result |
+| --- | --- |
+| beamlet-heap-allocation rv64, five runs | 15.9, 16.1, 16.0, 15.9, 15.9 s (main 15.1) |
+| beamlet-heap-allocation rv32 | 14.6 s |
+| map-anon-search-bound | rv64 1.1 s, rv32 0.9 s |
+| map-anon-placement | rv64 0.8 s, rv32 0.5 s |
+| sched-range-hammer | rv64 6.6 s, rv32 5.6 s |
+| rt-host-tests | 8.4 s |
+| client-host-tests | 17.8 s |
+
+**Load run:** the 35-case set on both widths, 70/70 PASS. pipe-sixty-four rv32 alone x3: PASS 19.4,
+18.4 and 18.4 s.
+
+**Not run:** model-mutations whole (only the R22 subset).
+
+### Review notes folded (head 81e08475d)
+
+Range-diff from dcf2fbd45: `.wash/local/SCHED5-range-diff-r5.txt`. The stub commit is unchanged.
+
+**Editor P2 (1):** memory.md R22 no longer says "as it did before the cap".
+
+**Editor P2 (2):** each commit was checked on its own.
+- At commit 1: the rt, sys, fake and client tests, and docs, rc 0; size-budget rc 0 after libs/sys
+  1057, for `range_cap`.
+- At the model commit: model-host-tests, docs, size-budget, and the stub and rt tests, rc 0.
+- So no commit needed folding into another.
+
+**Editor P3s:**
+- memory.md's range rule and errors line, and abi.md's `TooLarge` row, read "except `map_anon`'s
+  length".
+- "worst of three runs".
+
+**Red P3-1:** handle.rs says a refusal needs the process's own unlocked placement, so repeated
+re-searches and a false `OutOfMemory` are self-inflicted and bounded by the one pass.
+
+**Red P3-2:** the limit is stated rather than changed. Under Miri each run is its own allocation
+of the range it maps, so `rt-miri` maps no run over a range and splits no range call. Allocating
+the whole run there would need `MapFixed` to land inside that allocation, which the fake's Miri
+path has no area for.
+
+**Simplifier:**
+- One `redoubt_sys::range_cap`, re-exported by `redoubt_rt::abi`. The fake uses it from commit 1
+  and the kernel from commit 4; the kernel's copy and the fake's copy are gone.
+- `map_run` takes the run's length (`map_run_in` folded in); `map_device`'s and `dma_alloc`'s
+  callers pass `npages` twice.
+- Kernel ceiling 10899 (down from 10911); libs/sys 1060.
+
+**Gates at the folded tree, pinned (`taskset -c 8-23 nice -n 10`), no boots, rc 0 each:**
+- unsafe-budget, docs, formatting;
+- host-tests, model-host-tests, beamlet-lookup-host;
+- build-rv64, build-rv32;
+- rt-miri;
+- `cargo test -p redoubt-rt -p redoubt-sys -p stub -p redoubt-fake-kernel`;
+- `cargo test -p redoubt-client` three times;
+- the R22 mutations;
+- size-budget at 81e08475d.
+
+**Not rerun:** the boot witness. The boots last ran at dcf2fbd45; this fold changes no boot path
+but `map_run`'s signature and the shared `range_cap`.

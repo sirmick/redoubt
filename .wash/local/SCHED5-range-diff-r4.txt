@@ -1,0 +1,1775 @@
+1:  979dc4e30 ! 1:  169b1d7b1 rt: range calls go a range at a time, and a long run is placed in one pass
+    @@ Metadata
+     Author: Michael <sirmick@gmail.com>
+     
+      ## Commit message ##
+    -    rt: range calls go a range at a time, and a long run is placed in one pass
+    +    rt: range calls go a range at a time
+     
+         A range call is to name at most MAX_RANGE_PAGES pages, so that none
+         holds the kernel longer than about a slice. Every caller splits a
+    @@ Commit message
+         call a range, and a refused map_fixed unmaps the ranges before it, so
+         the call maps all of a run or none of it.
+     
+    -    A heap block, a Buffer or init's arena must stay one run. map_anon of
+    -    more than a range maps its first range with the kernel's map_anon and
+    -    extends it with map_fixed. Where the kernel placed that first range in
+    -    a gap too short for the run, what the run took of the gap is kept as a
+    -    filler, so the kernel's next search, starting at its first page,
+    -    passes the whole gap; it is given back once the next first range is
+    -    placed. Each gap is probed once, and the search ends as the kernel's
+    -    own one pass does, once the first ranges' addresses have wrapped back
+    -    to the first: the run lands where the kernel's search would put it.
+    -    Every map_anon of the process takes one lock, so no other placement
+    -    moves the kernel's search under it. The cost is at most one range more
+    -    held while searching.
+    -
+         The launcher's batch stays 64 pages, moved a range at a time: 16-page
+         batches made a launch 60 % longer. The launcher's tests count a batch's
+         range calls.
+     
+         The fake kernel refuses a longer range as the kernel will, and places
+    -    runs in a per-process area as the kernel searches its own. Under Miri
+    -    each run is its own allocation instead: one shared area made the heap
+    -    file run past five minutes, against under one.
+    +    each process's runs in an area of its own, as the kernel searches its
+    +    own, so that map_fixed meets what map_anon placed, and unmaps or moves
+    +    any part of a mapping, as the kernel does, the rest staying mapped.
+    +    Under Miri each run is its own allocation instead: one shared area made
+    +    the heap file run past five minutes, against under one.
+     
+         Size budget: libs/sys: MAX_RANGE_PAGES and range_chunks, the constant the range calls are split by and the one split (R22)
+    -    Size budget: libs/rt: range calls a range at a time, and map_anon's one-pass placement of a run longer than a range under its lock (R22)
+    +    Size budget: libs/rt: map_fixed, unmap and Process::map a range at a time (R22)
+     
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+     
+    @@ docs/userland/native.md: calls, made in the bench by a user-class parent, and th
+      
+      The launcher copies bytes and never parses an ELF, so a malicious ELF can at most compromise the
+      process it was going to become. The stub refuses, by exiting: segments that overlap each other,
+    -@@ docs/userland/native.md: and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle on it.
+    - 
+    - ### `redoubt-rt`, the native runtime
+    - 
+    --<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (33)</summary>
+    -+<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (41)</summary>
+    - 
+    - - bench:rt-build
+    - - bench:net-tcp
+    -@@ docs/userland/native.md: and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle on it.
+    - - host:redoubt-rt::a_refused_thread_is_not_waited_for
+    - - host:redoubt-rt::prepared_locks_make_no_endpoint_when_contended
+    - - host:redoubt-rt::a_refused_endpoint_leaves_a_working_lock
+    -+- host:redoubt-rt::a_long_run_is_one_run_mapped_a_range_at_a_time
+    -+- host:redoubt-rt::a_run_lands_in_the_first_gap_from_the_search_s_start_that_holds_it
+    -+- host:redoubt-rt::a_gap_longer_than_two_ranges_but_short_of_the_run_is_probed_once
+    -+- host:redoubt-rt::a_run_before_the_search_s_start_is_found_after_the_wrap
+    -+- host:redoubt-rt::a_run_no_gap_holds_is_out_of_memory_after_one_pass
+    -+- host:redoubt-rt::a_page_taken_meanwhile_is_a_gap_and_the_search_goes_on
+    -+- host:redoubt-rt::a_run_the_budget_cannot_hold_leaves_nothing_mapped
+    -+- host:redoubt-rt::a_run_of_one_range_is_one_call
+    - 
+    - </details>
+    - 
+     @@ docs/userland/native.md: the loader stub.
+      | --- | --- |
+      | `start` | the entry point (`entry!`, and `first_entry!` for `init`), exit codes (`OK` 0, `PANIC` 101, `BAD_STARTUP` 102) and the panic handler |
+      | `startup` | the startup block, parsed defensively ([sessions](sessions.md#how-a-program-reads-its-namespace)) |
+     -| `handle` | typed handles and the system calls that are not IPC |
+    -+| `handle` | typed handles and the system calls that are not IPC; a range over `MAX_RANGE_PAGES` mapped, moved and unmapped a range at a time, and a long `map_anon` placed as one run (below) |
+    ++| `handle` | typed handles and the system calls that are not IPC; a range over `MAX_RANGE_PAGES` mapped, moved and unmapped a range at a time (below) |
+      | `ipc` | lends and transfers, `call`, `send`, `receive`, `reply`, `serve` |
+      | `heap` | the global allocator, over `map_anon`, or over one arena mapped once (`fix_heap`, for `init`'s [bound](../kernel/budgets.md#the-tree-from-the-boot-manifest)); capped at the startup block's `heap_pages` ([init](../servers/init.md#the-startup-block)), past which it refuses before `map_anon` is asked (an infallible allocation then panics, and the runtime exits with its panic code, 101: `heap-cap`); and a record of its cap and peak for the bench ([the memory budget](../testbench.md#the-memory-budget)) |
+      | `path` | lexical path cleaning, so `..` never climbs above a root |
+    @@ docs/userland/native.md: the loader stub.
+      | `thread` | `spawn`: a closure on a thread of this process, with a stack that outlives it, placed by `map_fixed` in the thread-stack area ([memory layout](../kernel/memory-layout.md#regions)) above an unmapped guard page, so an overflow faults there and the kernel ends the process at once (`thread-stack-guard`) instead of writing over what `map_anon` placed below; painted before the thread starts, so the bench's memory scan reports its peak as `stack NAME thread N PEAK` ([the memory budget](../testbench.md#the-memory-budget)); `scope`: threads that borrow from their caller, all ended before it returns |
+      | `sync` | a semaphore, a mutex and a condvar for the threads of one process, whose waiters sleep on an endpoint |
+      
+    -+- **A long run is one run.** A range call names at most `MAX_RANGE_PAGES` (16) pages
+    -+  ([R22 (range cost)](../kernel/memory.md#r22-range-cost)), so `map_anon` of more maps its first
+    -+  range with the kernel's `map_anon` and the rest with `map_fixed` after it, and the heap's large
+    -+  blocks, a `Buffer` and `init`'s arena are each still one run. Where the kernel placed the first
+    -+  range in a gap too short for the run (a page taken after it, or the placement area's end), what
+    -+  the run took of that gap is kept as a filler, so the kernel's next search, starting at its first
+    -+  page, passes the whole gap, and is given back as soon as the next first range is placed: each
+    -+  gap is probed once. The search ends as the kernel's own one pass does, once the first ranges'
+    -+  addresses have wrapped and come back to the first's, with `OutOfMemory` and nothing mapped. So
+    -+  a run lands in the first gap from the kernel's search's start that holds it, the kernel's own
+    -+  answer, and the call holds at most the run and one range while it searches: a budget within a
+    -+  range of its limit may find `OutOfMemory` though the run alone would fit it. Every `map_anon`
+    -+  of the process takes one lock in the runtime, the heap's and a `Buffer`'s alike, so no other
+    -+  placement moves the kernel's search under one; a program on the runtime makes no `map_anon` of
+    -+  its own. `map_fixed`, `unmap` and `Process::map` go a range at a time too
+    -+  (`redoubt_sys::range_chunks`): a refused `map_fixed` unmaps the ranges before it, and a
+    -+  refused `Process::map` leaves the ranges it moved in the child, which has not started, and
+    -+  unmaps the rest.
+    ++- **A long range goes a range at a time.** A range call names at most `MAX_RANGE_PAGES` (16)
+    ++  pages ([R22 (range cost)](../kernel/memory.md#r22-range-cost)), so `map_fixed`, `unmap` and
+    ++  `Process::map` make one call a range (`redoubt_sys::range_chunks`): a refused `map_fixed`
+    ++  unmaps the ranges before it, so it maps all of a run or none of it, and a refused
+    ++  `Process::map` leaves the ranges it moved in the child, which has not started, and unmaps the
+    ++  rest.
+      - **Start and end.** `entry!(run)` receives the startup page's address from the loader stub,
+        parses the block, and calls `run`; its return value is the exit code. A block that does not
+        parse exits with `BAD_STARTUP`. A panic prints its message once on `/dev/cons`, if the program
+    @@ libs/rt/fake/src/lib.rs: struct Process {
+          /// The most pages mapped at once since [`Fake::held_peak`] last read it.
+          peak: usize,
+      }
+    +@@ libs/rt/fake/src/lib.rs: impl Process {
+    +     }
+    + 
+    +     fn held(&self) -> usize { self.mappings.values().map(|len| len / PAGE_SIZE).sum() }
+    ++
+    ++    /// Takes `addr..addr + len` out of the one mapping that holds it, as the kernel unmaps or moves
+    ++    /// any part of a mapping: what is left of it on either side stays mapped, each part a mapping
+    ++    /// of its own. The holding mapping's start and length, or `None` if no one mapping holds it.
+    ++    fn carve(&mut self, addr: usize, len: usize) -> Option<(usize, usize)> {
+    ++        let (&at, &whole) = self.mappings.iter().find(|&(&a, &l)| a <= addr && addr + len <= a + l)?;
+    ++        self.mappings.remove(&at);
+    ++        if addr > at {
+    ++            self.mappings.insert(at, addr - at);
+    ++        }
+    ++        if addr + len < at + whole {
+    ++            self.mappings.insert(addr + len, at + whole - addr - len);
+    ++        }
+    ++        Some((at, whole))
+    ++    }
+    ++
+    ++    /// Whether one mapping holds all of `addr..addr + len`.
+    ++    fn holds(&self, addr: usize, len: usize) -> bool {
+    ++        self.mappings.iter().any(|(&a, &l)| a <= addr && addr + len <= a + l)
+    ++    }
+    + }
+    + 
+    + struct Pending {
+     @@ libs/rt/fake/src/lib.rs: struct State {
+          /// The pointer `MapAnon` or `device` allocated at each address, so memory nothing frees (a
+          /// heap's pages, a device's registers) stays reachable from here and Miri does not report it
+    @@ libs/rt/fake/src/lib.rs: fn end(s: &mut State, index: usize, cause: Cause, code:
+     -    // transfer or lend of such a mapping), and its caller has just taken it out of its process's
+     -    // mappings, so it is freed only once.
+     -    unsafe { dealloc(addr as *mut u8, Layout::from_size_align(len, PAGE_SIZE).unwrap()) };
+    -+/// The pages of a process's placement area ([`Area`]), for a test that fills it.
+    -+pub const AREA_PAGES: usize = Area::PAGES;
+    -+
+     +/// A process's placement area, which its `MapAnon` searches as the kernel searches its own
+     +/// (kernel/memory.md, "Where `map_anon` puts pages"): first fit from the start of the run placed
+    -+/// last, then from the area's start, so that `MapFixed` can extend a run at the pages after it,
+    -+/// as the runtime does for a run longer than one range call may name
+    -+/// (`redoubt_rt::handle::map_anon`). One host allocation, made at the process's first `MapAnon`
+    -+/// and never freed (its pointer is kept in `State::anon`); a page is zeroed as it is mapped. The
+    -+/// processes share the host's address space, so a page of one's area is free to every process's
+    -+/// `MapFixed` until it is taken.
+    ++/// last, then from the area's start, so that `MapFixed` meets the pages `MapAnon` placed, as the
+    ++/// kernel's does. One anonymous host mapping, made at the process's first `MapAnon` and never
+    ++/// unmapped (its address is kept in `State::anon`); a page is zeroed as it is mapped. The processes
+    ++/// share the host's address space, so a page of one's area is free to every process's `MapFixed`
+    ++/// until it is taken.
+     +///
+     +/// Not under Miri, which checks each access to an allocation against every pointer and thread
+     +/// that touched it: one area shared by a test's every run made `rt-miri`'s
+     +/// `heap_over_map_anon` run past five minutes, against under a minute with an allocation a run.
+    -+/// There each `MapAnon` run is an allocation of its own, as it was before areas, so a run is never
+    -+/// extended and a test there maps at most a range at once.
+    ++/// There each `MapAnon` run is an allocation of its own, as it was before areas.
+     +#[derive(Default)]
+     +struct Area {
+     +    base: usize,
+    @@ libs/rt/fake/src/lib.rs: fn end(s: &mut State, index: usize, cause: Cause, code:
+     +
+     +    fn base(&mut self, anon: &mut HashMap<usize, AtomicPtr<u8>>) -> usize {
+     +        if self.base == 0 {
+    -+            let layout = Layout::from_size_align(Self::PAGES * PAGE_SIZE, PAGE_SIZE).unwrap();
+    -+            // SAFETY: the layout has a non-zero size; the allocation is never freed.
+    -+            let bytes = unsafe { alloc_zeroed(layout) };
+    -+            assert!(!bytes.is_null(), "the fake's placement area");
+    ++            // An anonymous mapping, whose pages the host zeroes as they are first touched:
+    ++            // `alloc_zeroed` at a page's alignment writes the whole area at once, 64 MiB a
+    ++            // process, which slowed the timed tests beside it.
+    ++            // SAFETY (host test code only): a fresh private mapping at an address the host
+    ++            // chooses, replacing nothing; never unmapped.
+    ++            let bytes = unsafe {
+    ++                libc::mmap(
+    ++                    std::ptr::null_mut(),
+    ++                    Self::PAGES * PAGE_SIZE,
+    ++                    libc::PROT_READ | libc::PROT_WRITE,
+    ++                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+    ++                    -1,
+    ++                    0,
+    ++                )
+    ++            };
+    ++            assert!(bytes != libc::MAP_FAILED, "the fake's placement area");
+    ++            let bytes = bytes as *mut u8;
+     +            anon.insert(bytes as usize, AtomicPtr::new(bytes));
+     +            self.base = bytes as usize;
+     +            self.taken = vec![false; Self::PAGES];
+    @@ libs/rt/fake/src/lib.rs: fn end(s: &mut State, index: usize, cause: Cause, code:
+     +    Ok(None)
+     +}
+     +
+    -+/// Frees a mapping this kernel made, which its process no longer holds: pages of an area go back
+    ++/// Frees pages this kernel mapped, which their process no longer holds: pages of an area go back
+     +/// to it (a lend or transfer of a `MapAnon` run is still its area's); under Miri, a `MapAnon` run's
+    -+/// own allocation is freed ([`Area`]).
+    -+fn free(s: &mut State, addr: usize, len: usize) {
+    ++/// own allocation is freed when `whole`, the run given up as it was mapped ([`Area`]); a part of
+    ++/// one is not, and no test there gives up a part.
+    ++fn free(s: &mut State, addr: usize, len: usize, whole: bool) {
+     +    if let Ok(Some((area, first))) = area_of(s, addr, len) {
+     +        area.taken[first..first + len / PAGE_SIZE].fill(false);
+    -+    } else if cfg!(miri) && s.anon.remove(&addr).is_some() {
+    ++    } else if cfg!(miri) && whole && s.anon.remove(&addr).is_some() {
+     +        // SAFETY: under Miri `MapAnon` made `addr` with `alloc_zeroed` and exactly this layout, and
+     +        // its caller has just taken it out of its process's mappings, so it is freed once.
+     +        unsafe { dealloc(addr as *mut u8, Layout::from_size_align(len, PAGE_SIZE).unwrap()) };
+    @@ libs/rt/fake/src/lib.rs: unsafe impl redoubt_rt::Transport for Fake {
+     -                if addr == 0 {
+     -                    return Err(Error::OutOfMemory);
+     -                }
+    -+                range_cap(len)?;
+                      let mut s = self.lock();
+     +                if cfg!(miri) {
+     +                    let layout = Layout::from_size_align(len, PAGE_SIZE).map_err(|_| Error::OutOfMemory)?;
+    @@ libs/rt/fake/src/lib.rs: unsafe impl redoubt_rt::Transport for Fake {
+                      Ok(Return::Nothing)
+                  }
+                  Call::Unmap { addr, len } => {
+    ++                if len == 0 || addr % PAGE_SIZE != 0 || len % PAGE_SIZE != 0 {
+    ++                    return Err(Error::InvalidArgument);
+    ++                }
+     +                range_cap(len)?;
+                      let mut s = self.lock();
+    -                 if s.processes[pid].mappings.get(&addr) != Some(&len) {
+    +-                if s.processes[pid].mappings.get(&addr) != Some(&len) {
+    ++                if !s.processes[pid].holds(addr, len) {
+                          return Err(Error::InvalidArgument);
+    -@@ libs/rt/fake/src/lib.rs: unsafe impl redoubt_rt::Transport for Fake {
+    -                     // `addr`, which its process has just given up, so they are unmapped once.
+    +                 }
+    +                 not_given_up(&s, pid, addr, len)?;
+    +-                s.processes[pid].mappings.remove(&addr);
+    +-                if s.fixed.remove(&addr) {
+    +-                    // SAFETY (host test code only): `MapFixed` above mapped exactly `len` bytes at
+    +-                    // `addr`, which its process has just given up, so they are unmapped once.
+    ++                let (at, whole) = s.processes[pid].carve(addr, len).expect("held, checked just above");
+    ++                if s.fixed.remove(&at) {
+    ++                    // What is left of the host mapping on either side is still `MapFixed`'s.
+    ++                    s.fixed.extend((addr > at).then_some(at));
+    ++                    s.fixed.extend((addr + len < at + whole).then_some(addr + len));
+    ++                    // SAFETY (host test code only): `MapFixed` above mapped `at..at + whole`, of
+    ++                    // which its process has just given up `addr..addr + len`, so those pages are
+    ++                    // unmapped once.
+                          unsafe { libc::munmap(addr as *mut libc::c_void, len) };
+                      } else {
+     -                    free(addr, len);
+    -+                    free(&mut s, addr, len);
+    ++                    free(&mut s, addr, len, (at, whole) == (addr, len));
+                      }
+                      Ok(Return::Nothing)
+                  }
+    @@ libs/rt/fake/src/lib.rs: unsafe impl redoubt_rt::Transport for Fake {
+                      if let Some(Some((addr, len))) = abandoned {
+                          s.processes[pid].mappings.remove(&addr);
+     -                    free(addr, len);
+    -+                    free(&mut s, addr, len);
+    ++                    free(&mut s, addr, len, true);
+                      }
+                      let delivered = abandoned.is_none();
+                      let installed = if delivered { (1 << handles.len()) - 1 } else { 0 };
+    @@ libs/rt/fake/src/lib.rs: unsafe impl redoubt_rt::Transport for Fake {
+                      let Object::Process(index) = lookup(&s, pid, process)? else {
+                          return Err(Error::WrongObject);
+     @@ libs/rt/fake/src/lib.rs: unsafe impl redoubt_rt::Transport for Fake {
+    -                 // SAFETY: `src..src + len` is a whole mapping this kernel made for `pid` (checked
+    +                 if s.launched[index].start.is_some() {
+    +                     return Err(Error::NotPermitted);
+    +                 }
+    +-                if s.processes[pid].mappings.get(&src) != Some(&len) {
+    ++                if len == 0
+    ++                    || src % PAGE_SIZE != 0
+    ++                    || len % PAGE_SIZE != 0
+    ++                    || !s.processes[pid].holds(src, len)
+    ++                {
+    +                     return Err(Error::InvalidArgument);
+    +                 }
+    +                 not_given_up(&s, pid, src, len)?;
+    +-                s.processes[pid].mappings.remove(&src);
+    +-                // SAFETY: `src..src + len` is a whole mapping this kernel made for `pid` (checked
+    ++                let (at, whole) = s.processes[pid].carve(src, len).expect("held, checked just above");
+    ++                // SAFETY: `src..src + len` lies in a mapping this kernel made for `pid` (checked
+                      // just above) and has just left its table, so nothing else reads or frees it.
+                      let bytes = unsafe { std::slice::from_raw_parts(src as *const u8, len) }.to_vec();
+     -                free(src, len);
+    -+                free(&mut s, src, len);
+    ++                free(&mut s, src, len, (at, whole) == (src, len));
+                      s.launched[index].maps.push((dst, flags, bytes));
+                      Ok(Return::Nothing)
+                  }
+     
+      ## libs/rt/src/handle.rs ##
+     @@
+    - //! a confusion. Handles are not closed on drop: a server keeps them in tables and hands out
+    - //! copies, and an implicit close would be an easy use-after-close. Close them with `close`.
+      
+    -+use core::sync::atomic::{AtomicBool, Ordering};
+    -+
+      use redoubt_sys::{
+    --    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, Hold, MAX_START_HANDLES, MemFlags,
+    +     BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, Hold, MAX_START_HANDLES, MemFlags,
+     -    PAGE_SIZE, ResetKind, Return, USAGE_SLOTS, Usage,
+    -+    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, Hold, MAX_RANGE_PAGES, MAX_START_HANDLES,
+    -+    MemFlags, PAGE_SIZE, ResetKind, Return, USAGE_SLOTS, Usage, range_chunks,
+    ++    PAGE_SIZE, ResetKind, Return, USAGE_SLOTS, Usage, range_chunks,
+      };
+      
+      use crate::ipc::Buffer;
+    -@@ libs/rt/src/handle.rs: fn addr(result: Result<Return, Error>) -> Result<usize, Error> {
+    -     }
+    - }
+    - 
+    --/// Maps `len` bytes (whole pages) of zeroed memory; returns its address.
+    -+/// The bytes one range call may name: `MAX_RANGE_PAGES` pages (kernel/memory.md, R22). A longer
+    -+/// range is the runtime's to split, a range at a time ([`range_chunks`]).
+    -+const RANGE: usize = MAX_RANGE_PAGES * PAGE_SIZE;
+    -+
+    -+/// Maps `len` bytes (whole pages) of zeroed memory; returns its address. One run, wherever its
+    -+/// length: a run longer than one range call may name ([`RANGE`]) is placed by the kernel's
+    -+/// `map_anon` of its first range and extended by `map_fixed` of the ranges after it
+    -+/// (kernel/memory.md, R22). The kernel places that first range in the first gap from its rover
+    -+/// that a range fits, which may be too short for the run (a page after it taken, or the placement
+    -+/// area's end, where the thread-stack area begins: [`crate::thread::STACKS_BASE`]). What the run
+    -+/// took of that gap is then kept as a filler, so that the next search, starting at its first page,
+    -+/// passes the whole gap, and is given back as soon as the next first range is placed: so the run
+    -+/// lands in the first gap from the rover that holds it, the kernel's own answer, each gap is
+    -+/// probed once, and the call holds at most `len` and one range of pages at once. A budget within
+    -+/// a range of its limit may so find `OutOfMemory` though the run alone would fit it. The search
+    -+/// ends as the kernel's one pass does: once the first ranges' addresses have wrapped (one below
+    -+/// the one before), one at or past the first's means no gap holds the run, `OutOfMemory`, with
+    -+/// nothing left mapped.
+    -+///
+    -+/// The process's every `map_anon` through the runtime takes one lock ([`Placing`]), the heap's and
+    -+/// a [`crate::ipc::Buffer`]'s alike, so no other placement moves the kernel's rover under a
+    -+/// search; a program on the runtime makes no `map_anon` of its own.
+    - pub fn map_anon(len: usize, flags: MemFlags) -> Result<usize, Error> {
+    --    addr(syscall(&Call::MapAnon { len, flags }))
+    -+    let _placing = Placing::take();
+    -+    if len <= RANGE || len % PAGE_SIZE != 0 {
+    -+        return addr(syscall(&Call::MapAnon { len, flags }));
+    -+    }
+    -+    let mut filler = None;
+    -+    let placed = place(len, flags, &mut filler);
+    -+    if let Some((at, n)) = filler {
+    -+        let _ = unmap(at, n);
+    -+    }
+    -+    placed
+    -+}
+    -+
+    -+/// The lock every [`map_anon`] of the process holds for its whole search.
+    -+struct Placing;
+    -+
+    -+static PLACING: AtomicBool = AtomicBool::new(false);
+    -+
+    -+impl Placing {
+    -+    fn take() -> Placing {
+    -+        while PLACING.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+    -+            core::hint::spin_loop();
+    -+        }
+    -+        Placing
+    -+    }
+    -+}
+    -+
+    -+impl Drop for Placing {
+    -+    fn drop(&mut self) { PLACING.store(false, Ordering::Release); }
+    -+}
+    -+
+    -+/// [`map_anon`]'s search for a run of `len` bytes, longer than a range: `filler` holds what the
+    -+/// run took of the last gap found too short, `(address, length)`, for the caller to give back.
+    -+fn place(len: usize, flags: MemFlags, filler: &mut Option<(usize, usize)>) -> Result<usize, Error> {
+    -+    let (mut origin, mut last, mut wrapped) = (None, 0, false);
+    -+    loop {
+    -+        let first = addr(syscall(&Call::MapAnon { len: RANGE, flags }))?;
+    -+        if let Some((at, n)) = filler.take() {
+    -+            let _ = unmap(at, n);
+    -+        }
+    -+        wrapped |= origin.is_some() && first < last;
+    -+        if wrapped && origin.is_some_and(|o| first >= o) {
+    -+            let _ = unmap(first, RANGE);
+    -+            return Err(Error::OutOfMemory);
+    -+        }
+    -+        origin.get_or_insert(first);
+    -+        last = first;
+    -+        // The gap ends at a page taken or at the placement area's end.
+    -+        let area_end = crate::thread::STACKS_BASE;
+    -+        let limit = if first < area_end { len.min(area_end - first) } else { len };
+    -+        let mut done = RANGE;
+    -+        while done < limit {
+    -+            let n = (limit - done).min(RANGE);
+    -+            match nothing(syscall(&Call::MapFixed { addr: first + done, len: n, flags })) {
+    -+                Ok(()) => done += n,
+    -+                Err(Error::InvalidArgument) => break,
+    -+                Err(e) => {
+    -+                    let _ = unmap(first, done);
+    -+                    return Err(e);
+    -+                }
+    -+            }
+    -+        }
+    -+        if done == len {
+    -+            return Ok(first);
+    -+        }
+    -+        *filler = Some((first, done));
+    -+    }
+    - }
+    +@@ libs/rt/src/handle.rs: pub fn map_anon(len: usize, flags: MemFlags) -> Result<usize, Error> {
+      
+      /// Maps `len` bytes (whole pages) of zeroed memory at exactly `addr`, which the kernel refuses
+      /// (`InvalidArgument`, nothing mapped) if any page of the range is taken (kernel/memory.md,
+    @@ libs/rt/src/handle.rs: fn addr(result: Result<Return, Error>) -> Result<usize, E
+     -/// stack above its guard page, and the pages are adopted by a [`Buffer`] at once. Public, it
+     -/// would let a program fill the thread-stack area under the runtime's placement.
+     +/// `map_fixed`). A range at a time ([`range_chunks`]): a refused range unmaps those before it, so
+    -+/// the call maps all of `len` or none of it. The runtime's own: [`crate::thread::spawn`] calls it
+    -+/// to place a thread's stack above its guard page, and [`map_anon`] to extend a run, and the pages
+    -+/// are adopted by a [`Buffer`] at once. Public, it would let a program fill the thread-stack area
+    -+/// under the runtime's placement.
+    ++/// the call maps all of `len` or none of it. The runtime's own: only [`crate::thread::spawn`]
+    ++/// calls it, to place a thread's stack above its guard page, and the pages are adopted by a
+    ++/// [`Buffer`] at once. Public, it would let a program fill the thread-stack area under the
+    ++/// runtime's placement.
+      pub(crate) fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+     -    nothing(syscall(&Call::MapFixed { addr, len, flags }))
+     +    for (at, n) in range_chunks(addr, len) {
+    @@ libs/rt/src/handle.rs: impl Process {
+     -    /// takes the pages by their owner, so no other view of them is left behind; refused, they
+     -    /// are unmapped here.
+     +    /// takes the pages by their owner, so no other view of them is left behind. A range at a time
+    -+    /// ([`RANGE`]): refused, the pages not yet moved are unmapped here, and those moved before
+    ++    /// ([`range_chunks`]): refused, the pages not yet moved are unmapped here, and those moved before
+     +    /// stay in the child, which has not started, as a refused later `map` leaves the earlier.
+          pub fn map(&self, pages: Buffer, dst: usize, flags: MemFlags) -> Result<(), Error> {
+              let len = pages.npages() * PAGE_SIZE;
+    @@ libs/rt/src/lib.rs: pub mod abi {
+      }
+      pub use redoubt_wire as wire;
+     
+    - ## libs/rt/tests/ranges.rs (new) ##
+    -@@
+    -+//! A range call names at most `MAX_RANGE_PAGES` pages (kernel/memory.md, R22), and the runtime
+    -+//! splits a longer one: `map_anon` of a long run maps its first range and extends it with
+    -+//! `map_fixed`, keeping what it took of a gap too short for the run as a filler while its search
+    -+//! goes on, so each gap is probed once, and ends where the kernel's one pass would; unmapping gives a run
+    -+//! back a range at a time. The fake kernel refuses a longer range as the kernel does and searches each
+    -+//! process's own area as the kernel searches it; raw `map_fixed` calls, which leave the search's
+    -+//! start where it was, make the gaps, and its refusals stand in for a page another mapping takes.
+    -+
+    -+use redoubt_fake_kernel::{AREA_PAGES, Fake, fake};
+    -+use redoubt_rt::Transport;
+    -+use redoubt_rt::abi::{Call, Error, MAX_RANGE_PAGES, MemFlags, PAGE_SIZE};
+    -+use redoubt_rt::handle::map_anon;
+    -+use redoubt_rt::ipc::Buffer;
+    -+
+    -+const RANGE: usize = MAX_RANGE_PAGES * PAGE_SIZE;
+    -+
+    -+/// Pages of a run longer than two ranges: two whole ranges and part of a third.
+    -+const RUN: usize = 2 * MAX_RANGE_PAGES + 8;
+    -+
+    -+fn rw() -> MemFlags { MemFlags::READ | MemFlags::WRITE }
+    -+
+    -+fn pages(n: usize) -> usize { n * PAGE_SIZE }
+    -+
+    -+/// `(address, length)` of the ranges a run of `n` pages at `at` is mapped as.
+    -+fn ranges(at: usize, n: usize) -> Vec<(usize, usize)> {
+    -+    (0..pages(n)).step_by(RANGE).map(|done| (at + done, (pages(n) - done).min(RANGE))).collect()
+    -+}
+    -+
+    -+/// A raw `map_fixed` of `n` pages at `at`, as the running process, a range at most.
+    -+fn pin(f: &Fake, at: usize, n: usize) {
+    -+    f.call(&Call::MapFixed { addr: at, len: pages(n), flags: rw() }).unwrap();
+    -+}
+    -+
+    -+fn unpin(f: &Fake, at: usize, n: usize) { f.call(&Call::Unmap { addr: at, len: pages(n) }).unwrap(); }
+    -+
+    -+/// The process's area, its first page mapped (the search's start there), and every page from
+    -+/// `from` to `to` pinned a range at a time; the area's start.
+    -+fn area(f: &Fake, from: usize, to: usize) -> usize {
+    -+    let base = map_anon(PAGE_SIZE, rw()).unwrap();
+    -+    for at in (from..to).step_by(MAX_RANGE_PAGES) {
+    -+        pin(f, base + pages(at), MAX_RANGE_PAGES.min(to - at));
+    -+    }
+    -+    base
+    -+}
+    -+
+    -+/// The `map_anon` calls `pid` made from its `skip`th call on.
+    -+fn searches(f: &Fake, pid: usize, skip: usize) -> usize {
+    -+    f.calls(pid)[skip..].iter().filter(|c| **c == "map_anon").count()
+    -+}
+    -+
+    -+#[test]
+    -+fn a_long_run_is_one_run_mapped_a_range_at_a_time() {
+    -+    let f = fake();
+    -+    let pid = f.process(1001, &[]);
+    -+    f.as_process(pid, || {
+    -+        let mut run = Buffer::new(RUN).unwrap();
+    -+        let at = run.as_ptr() as usize;
+    -+        assert_eq!(f.mappings(pid), ranges(at, RUN));
+    -+        assert_eq!(f.calls(pid), ["map_anon", "map_fixed", "map_fixed"]);
+    -+        assert!(run.iter().all(|b| *b == 0), "every page zeroed");
+    -+        run[pages(RUN) - 1] = 7;
+    -+        drop(run);
+    -+        assert_eq!(f.mappings(pid), [], "unmapped whole");
+    -+        assert_eq!(&f.calls(pid)[3..], ["unmap", "unmap", "unmap"]);
+    -+    });
+    -+}
+    -+
+    -+#[test]
+    -+fn a_run_lands_in_the_first_gap_from_the_search_s_start_that_holds_it() {
+    -+    let f = fake();
+    -+    let pid = f.process(1002, &[]);
+    -+    f.as_process(pid, || {
+    -+        // A gap of 20 pages after the first, then the rest of the area free.
+    -+        let base = area(f, 21, 22);
+    -+        let held = f.held(pid).1;
+    -+        f.held_peak(pid);
+    -+        let at = map_anon(pages(RUN), rw()).unwrap();
+    -+        assert_eq!(at, base + pages(22), "past the short gap");
+    -+        assert_eq!(
+    -+            f.mappings(pid).into_iter().filter(|(a, _)| *a >= at).collect::<Vec<_>>(),
+    -+            ranges(at, RUN)
+    -+        );
+    -+        assert!(f.held_peak(pid) <= held + RUN + MAX_RANGE_PAGES, "at most the run and one range");
+    -+        assert_eq!(f.held(pid).1, held + RUN, "the filler given back");
+    -+    });
+    -+}
+    -+
+    -+#[test]
+    -+fn a_gap_longer_than_two_ranges_but_short_of_the_run_is_probed_once() {
+    -+    let f = fake();
+    -+    let pid = f.process(1008, &[]);
+    -+    f.as_process(pid, || {
+    -+        // A gap of 39 pages after the first, then the rest of the area free: the run fills two
+    -+        // ranges of it and finds the 40th page taken. The filler keeps all it took, so the next
+    -+        // search passes the whole gap, not one range of it.
+    -+        let base = area(f, 40, 41);
+    -+        let (held, calls) = (f.held(pid).1, f.calls(pid).len());
+    -+        f.held_peak(pid);
+    -+        assert_eq!(map_anon(pages(RUN), rw()), Ok(base + pages(41)));
+    -+        assert_eq!(searches(f, pid, calls), 2, "the gap, then past it");
+    -+        assert!(f.held_peak(pid) <= held + RUN + MAX_RANGE_PAGES, "at most the run and one range");
+    -+        assert_eq!(f.held(pid).1, held + RUN, "the filler given back");
+    -+    });
+    -+}
+    -+
+    -+#[test]
+    -+fn a_run_before_the_search_s_start_is_found_after_the_wrap() {
+    -+    let f = fake();
+    -+    let pid = f.process(1003, &[]);
+    -+    f.as_process(pid, || {
+    -+        // All but the area's last 20 pages pinned, a page placed there (the search's start now),
+    -+        // then the first three ranges after the area's first page given back: the only gap that
+    -+        // holds the run lies before the search's start, and the one after it is too short.
+    -+        let base = area(f, 1, AREA_PAGES - 20);
+    -+        let late = map_anon(PAGE_SIZE, rw()).unwrap();
+    -+        assert_eq!(late, base + pages(AREA_PAGES - 20));
+    -+        for at in [1, 17, 33] {
+    -+            unpin(f, base + pages(at), MAX_RANGE_PAGES);
+    -+        }
+    -+        let held = f.held(pid).1;
+    -+        f.held_peak(pid);
+    -+        assert_eq!(map_anon(pages(RUN), rw()), Ok(base + pages(1)));
+    -+        assert!(f.held_peak(pid) <= held + RUN + MAX_RANGE_PAGES, "at most the run and one range");
+    -+        assert_eq!(f.held(pid).1, held + RUN, "the filler given back");
+    -+    });
+    -+}
+    -+
+    -+#[test]
+    -+fn a_run_no_gap_holds_is_out_of_memory_after_one_pass() {
+    -+    let f = fake();
+    -+    let pid = f.process(1004, &[]);
+    -+    f.as_process(pid, || {
+    -+        // As above, but the gap before the search's start holds one range only: the search tries
+    -+        // the gap after its start, wraps to the one before, and finds the first again.
+    -+        let base = area(f, 1, AREA_PAGES - 20);
+    -+        map_anon(PAGE_SIZE, rw()).unwrap();
+    -+        unpin(f, base + pages(1), MAX_RANGE_PAGES);
+    -+        let before = f.mappings(pid);
+    -+        let (held, calls) = (f.held(pid).1, f.calls(pid).len());
+    -+        f.held_peak(pid);
+    -+        assert_eq!(map_anon(pages(RUN), rw()), Err(Error::OutOfMemory));
+    -+        assert_eq!(f.mappings(pid), before, "nothing left mapped");
+    -+        assert!(f.held_peak(pid) <= held + RUN + MAX_RANGE_PAGES, "at most the run and one range");
+    -+        assert_eq!(searches(f, pid, calls), 3, "one pass, then the first gap again");
+    -+    });
+    -+}
+    -+
+    -+#[test]
+    -+fn a_page_taken_meanwhile_is_a_gap_and_the_search_goes_on() {
+    -+    let f = fake();
+    -+    let pid = f.process(1005, &[]);
+    -+    // The run's third range finds a page taken, as a mapping made in the moment would: the gap
+    -+    // holds two ranges, not the run, and both are the filler, given back a range at a time.
+    -+    f.refuse_after(pid, "map_fixed", 1, Error::InvalidArgument);
+    -+    f.as_process(pid, || {
+    -+        let at = map_anon(pages(RUN), rw()).unwrap();
+    -+        assert_eq!(f.mappings(pid), ranges(at, RUN), "the filler given back");
+    -+        assert_eq!(
+    -+            f.calls(pid),
+    -+            ["map_anon", "map_fixed", "map_fixed", "map_anon", "unmap", "unmap", "map_fixed", "map_fixed"]
+    -+        );
+    -+    });
+    -+}
+    -+
+    -+#[test]
+    -+fn a_run_the_budget_cannot_hold_leaves_nothing_mapped() {
+    -+    let f = fake();
+    -+    let pid = f.process(1006, &[]);
+    -+    f.refuse_after(pid, "map_fixed", 1, Error::OutOfMemory);
+    -+    f.as_process(pid, || {
+    -+        assert_eq!(map_anon(pages(RUN), rw()), Err(Error::OutOfMemory));
+    -+        assert_eq!(f.mappings(pid), []);
+    -+    });
+    -+}
+    -+
+    -+#[test]
+    -+fn a_run_of_one_range_is_one_call() {
+    -+    let f = fake();
+    -+    let pid = f.process(1007, &[]);
+    -+    f.as_process(pid, || {
+    -+        let one = map_anon(RANGE, rw()).unwrap();
+    -+        assert_eq!(f.mappings(pid), [(one, RANGE)]);
+    -+        assert_eq!(f.calls(pid), ["map_anon"]);
+    -+    });
+    -+}
+    -
+      ## libs/sys/src/lib.rs ##
+     @@ libs/sys/src/lib.rs: pub const WORDS: usize = 4;
+      pub const MAX_MSG_HANDLES: usize = 4;
+    @@ tests/size-budget.toml: max_lines = 1142
+      name = "libs/rt"
+      paths = ["libs/rt/src"]
+     -max_lines = 4130
+    -+max_lines = 4202
+    ++max_lines = 4144
+      
+      [[crate]]
+      name = "libs/wire"
+2:  31a8f59d2 = 2:  172b247a4 stub: a segment is mapped, protected and unmapped a range at a time
+3:  b641cb2fd ! 3:  f0db7e809 model: a range over MAX_RANGE_PAGES is TooLarge, after its shape and before any walk
+    @@ Commit message
+         model: a range over MAX_RANGE_PAGES is TooLarge, after its shape and before any walk
+     
+         The model states the kernel's rules independently, so it takes the
+    -    range cap as the kernel will. Each of the five range calls refuses a
+    -    range over MAX_RANGE_PAGES pages with TooLarge, after the range's shape
+    -    and before its flags, its source and its budget. A ghost check fires
+    -    whenever a range call's first walk covers more pages than the cap,
+    -    whatever let the call through. The mutation that ignores the cap is
+    -    caught by that check.
+    +    range cap as the kernel will. map_fixed, unmap, set_flags and
+    +    process_map refuse a range over MAX_RANGE_PAGES pages with TooLarge,
+    +    after the range's shape and before its flags, its source and its
+    +    budget. A ghost check fires whenever a range call's first walk covers
+    +    more pages than the cap, whatever let the call through. The mutation
+    +    that ignores the cap is caught by that check.
+    +
+    +    map_anon's length is a run's, the one range argument that may exceed
+    +    the cap: the run is placed where all of it is free, as before the cap,
+    +    and only its first MAX_RANGE_PAGES pages are mapped, the rest left free
+    +    for the caller's map_fixed. A contract maps a long run past a gap at
+    +    the search's start that holds a range but not the run, and finds the
+    +    run's pages past the mapped range free; the mutation that searches for
+    +    the mapped range only fails it.
+     
+         The generator draws nothing new: a length it already draws is refused
+         over the cap, which is the contract. Tests that filled an area or a
+         budget in one long map_fixed now fill it a range at a time.
+     
+    -    Size budget: model: the range cap in the contracts and its ghost check (R22)
+    +    Size budget: model: the range cap in the contracts and its ghost check, and map_anon's run placed whole and mapped a range at most (R22)
+     
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+     
+    @@ docs/kernel/model.md: A **mutation** is one deliberate break planted in the mode
+      more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
+      `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
+     -`Mutation::ALL` lists all 179 variants. `Mutation::rule()` returns the ID each one breaks, as in
+    -+`Mutation::ALL` lists all 180 variants. `Mutation::rule()` returns the ID each one breaks, as in
+    ++`Mutation::ALL` lists all 181 variants. `Mutation::rule()` returns the ID each one breaks, as in
+      the table below; the steward's variants, named `Policy...`, break the server rules the steward
+      model checks. Each of those but four is one broken entry of the core's `Policy` table
+      (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
+    @@ docs/kernel/model.md: model's embedder: its entropy, its admission, a volume's w
+      | [R20 (PID reuse)](processes.md#r20-pid-reuse) | `R20NoticePidReused` | no PID reused while a notice names it |
+      | [R21 (crash blame)](processes.md#r21-crash-blame) | `BlameNobody`, `BlameNewestCall`, `ExitWithOpenCallsNotFaulted`, `CurrentNeverSet`, `ReceiveKeepsCurrent`, `ServeIgnored`, `ExitEndpointBadged`, `ExitNoticeDroppedIfNoReceiver` | blaming the current call's sender; how `receive` and `serve` set the current call; a badge-0 exit endpoint; a notice kept until received |
+     -| [R22 (range cost)](memory.md#r22-range-cost) | `R22MapFixedWalksFirst` | `map_fixed`'s pages refused by arithmetic before any walk |
+    -+| [R22 (range cost)](memory.md#r22-range-cost) | `R22MapFixedWalksFirst`, `R22RangeCapIgnored` | `map_fixed`'s pages refused by arithmetic before any walk; a range of at most `MAX_RANGE_PAGES` pages, a longer one refused before any walk |
+    ++| [R22 (range cost)](memory.md#r22-range-cost) | `R22MapFixedWalksFirst`, `R22RangeCapIgnored`, `R22MapAnonSearchesRange` | `map_fixed`'s pages refused by arithmetic before any walk; a range of at most `MAX_RANGE_PAGES` pages, a longer one refused before any walk; `map_anon` of a longer run placed where all of it is free, its first range alone mapped |
+      | [I3 (minted badges are non-zero and narrow)](invariants.md#i3-minted-badges-are-non-zero-and-narrow) | `MintFromUnservedMessage` | minting only from an open call of the caller's own thread |
+      | [I4 (only badge-0 handles receive)](invariants.md#i4-only-badge-0-handles-receive) | `ReceiveWithBadgedHandle` | `receive` through a minted handle |
+      | [I6 (labels only grow downward)](invariants.md#i6-labels-only-grow-downward) | `LabelsAddedByParentClass` | adding labels needs a system-class caller |
+    @@ model/src/kernel.rs: impl Kernel {
+          // Queries used by the generator, the trace and the property checks.
+      
+     @@ model/src/kernel.rs: impl Kernel {
+    +     /// "`dma_alloc`"), armed against `device` and every device the process has already mapped
+    +     /// (ghost, I16).
+    +     ///
+    +-    /// Each failure is `OutOfMemory`, in the kernel's order: `map_anon` places the run first and
+    +-    /// then pays for its pages; `dma_alloc` takes one of the device's `MAX_RUNS` runs, pays for the
+    +-    /// pages, and only then places them. Either then pays for the page tables.
+    +-    fn map_fresh(&mut self, pid: u64, n: u64, flags: u64, dma: Option<u64>) -> R<(u64, u64)> {
+    ++    /// Each failure is `OutOfMemory`, in the kernel's order: `map_anon` places a run of `run` pages
+    ++    /// first, of which it maps the first `n`, and then pays for those; `dma_alloc` takes one of the
+    ++    /// device's `MAX_RUNS` runs, pays for the pages, and only then places them. Either then pays
+    ++    /// for the page tables.
+    ++    fn map_fresh(&mut self, pid: u64, n: u64, run: u64, flags: u64, dma: Option<u64>) -> R<(u64, u64)> {
+    +         let oom = Error::OutOfMemory;
+    +         let b = self.budget_of(pid).ok_or(Error::Dead)?;
+    +         let start = match dma {
+    +             None => {
+    +-                let start = self.place(pid, n, Area::Default).ok_or(oom)?;
+    ++                let start = self.place(pid, run, Area::Default).ok_or(oom)?;
+    +                 if n > self.free_pages(b) {
+    +                     return Err(oom);
+    +                 }
+    +@@ model/src/kernel.rs: impl Kernel {
+    +         Ok((start * PAGE_SIZE, RAM_BASE + first * PAGE_SIZE))
+    +     }
+    + 
+    +-    /// `map_anon(len, flags) -> addr`: pages charged; not W+X; zeroed.
+    ++    /// `map_anon(len, flags) -> addr`: pages charged; not W+X; zeroed. `len` is a run's length, the
+    ++    /// one range argument that may exceed `MAX_RANGE_PAGES`: the run is placed where all of it is
+    ++    /// free, and its first `MAX_RANGE_PAGES` pages at most are mapped (R22), the rest left free for
+    ++    /// the caller's `map_fixed`.
+    +     pub fn map_anon(&mut self, pid: u64, len: u64, flags: u64) -> R<u64> {
+    +         decode_flags(flags, false)?;
+              if len == 0 || !len.is_multiple_of(PAGE_SIZE) {
+                  return Err(Error::InvalidArgument);
+              }
+    -+        self.range_cap(len / PAGE_SIZE)?;
+              check_flags(flags, false)?;
+    -+        self.range_walk(pid, len / PAGE_SIZE);
+    -         self.map_fresh(pid, len / PAGE_SIZE, flags, None).map(|x| x.0)
+    +-        self.map_fresh(pid, len / PAGE_SIZE, flags, None).map(|x| x.0)
+    ++        let run = len / PAGE_SIZE;
+    ++        let n = run.min(MAX_RANGE_PAGES);
+    ++        let search = if self.broken(Mutation::R22MapAnonSearchesRange) { n } else { run };
+    ++        self.range_walk(pid, n);
+    ++        self.map_fresh(pid, n, search, flags, None).map(|x| x.0)
+          }
+      
+    -@@ model/src/kernel.rs: impl Kernel {
+    +     /// `unmap(addr, len)`: own mapping; not currently lent. A DMA frame's mapping goes, but the
+          /// frame itself does not (held, and charged, until the process ends: kernel/devices.md).
+          pub fn unmap(&mut self, pid: u64, addr: u64, len: u64) -> R<()> {
+              let (first, n) = user_range(addr, len)?;
+    @@ model/src/kernel.rs: impl Kernel {
+              if !self.range_free(pid, first, n) && !self.broken(Mutation::R11MapFixedSkipsOverlap) {
+                  return Err(Error::InvalidArgument);
+              }
+    +@@ model/src/kernel.rs: impl Kernel {
+    +         if !dma {
+    +             return Err(Error::NotPermitted);
+    +         }
+    +-        let r = self.map_fresh(pid, npages, FLAG_R | FLAG_W, Some(d))?;
+    ++        let r = self.map_fresh(pid, npages, npages, FLAG_R | FLAG_W, Some(d))?;
+    +         self.ghost.flows.push(Flow::DeviceUsed { pid, device: d, quarantined });
+    +         Ok(r)
+    +     }
+     @@ model/src/kernel.rs: impl Kernel {
+              let child = self.lookup_process(pid, process)?;
+              let (s, n) = user_range(src, len)?;
+    @@ model/src/mutation.rs: pub enum Mutation {
+          R22MapFixedWalksFirst,
+     +    /// A range call takes a range of any length, not at most `MAX_RANGE_PAGES` pages.
+     +    R22RangeCapIgnored,
+    ++    /// `map_anon` of a run longer than a range searches for the range it maps, not the whole run.
+    ++    R22MapAnonSearchesRange,
+          /// Publishes no lend despite a supplied buffer.
+          IpcWrongLend,
+          /// Hides a committed partial reply behind its error.
+    @@ model/src/mutation.rs: pub enum Mutation {
+      
+      impl Mutation {
+     -    pub const ALL: [Mutation; 179] = {
+    -+    pub const ALL: [Mutation; 180] = {
+    ++    pub const ALL: [Mutation; 181] = {
+              use Mutation::*;
+              [
+                  R1SkipLabelCheck,
+    @@ model/src/mutation.rs: impl Mutation {
+                  R20NoticePidReused,
+                  R22MapFixedWalksFirst,
+     +            R22RangeCapIgnored,
+    ++            R22MapAnonSearchesRange,
+                  IpcWrongLend,
+                  IpcDropPartial,
+                  IpcFalseDelivery,
+    @@ model/src/mutation.rs: impl Mutation {
+                  R18DeviceByNumber | DeviceInfoWrongKind => "R18",
+                  R20NoticePidReused => "R20",
+     -            R22MapFixedWalksFirst => "R22",
+    -+            R22MapFixedWalksFirst | R22RangeCapIgnored => "R22",
+    ++            R22MapFixedWalksFirst | R22RangeCapIgnored | R22MapAnonSearchesRange => "R22",
+                  R12PriorityById
+                  | R12IgnoreWeight
+                  | R12WakeBanksCredit
+    @@ model/src/spec.rs: pub const MAX_MSG_HANDLES: usize = 4;
+      pub const MAX_HANDLES: u64 = 4096;
+      /// Pages in one lend.
+      pub const MAX_LEND_PAGES: u64 = 16;
+    -+/// Pages one range call may name (`map_anon`, `map_fixed`, `unmap`, `set_flags`,
+    -+/// `process_map`).
+    ++/// Pages one range call may name (`map_fixed`, `unmap`, `set_flags`, `process_map`), and the most
+    ++/// `map_anon` maps of the run it places.
+     +pub const MAX_RANGE_PAGES: u64 = 16;
+      /// Threads per process.
+      pub const MAX_THREADS: u64 = 255;
+    @@ model/tests/check_order.rs: fn a_device_has_32_dma_runs() {
+     +
+     +#[test]
+     +fn a_range_over_the_cap_is_too_large_before_any_other_check_but_its_shape() {
+    -+    // Each range call, one page over `MAX_RANGE_PAGES`, at an address nothing maps and with flags
+    -+    // 0: the size comes after the range's shape and before the flags, the source and the budget
+    -+    // (kernel/abi.md's rows, R22). At the cap, the same calls reach their next check.
+    ++    // Each range call but `map_anon`, one page over `MAX_RANGE_PAGES`, at an address nothing maps
+    ++    // and with flags 0: the size comes after the range's shape and before the flags, the source and
+    ++    // the budget (kernel/abi.md's rows, R22). At the cap, the same calls reach their next check.
+     +    let over = (MAX_RANGE_PAGES + 1) * PAGE_SIZE;
+     +    let at = MAX_RANGE_PAGES * PAGE_SIZE;
+     +    let calls = |len| {
+     +        [
+    -+            Syscall::MapAnon { len, flags: 0 },
+     +            Syscall::MapFixed { addr: 0x1000_0000, len, flags: 0 },
+     +            Syscall::Unmap { addr: 0x1000_0000, len },
+     +            Syscall::SetFlags { addr: 0x1000_0000, len, flags: 0 },
+    @@ model/tests/check_order.rs: fn a_device_has_32_dma_runs() {
+     +    assert_eq!(w.result(1, ragged).unwrap(), Err(Error::InvalidArgument));
+     +    // With the cap ignored, a range over it is walked: R22's ghost check sees it.
+     +    let mut w = World::new(Some(Mutation::R22RangeCapIgnored));
+    -+    let caught = w.result(1, calls(over)[2].clone()).expect_err("the walk is a violation");
+    ++    let caught = w.result(1, calls(over)[1].clone()).expect_err("the walk is a violation");
+     +    assert!(caught.contains("R22:"), "{caught}");
+     +}
+    ++
+    ++#[test]
+    ++fn map_anon_takes_a_run_longer_than_a_range_and_maps_one_range_of_it() {
+    ++    // `map_anon`'s length is a run's, the one range argument that may exceed the cap (R22): over it,
+    ++    // the call reaches its flags as at it, and with flags it maps the run's first range alone.
+    ++    let over = (MAX_RANGE_PAGES + 1) * PAGE_SIZE;
+    ++    let mut w = World::new(None);
+    ++    assert_eq!(w.result(1, Syscall::MapAnon { len: over, flags: 0 }).unwrap(), Err(Error::InvalidArgument));
+    ++    let at = addr(&mut w, Syscall::MapAnon { len: over, flags: FLAG_R | FLAG_W }).unwrap() / PAGE_SIZE;
+    ++    let mapped: Vec<u64> =
+    ++        w.k.processes[&1].space.range(at..at + MAX_RANGE_PAGES + 1).map(|(v, _)| *v).collect();
+    ++    assert_eq!(mapped, (at..at + MAX_RANGE_PAGES).collect::<Vec<_>>());
+    ++}
+    +
+    + ## model/tests/common/contracts.rs ##
+    +@@ model/tests/common/contracts.rs: pub fn swept_index_stays_dead(mutation: Option<Mutation>) -> Result<(), String>
+    +     expect(again == b.min(m), "closed, the lowest dead index is free again")?;
+    +     trace_roundtrip(&w, mutation)
+    + }
+    ++/// `map_anon` of a run longer than a range (kernel/memory.md, R22): it maps the run's first
+    ++/// `MAX_RANGE_PAGES` pages where the whole run fits, so at the call's end the run's pages past the
+    ++/// mapped range are free for the caller's `map_fixed`. A gap at the search's start that holds a
+    ++/// range but not the run is passed.
+    ++pub fn a_long_run_is_placed_whole(mutation: Option<Mutation>) -> Result<(), String> {
+    ++    let mut w = World::new(mutation);
+    ++    let rw = FLAG_R | FLAG_W;
+    ++    let addr = |r: Ret| match r {
+    ++        Ret::Addr(a) => Ok(a),
+    ++        r => Err(format!("expected an address, got {r:?}")),
+    ++    };
+    ++    // The search's start, a page; then a page taken 21 pages on: a gap of 20 pages after it.
+    ++    let base = addr(w.value(1, Syscall::MapAnon { len: PAGE_SIZE, flags: rw })?)?;
+    ++    w.value(1, Syscall::MapFixed { addr: base + 21 * PAGE_SIZE, len: PAGE_SIZE, flags: rw })?;
+    ++    let run = 2 * MAX_RANGE_PAGES;
+    ++    let at = addr(w.value(1, Syscall::MapAnon { len: run * PAGE_SIZE, flags: rw })?)? / PAGE_SIZE;
+    ++    let space = &w.k.processes[&1].space;
+    ++    expect(
+    ++        space.range(at..at + MAX_RANGE_PAGES).count() as u64 == MAX_RANGE_PAGES,
+    ++        "the first range mapped",
+    ++    )?;
+    ++    expect(space.range(at + MAX_RANGE_PAGES..at + run).next().is_none(), "the rest of the run free")?;
+    ++    trace_roundtrip(&w, mutation)
+    ++}
+    + /// `budget_reap` (kernel/budgets.md, R10): each call destroys one child of the budget, with
+    + /// everything below it, and says how many are left; the budget stays, and once the last child is
+    + /// gone its usage is what it was before the first carve (I10 per child). A child's handle reaps
+    +@@ model/tests/common/contracts.rs: pub fn ipc_contracts(mutation: Option<Mutation>) -> Result<(), String> {
+    +     bad_record_takes_nothing(mutation)?;
+    +     trace_roundtrip(&destruction_delivers_at_its_end(mutation)?, mutation)?;
+    +     reap_empties_and_keeps(mutation)?;
+    ++    a_long_run_is_placed_whole(mutation)?;
+    +     for taken in [false, true] {
+    +         let mut w = World::new(mutation);
+    +         let (ep, h, server) = w.setup()?;
+     
+      ## model/tests/map_fixed_contracts.rs ##
+     @@ model/tests/map_fixed_contracts.rs: fn map_fixed_near_user_top_does_not_starve_map_anon() {
+    @@ tests/size-budget.toml: max_lines = 1691
+      name = "model"
+      paths = ["model/src"]
+     -max_lines = 11496
+    -+max_lines = 11522
+    ++max_lines = 11526
+      
+      [[crate]]
+      name = "servers/keyd"
+4:  c7ccb88ae ! 4:  dcf2fbd45 kernel: no range call holds the kernel longer than about a slice
+    @@ Commit message
+         process's large map, unmap or load held every wake on its hart, and
+         every other hart's entry, for its whole length. A lease's loader stub
+         mapping beamlet's text in one call is a 39.8 ms section on rv32.
+    -    map_anon, map_fixed, unmap, set_flags and process_map now refuse a
+    -    range over MAX_RANGE_PAGES pages with TooLarge. The check is
+    -    arithmetic, after the range's shape and before any walk or charge, as
+    -    a lend past MAX_LEND_PAGES is refused.
+    +    map_fixed, unmap, set_flags and process_map now refuse a range over
+    +    MAX_RANGE_PAGES pages with TooLarge. The check is arithmetic, after
+    +    the range's shape and before any walk or charge, as a lend past
+    +    MAX_LEND_PAGES is refused.
+    +
+    +    map_anon's length is a run's. The kernel places the whole run by its
+    +    one search, as before the cap, and maps only its first MAX_RANGE_PAGES
+    +    pages; the runtime maps the rest with map_fixed under its placement
+    +    lock. A refused extension, a page taken meanwhile by a placement the
+    +    lock does not cover, gives back what it mapped and searches again,
+    +    until the runs placed wrap back to the first. Capping map_anon's
+    +    length instead, with the runtime probing each gap by mapping it, made
+    +    beamlet-heap-allocation take 47 s to past its bound on rv64, against
+    +    15 s: a growing buffer leaves gaps each shorter than its next request,
+    +    and the kernel's search skips them by reading page tables. The search
+    +    tries no more starts for a longer run, so this adds no new worst. The
+    +    fake kernel places and maps as the kernel does.
+     
+         The number is derived, not chosen. It is the largest power of two
+         whose worst section fits one slice on the slower width: a map_fixed
+    @@ Commit message
+         misses 40 ms on a kernel without the cap too.
+     
+         Three kernel costs a slice does not bound are stated, each with its
+    -    bound: destruction's, and these two. map_anon's placement search costs a walk a start, so a
+    -    process that pins a page in every few pages of its area can make a
+    -    refusal cost up to 114 ms. Under the cap the shortest refused search
+    -    is longer than the 15 ms wake target, and the driver's receive waits
+    -    behind one whole search in ticket order, so the two-hart contention
+    -    cases record their wake figures until the search is bounded. Their
+    -    hammers pin before the window and cover every driver sample, which
+    -    the cases check. A device owner's dma_alloc and map_device are linear
+    -    in their pages, up to the 1,024-page DMA pool, but only the manifest's
+    -    drivers make them, once at start, for a few constant pages.
+    +    bound: destruction's, and these two. map_anon's placement search
+    +    costs a walk a start, so a process that pins a page in every few pages
+    +    of its area can make a refusal cost up to 114 ms. Under the cap the
+    +    shortest refused search is longer than the 15 ms wake target, and the
+    +    driver's receive waits behind one whole search in ticket order, so the
+    +    two-hart contention cases record their wake figures until the search
+    +    is bounded. Their hammers pin before the window and cover every driver
+    +    sample, which the cases check. A device owner's dma_alloc and
+    +    map_device are linear in their pages, up to the 1,024-page DMA pool,
+    +    but only the manifest's drivers make them, once at start, for a few
+    +    constant pages.
+     
+    -    Size budget: kernel: the range cap (R22), a refusal by arithmetic and its five calls
+    -    Size budget: libs/sys: the five range calls' TooLarge rows (R22)
+    +    Size budget: kernel: the range cap (R22), a refusal by arithmetic and its four calls, and map_anon's run placed whole and mapped a range at most
+    +    Size budget: libs/sys: the four range calls' TooLarge rows (R22)
+    +    Size budget: libs/rt: map_anon's run placed by the kernel and extended a range at a time under its lock (R22)
+     
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+     
+    @@ docs/SECURITY.md: lines planned. Side channels cross every box and are listed be
+      | A freed frame is no process's and not free until it is zeroed, by the hart that freed it or by an allocation, one hart at a time, after every hart that could store to it has flushed; every free frame is zero | [R81 (frames in flight)](kernel/memory.md#r81-frames-in-flight) | `kernel/src/reclaim.rs`, `kernel/src/mem.rs`, `kernel/src/arch/riscv/irq.rs` | bench:smp-inflight-race, mutation:R81InFlightAllocatable, mutation:R81CommitUnzeroed | built, partly tested | QEMU drops stale translations at a hart's next `satp` write, so the order that keeps a stale store out is checked from the trace ([more](kernel/memory.md#r81-frames-in-flight)) |
+      | The kernel's own mappings are never writable and executable | [R19 (kernel W^X)](kernel/memory.md#r19-kernel-wx) | `loader/src/paging.rs`, `kernel/src/arch/riscv/mem.rs`, `libs/paging/src/lib.rs` | bench:kernel-wx | built, partly tested | The physmap maps every user frame writable for the kernel ([more](kernel/memory.md#residual-risks)) |
+     -| A range call costs what the page tables need and the budget can pay, never what the length asks | [R22 (range cost)](kernel/memory.md#r22-range-cost) | `kernel/src/mem.rs`, `kernel/src/arch/riscv/mem.rs` | bench:map-fixed-attack, bench:map-anon-search-bound, host:redoubt-model::huge_len_is_refused_promptly | built | `map_anon`'s search is bounded by its area, not by what is mapped: about 9.6 ms at worst ([more](kernel/memory.md#r22-range-cost)) |
+    -+| A range call holds the kernel at most about a slice: at most `MAX_RANGE_PAGES` pages, costing what the page tables need and the budget can pay, never what the length asks | [R22 (range cost)](kernel/memory.md#r22-range-cost) | `kernel/src/mem.rs`, `kernel/src/process.rs`, `kernel/src/arch/riscv/mem.rs` | bench:map-fixed-attack, bench:map-anon-search-bound, bench:sched-range-hammer, host:redoubt-model::huge_len_is_refused_promptly, host:redoubt-model::a_range_over_the_cap_is_too_large_before_any_other_check_but_its_shape, mutation:R22RangeCapIgnored | built | `map_anon`'s search is bounded by its area, not by what is mapped, but costs a walk a start: up to 114 ms in a checked build, at most about 27 ms within a lease's budget; a device owner's `dma_alloc` and `map_device` are linear in their pages, bounded by the 1,024-page DMA pool (about 48 ms on rv32), and made only by the manifest's drivers, once at start; `process_map` from untouched reservation pages, which only the loader's first process holds, takes 1.4 to 1.8 slices at the cap ([more](kernel/memory.md#r22-range-cost)) |
+    ++| A range call holds the kernel at most about a slice: at most `MAX_RANGE_PAGES` pages, costing what the page tables need and the budget can pay, never what the length asks | [R22 (range cost)](kernel/memory.md#r22-range-cost) | `kernel/src/mem.rs`, `kernel/src/process.rs`, `kernel/src/arch/riscv/mem.rs` | bench:map-fixed-attack, bench:map-anon-search-bound, bench:sched-range-hammer, host:redoubt-model::huge_len_is_refused_promptly, host:redoubt-model::a_range_over_the_cap_is_too_large_before_any_other_check_but_its_shape, host:redoubt-model::map_anon_takes_a_run_longer_than_a_range_and_maps_one_range_of_it, mutation:R22RangeCapIgnored, mutation:R22MapAnonSearchesRange | built | `map_anon`'s search is bounded by its area, not by what is mapped, but costs a walk a start: up to 114 ms in a checked build, at most about 27 ms within a lease's budget; a device owner's `dma_alloc` and `map_device` are linear in their pages, bounded by the 1,024-page DMA pool (about 48 ms on rv32), and made only by the manifest's drivers, once at start; `process_map` from untouched reservation pages, which only the loader's first process holds, takes 1.4 to 1.8 slices at the cap ([more](kernel/memory.md#r22-range-cost)) |
+      | The kernel keeps `sstatus.SUM` and `sstatus.MXR` clear | [R24 (SUM and MXR clear)](kernel/memory-layout.md#r24-sum-and-mxr-clear) | `kernel/src/arch/riscv/asm.rs`, `kernel/src/arch/riscv/mod.rs` | bench:sum-clear | built, partly tested | No probe covers `MXR` ([more](kernel/memory-layout.md#residual-risks)) |
+      | **Kernel: budgets, scheduling and time** | | | | | |
+      | Every kernel object is charged to one budget, and a charge over the limit fails before anything changes | [R6 (charging)](kernel/budgets.md#r6-charging) | `kernel/src/budget.rs` | bench:budget, bench:budget-mem-churn, bench:budget-table-attack, bench:map-fixed-tables, bench:page-table-reclaim, bench:pages-exhaustion, bench:redoubt-tight, bench:process-attack, bench:pid-pinning-attack, bench:thread-limit, mutation:R6ChargeAncestors, mutation:R6OwnPageChargedToItself, mutation:R6EndpointsFree, mutation:R6PageTablesFree, mutation:R6EmptyTableKept, mutation:R6OpenCallsFree, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6LendChargedOnce, mutation:R6RootPageUncounted, mutation:R6PidUncountedAtEnd | built, partly tested | An endpoint's page charge is attacked only in the model ([more](kernel/budgets.md#r6-charging)) |
+    @@ docs/kernel/abi.md: at 1.
+      | 10 | `Busy` | the sender's group already has `WAIT_CAP` (32) messages queued on the endpoint ([R2 (fair waiting)](ipc.md#r2-fair-waiting)) |
+      | 11 | `Refused` | the receiver's budget cannot pay for the message (R4) |
+     -| 12 | `TooLarge` | a count over its fixed limit: body handles, labels, the start list, a lend over `MAX_LEND_PAGES` (16), budget depth, `MAX_HANDLES` (4096) |
+    -+| 12 | `TooLarge` | a count over its fixed limit: body handles, labels, the start list, a lend over `MAX_LEND_PAGES` (16), a range over `MAX_RANGE_PAGES` (16), budget depth, `MAX_HANDLES` (4096) |
+    ++| 12 | `TooLarge` | a count over its fixed limit: body handles, labels, the start list, a lend over `MAX_LEND_PAGES` (16), a range over `MAX_RANGE_PAGES` (16) but `map_anon`'s run, budget depth, `MAX_HANDLES` (4096) |
+      | 13 | `Timeout` | a blocking call's timeout passed |
+      | 14 | `Dead` | the object the call needs is gone: its endpoint was destroyed, its server died, or the handle it came through, or one it names, was revoked and is a dead entry ([handles](objects.md#handles), I17 (a swept index stays dead until closed)) |
+      
+    @@ docs/kernel/abi.md: list, in order.
+     -| `map_anon` | flags: `InvalidArgument` | `InvalidArgument` (len 0 or not page-aligned), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (no room in the placement area; then each page and its page tables) |
+     -| `unmap` | - | `InvalidArgument` (range: len 0, not page-aligned, wraps, or past `USER_AREA_END`), `InvalidArgument` (a page that is not a live mapping of the caller's, is either side of a lend, or is RAM not credited to the caller; the whole range before any page goes) |
+     -| `set_flags` | flags: `InvalidArgument` | `InvalidArgument` (range), `InvalidArgument` (flags 0), `InvalidArgument` (a page not the caller's own mapping, as for `unmap`, or `EXECUTE` on a page of device registers or a `dma_alloc` page; the whole range before any page changes), `InvalidArgument` (W without R) |
+    -+| `map_anon` | flags: `InvalidArgument` | `InvalidArgument` (len 0 or not page-aligned), `TooLarge` (over `MAX_RANGE_PAGES`), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (no room in the placement area; then each page and its page tables) |
+    ++| `map_anon` | flags: `InvalidArgument` | `InvalidArgument` (len 0 or not page-aligned), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (no room in the placement area for the whole run; then each page of its first range and its page tables) |
+     +| `unmap` | - | `InvalidArgument` (range: len 0, not page-aligned, wraps, or past `USER_AREA_END`), `TooLarge` (over `MAX_RANGE_PAGES`), `InvalidArgument` (a page that is not a live mapping of the caller's, is either side of a lend, or is RAM not credited to the caller; the whole range before any page goes) |
+     +| `set_flags` | flags: `InvalidArgument` | `InvalidArgument` (range), `TooLarge` (over `MAX_RANGE_PAGES`), `InvalidArgument` (flags 0), `InvalidArgument` (a page not the caller's own mapping, as for `unmap`, or `EXECUTE` on a page of device registers or a `dma_alloc` page; the whole range before any page changes), `InvalidArgument` (W without R) |
+      | `map_device` | device: `BadHandle` | `BadHandle`, `WrongObject` (not an MMIO device), `OutOfMemory` (no room in the placement area, or the page tables) |
+    @@ docs/kernel/abi.md: record check and every later stage, whatever it then returns
+     -([R22 (range cost)](memory.md#r22-range-cost)).
+     +Every range call's length comes right after its range's shape: over `MAX_RANGE_PAGES` it is
+     +`TooLarge` by arithmetic, before any walk or charge, so no range call holds the kernel past its
+    -+worst section at the cap, about a slice. `map_fixed`'s order keeps its cost bounded within the
+    ++worst section at the cap, about a slice. `map_anon`'s length is a run's and is not refused for its
+    ++size: it searches for the whole run and maps at most its first `MAX_RANGE_PAGES` pages. `map_fixed`'s order keeps its cost bounded within the
+     +cap too: the charge for the pages alone comes before any walk, so pages the budget could never
+     +pay for are refused by arithmetic, and the overlap walk that follows skips page-table subtrees
+     +that are absent ([R22 (range cost)](memory.md#r22-range-cost)).
+    @@ docs/kernel/abi.md: record check and every later stage, whatever it then returns
+     
+      ## docs/kernel/memory.md ##
+     @@ docs/kernel/memory.md: by what the caller has, because the kernel runs a call to its end with interrupt
+    + 
+    + | Call | Arguments -> result | What it does |
+    + | --- | --- | --- |
+    +-| `map_anon` | len, flags -> addr | Map `len` bytes of zeroed pages at an address the kernel chooses, each backed and charged to the caller's budget at once. |
+    ++| `map_anon` | len, flags -> addr | Place a run of `len` bytes at an address the kernel chooses, where all of it is free, and map its first `MAX_RANGE_PAGES` pages at most, zeroed, each backed and charged to the caller's budget at once. The rest of the run is free when it returns, for the caller to map with `map_fixed`; nothing holds it so ([R22](#r22-range-cost)). |
+    + | `map_fixed` | addr, len, flags | The same, at exactly `addr`. Never replaces a mapping ([below](#map_fixed)). |
+    + | `unmap` | addr, len | Remove the caller's own pages. A RAM frame goes back to the free pool and its charge to the budget; a device's registers or a `dma_alloc` page only lose the mapping. |
+      | `set_flags` | addr, len, flags | Give each of the caller's own pages exactly these permissions. It may add a permission as well as drop one. |
+      | `process_map` | h(process), src, dst, len, flags | Move the caller's own RAM pages, contents and all, into a process that has not started, at `dst`, with `flags`. The child's budget pays for them and for the page tables that map them ([processes](processes.md)). |
+      
+     -A range is page-aligned and non-empty, and for every call but `map_anon` it lies below
+     +A range is page-aligned and non-empty, at most `MAX_RANGE_PAGES` (16) pages long
+    -+([R22](#r22-range-cost)), and for every call but `map_anon` it lies below
+    ++([R22](#r22-range-cost)) but for `map_anon`'s, which is a run's, and for every call but
+    ++`map_anon` it lies below
+      `USER_AREA_END` (the end of user space: 0x8000_0000, 2 GiB, on rv32; 0x40_0000_0000, 256 GiB,
+      on rv64). Flags are `READ`, `WRITE` and `EXECUTE`: at least one, never `WRITE` with
+      `EXECUTE`, never `WRITE` without `READ`. "The caller's own page" is a live user mapping that is
+    @@ docs/kernel/memory.md: be made executable ([R11](#r11-memory)). A reservation no
+      as it was and charges nothing. `process_map` counts the untouched pages of its source among what
+      the call must pay for, and backs them only once nothing can refuse it.
+     -The errors are `InvalidArgument` and `OutOfMemory`, and for `process_map` also `BadHandle`,
+    -+The errors are `InvalidArgument`, `TooLarge` (a range over `MAX_RANGE_PAGES`) and
+    ++The errors are `InvalidArgument`, `TooLarge` (a range over `MAX_RANGE_PAGES`, never `map_anon`'s) and
+     +`OutOfMemory`, and for `process_map` also `BadHandle`,
+      `WrongObject` and `NotPermitted` (the child has started). The order of the checks, the same in
+      the kernel and the [model](model.md), is in the
+    @@ docs/kernel/memory.md: searching from the start of the run it placed last to the
+      area's end is found, and so is the whole of an empty area; every run placed lies inside the
+      area. A page is free only if its entry is empty: a reservation or either side of a loan is
+     -taken. A request that finds no run, or is larger than the area, is `OutOfMemory`. The search
+    -+taken. A request that finds no run is `OutOfMemory`, and so is a `map_device` or `dma_alloc`
+    -+larger than the area (a `map_anon` that long is `TooLarge` first, [R22](#r22-range-cost)). The search
+    - looks at each page of the area at most once ([R22](#r22-range-cost)).
+    +-looks at each page of the area at most once ([R22](#r22-range-cost)).
+    ++taken. A request that finds no run, or is larger than the area, is `OutOfMemory`. `map_anon`
+    ++searches for the whole run its length names and maps only the run's first `MAX_RANGE_PAGES`
+    ++pages, so the rest is free when it returns: placement, not a promise, since nothing holds it
+    ++free. The search looks at each page of the area at most once ([R22](#r22-range-cost)).
+      `map_device` and `dma_alloc` place their mappings the same way ([devices](devices.md#map_device)). A
+      receiver's lends and transfers land in a second area, 4 MiB from `DEFAULT_MESSAGE_BASE`
+    + (0x4000_0000), found the same way. The rest of the user layout is on
+     @@ docs/kernel/memory.md: device registers, is read-write and never executable.
+      
+      ### R22 (range cost)
+    @@ docs/kernel/memory.md: device registers, is read-write and never executable.
+     -  for each table present in it, and only then counts page tables. A `map_fixed` of the whole of
+     -  user space, which no budget in the case can pay for, is refused well inside the case's 10 ms
+     -  bound, over mappings or not.
+    -+Status: built · tested: bench:map-fixed-attack, bench:map-anon-search-bound, bench:sched-range-hammer, host:redoubt-model::huge_len_is_refused_promptly, host:redoubt-model::a_range_over_the_cap_is_too_large_before_any_other_check_but_its_shape, mutation:R22RangeCapIgnored
+    ++Status: built · tested: bench:map-fixed-attack, bench:map-anon-search-bound, bench:sched-range-hammer, host:redoubt-model::huge_len_is_refused_promptly, host:redoubt-model::a_range_over_the_cap_is_too_large_before_any_other_check_but_its_shape, host:redoubt-model::map_anon_takes_a_run_longer_than_a_range_and_maps_one_range_of_it, mutation:R22RangeCapIgnored, mutation:R22MapAnonSearchesRange
+     +
+     +A call that takes a range holds the kernel at most about a slice, whatever the length asks, and
+     +costs what the page tables hold and what the budget can pay for. The kernel runs a call to its end
+     +with interrupts off, so every wake on the call's hart, and every other hart's entry
+     +([R78 (fair kernel entry)](scheduling.md#r78-fair-kernel-entry)), waits for it.
+    -+- `map_anon`, `map_fixed`, `unmap`, `set_flags` and `process_map` each name at most
+    -+  `MAX_RANGE_PAGES` pages: a longer range is `TooLarge`, by arithmetic, after the range's shape
+    -+  and before any walk or charge, as a lend past `MAX_LEND_PAGES` is. The number is derived: the
+    ++- `map_fixed`, `unmap`, `set_flags` and `process_map` each name at most `MAX_RANGE_PAGES` pages:
+    ++  a longer range is `TooLarge`, by arithmetic, after the range's shape and before any walk or
+    ++  charge, as a lend past `MAX_LEND_PAGES` is. `map_anon`'s length is a run's, the one range
+    ++  argument that may be longer: it places the whole run by its search (below), as it did before
+    ++  the cap, and maps at most the run's first `MAX_RANGE_PAGES` pages, so the call holds the kernel
+    ++  for the search and a range, or maps nothing (`OutOfMemory`). The number is derived: the
+     +  largest power of two whose worst section, a `map_fixed` whose every page table is absent so
+     +  the call makes them (two on Sv32 across a root entry, four on Sv39 across a gigabyte), measures
+     +  within one slice (`SLICE_US`, 1 ms) on the slower width, in a checked build under virtual time.
+    @@ docs/kernel/memory.md: device registers, is read-write and never executable.
+     +  run. A longer range is its caller's to split: the loader stub maps each segment a range at a
+     +  time, so beamlet's 835-page text, which one call would hold the kernel 39.8 ms for on rv32
+     +  (21.2 ms on rv64, [scheduling](scheduling.md#responsiveness)), is 53 calls; and the runtime
+    -+  maps, moves and unmaps a range at a time and keeps a long run one run
+    ++  maps, moves and unmaps a range at a time and keeps a long run one run: the kernel's `map_anon`
+    ++  places it, and `map_fixed` maps the ranges after the first
+     +  ([`redoubt-rt`](../userland/native.md#redoubt-rt-the-native-runtime)). A launch's batch is
+     +  64 pages ([`init`](../servers/init.md#launching-through-the-loader-stub)), split into range
+     +  calls by the runtime: a launch takes 2.29 s at the median on rv32 at one hart, as it does
+    @@ docs/kernel/memory.md: device registers, is read-write and never executable.
+     +  2's shape, about 114 ms. `bench:map-anon-search-bound` builds the densest refused shape its own
+     +  budget affords with requests at the cap, n = 16 (4,096 pages taken), and bounds that shape: a
+     +  refusal under 45 ms and a timer wake during it under 45 ms, twice the worst its own run
+    -+  measured (22.4 ms on rv64; `sched-lock-contention`'s search alone reads 22.6), rounded up. The bound is that shape's; the table says what a larger budget buys. Bounding the
+    ++  measured (22.4 ms on rv64; `sched-lock-contention`'s search alone reads 22.6), rounded up. The bound is that shape's; the table says what a larger budget buys. A
+    ++  `map_anon` of a run longer than a range searches for the whole run, and tries no more starts
+    ++  than a shorter request does (at most 65,536 less the run's pages, plus one), so it adds no new
+    ++  worst; it maps a range at most. Bounding the
+     +  search by construction (a search that walks once and iterates the entries, or a summary of the
+     +  area's free runs kept with the page tables, read a word a level as the frame bitmap is) is
+     +  planned.
+    @@ docs/testbench.md: every timer interrupt from user mode that destroyed another b
+      three-hart shares where the harts run at once ([QEMU's turns](kernel/scheduling.md#residual-risks)). It is itself checked against the model's ranks and against traces broken one clause at a
+      time. The tracing kernel is a test build only
+     
+    + ## docs/userland/native.md ##
+    +@@ docs/userland/native.md: and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle on it.
+    + 
+    + ### `redoubt-rt`, the native runtime
+    + 
+    +-<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (33)</summary>
+    ++<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (40)</summary>
+    + 
+    + - bench:rt-build
+    + - bench:net-tcp
+    +@@ docs/userland/native.md: and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle on it.
+    + - host:redoubt-rt::a_refused_thread_is_not_waited_for
+    + - host:redoubt-rt::prepared_locks_make_no_endpoint_when_contended
+    + - host:redoubt-rt::a_refused_endpoint_leaves_a_working_lock
+    ++- host:redoubt-rt::a_long_run_is_one_run_mapped_a_range_at_a_time
+    ++- host:redoubt-rt::a_run_is_placed_by_one_search_past_every_gap_too_short_for_it
+    ++- host:redoubt-rt::a_run_before_the_search_s_start_is_found_after_the_wrap
+    ++- host:redoubt-rt::a_run_no_gap_holds_is_out_of_memory_with_nothing_mapped
+    ++- host:redoubt-rt::a_refused_extension_gives_back_its_ranges_and_searches_again
+    ++- host:redoubt-rt::a_run_the_budget_cannot_hold_leaves_nothing_mapped
+    ++- host:redoubt-rt::a_run_of_one_range_is_one_call
+    + 
+    + </details>
+    + 
+    +@@ docs/userland/native.md: the loader stub.
+    + | --- | --- |
+    + | `start` | the entry point (`entry!`, and `first_entry!` for `init`), exit codes (`OK` 0, `PANIC` 101, `BAD_STARTUP` 102) and the panic handler |
+    + | `startup` | the startup block, parsed defensively ([sessions](sessions.md#how-a-program-reads-its-namespace)) |
+    +-| `handle` | typed handles and the system calls that are not IPC; a range over `MAX_RANGE_PAGES` mapped, moved and unmapped a range at a time (below) |
+    ++| `handle` | typed handles and the system calls that are not IPC; a range over `MAX_RANGE_PAGES` mapped, moved and unmapped a range at a time, and a long `map_anon` kept one run (below) |
+    + | `ipc` | lends and transfers, `call`, `send`, `receive`, `reply`, `serve` |
+    + | `heap` | the global allocator, over `map_anon`, or over one arena mapped once (`fix_heap`, for `init`'s [bound](../kernel/budgets.md#the-tree-from-the-boot-manifest)); capped at the startup block's `heap_pages` ([init](../servers/init.md#the-startup-block)), past which it refuses before `map_anon` is asked (an infallible allocation then panics, and the runtime exits with its panic code, 101: `heap-cap`); and a record of its cap and peak for the bench ([the memory budget](../testbench.md#the-memory-budget)) |
+    + | `path` | lexical path cleaning, so `..` never climbs above a root |
+    +@@ docs/userland/native.md: the loader stub.
+    +   unmaps the ranges before it, so it maps all of a run or none of it, and a refused
+    +   `Process::map` leaves the ranges it moved in the child, which has not started, and unmaps the
+    +   rest.
+    ++- **A long run is one run.** The heap's large blocks, a `Buffer` and `init`'s arena are each one
+    ++  run, however long. The kernel's `map_anon` places the whole run where all of it is free, by its
+    ++  one search, and maps its first range; the runtime maps the ranges after it with `map_fixed`.
+    ++  Nothing holds them free between the two calls, so a page taken there meanwhile, by a placement
+    ++  the runtime does not make (`map_device`, `dma_alloc`, a lend landing from another thread),
+    ++  refuses the extension: the runtime gives back what it mapped and asks again, and the kernel's
+    ++  next search, starting where it placed the refused run, passes that page. The search ends as
+    ++  the kernel's own one pass does, once the runs placed have wrapped back to the first's, with
+    ++  `OutOfMemory` and nothing mapped. Every `map_anon` of the process takes one lock in the runtime,
+    ++  the heap's and a `Buffer`'s alike, so no placement of the runtime's own lands in a run while it
+    ++  is extended; a program on the runtime makes no `map_anon` of its own.
+    + - **Start and end.** `entry!(run)` receives the startup page's address from the loader stub,
+    +   parses the block, and calls `run`; its return value is the exit code. A block that does not
+    +   parse exits with `BAD_STARTUP`. A panic prints its message once on `/dev/cons`, if the program
+    +
+      ## kernel/src/mem.rs ##
+     @@
+      // SPDX-License-Identifier: Apache-2.0
+    @@ kernel/src/mem.rs: impl MemoryManager {
+     +    }
+     +
+          /// `map_anon(len, flags) -> addr`: zeroed pages, charged to the caller's budget, at an
+    -     /// address the kernel chooses.
+    +-    /// address the kernel chooses.
+    ++    /// address the kernel chooses. `len` is a run's length, the one range argument that may exceed
+    ++    /// `MAX_RANGE_PAGES`: the run is placed where all of it is free, by one search, and only its
+    ++    /// first `MAX_RANGE_PAGES` pages at most are mapped, so the call holds the kernel for the
+    ++    /// search and a range (R22). The rest of the run is the caller's to map, by `map_fixed`; nothing
+    ++    /// holds it free meanwhile.
+          pub fn map_anon(
+    +         &mut self,
+    +         pid: Pid,
+     @@ kernel/src/mem.rs: impl MemoryManager {
+    -         if len == 0 || len % PAGE_SIZE != 0 {
+    -             return Err(bad);
+    -         }
+    -+        Self::range_cap(len)?;
+    -         // The row's own check: no permission at all, or writable without readable.
+              if flags == MemFlags::NONE || (flags.contains(MemFlags::WRITE) && !flags.contains(MemFlags::READ)) {
+                  return Err(bad);
+    +         }
+    +-        let at = self.map_run(pid, len / PAGE_SIZE, flags, None)?;
+    ++        let run = len / PAGE_SIZE;
+    ++        let at = self.map_run_in(pid, run.min(MAX_RANGE_PAGES), run, flags, None)?;
+    +         sync_if_executable(pid, flags);
+    +         Ok(at)
+    +     }
+    +@@ kernel/src/mem.rs: impl MemoryManager {
+    +         npages: usize,
+    +         flags: MemFlags,
+    +         phys: Option<usize>,
+    ++    ) -> Result<usize, redoubt_sys::Error> {
+    ++        self.map_run_in(pid, npages, npages, flags, phys)
+    ++    }
+    ++
+    ++    /// [`Self::map_run`] of the first `npages` of a run of `run` pages, placed where all `run` are
+    ++    /// free.
+    ++    fn map_run_in(
+    ++        &mut self,
+    ++        pid: Pid,
+    ++        npages: usize,
+    ++        run: usize,
+    ++        flags: MemFlags,
+    ++        phys: Option<usize>,
+    +     ) -> Result<usize, redoubt_sys::Error> {
+    +         let oom = redoubt_sys::Error::OutOfMemory;
+    +         let len = npages.checked_mul(PAGE_SIZE).ok_or(oom)?;
+    +         let at = self
+    +-            .find_virtual_address(core::ptr::null_mut(), len, MemoryType::Default)
+    ++            .find_virtual_address(
+    ++                core::ptr::null_mut(),
+    ++                run.checked_mul(PAGE_SIZE).ok_or(oom)?,
+    ++                MemoryType::Default,
+    ++            )
+    +             .map_err(|_| oom)? as usize;
+    +         let ours = phys.is_none();
+    +         for offset in (0..len).step_by(PAGE_SIZE) {
+     @@ kernel/src/mem.rs: impl MemoryManager {
+          /// table the range leaves mapping nothing is freed, and uncharged, too.
+          pub fn unmap(&mut self, pid: Pid, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
+    @@ kernel/src/process.rs: pub fn process_map(
+          // The source must be the caller's own RAM, mapped and not lent out, or a reservation of its
+          // own not yet touched. Checked whole before any page moves, because a later failure would
+     
+    + ## libs/rt/fake/src/lib.rs ##
+    +@@ libs/rt/fake/src/lib.rs: fn end(s: &mut State, index: usize, cause: Cause, code: u32) {
+    +     s.exits_due.push_back((exit, notice));
+    + }
+    + 
+    ++/// The pages of a process's placement area ([`Area`]), for a test that fills it.
+    ++pub const AREA_PAGES: usize = Area::PAGES;
+    ++
+    + /// A process's placement area, which its `MapAnon` searches as the kernel searches its own
+    +-/// (kernel/memory.md, "Where `map_anon` puts pages"): first fit from the start of the run placed
+    +-/// last, then from the area's start, so that `MapFixed` meets the pages `MapAnon` placed, as the
+    +-/// kernel's does. One anonymous host mapping, made at the process's first `MapAnon` and never
+    +-/// unmapped (its address is kept in `State::anon`); a page is zeroed as it is mapped. The processes
+    +-/// share the host's address space, so a page of one's area is free to every process's `MapFixed`
+    +-/// until it is taken.
+    ++/// (kernel/memory.md, "Where `map_anon` puts pages"): first fit of the whole run from the start of
+    ++/// the run placed last, then from the area's start, mapping the run's first range at most, so
+    ++/// that `MapFixed` can extend the run at the pages after it, as the runtime does
+    ++/// (`redoubt_rt::handle::map_anon`). One anonymous host mapping, made at the process's first
+    ++/// `MapAnon` and never unmapped (its address is kept in `State::anon`); a page is zeroed as it is
+    ++/// mapped. The processes share the host's address space, so a page of one's area is free to every
+    ++/// process's `MapFixed` until it is taken.
+    + ///
+    + /// Not under Miri, which checks each access to an allocation against every pointer and thread
+    + /// that touched it: one area shared by a test's every run made `rt-miri`'s
+    + /// `heap_over_map_anon` run past five minutes, against under a minute with an allocation a run.
+    +-/// There each `MapAnon` run is an allocation of its own, as it was before areas.
+    ++/// There each `MapAnon` run is an allocation of its own, as it was before areas, of the range it
+    ++/// maps; no test there maps a run longer than a range, which `MapFixed` would have to extend.
+    + #[derive(Default)]
+    + struct Area {
+    +     base: usize,
+    +@@ libs/rt/fake/src/lib.rs: impl Area {
+    +         true
+    +     }
+    + 
+    +-    /// The first free run of `n` pages, first fit from the rover, then from the start; its address.
+    +-    fn place(&mut self, n: usize) -> Option<usize> {
+    +-        let fits = |a: &Area, at: usize| at + n <= Self::PAGES && a.taken[at..at + n].iter().all(|t| !*t);
+    ++    /// The first free run of `run` pages, first fit from the rover, then from the start, of which
+    ++    /// the first `n` are taken; its address.
+    ++    fn place(&mut self, run: usize, n: usize) -> Option<usize> {
+    ++        let fits = |a: &Area, at: usize| at + run <= Self::PAGES && a.taken[at..at + run].iter().all(|t| !*t);
+    +         let at = (self.rover..Self::PAGES).chain(0..self.rover).find(|&at| fits(self, at))?;
+    +         self.take(at, n);
+    +         self.rover = at;
+    +@@ libs/rt/fake/src/lib.rs: unsafe impl redoubt_rt::Transport for Fake {
+    +                 if len == 0 || len % PAGE_SIZE != 0 {
+    +                     return Err(Error::InvalidArgument);
+    +                 }
+    ++                // A run's first range at most is mapped (kernel/memory.md, R22).
+    ++                let (run, len) = (len, len.min(MAX_RANGE_PAGES * PAGE_SIZE));
+    +                 let mut s = self.lock();
+    +                 if cfg!(miri) {
+    +                     let layout = Layout::from_size_align(len, PAGE_SIZE).map_err(|_| Error::OutOfMemory)?;
+    +@@ libs/rt/fake/src/lib.rs: unsafe impl redoubt_rt::Transport for Fake {
+    +                 let State { processes, anon, .. } = &mut *s;
+    +                 let area = &mut processes[pid].area;
+    +                 area.base(anon);
+    +-                let addr = area.place(len / PAGE_SIZE).ok_or(Error::OutOfMemory)?;
+    ++                let addr = area.place(run / PAGE_SIZE, len / PAGE_SIZE).ok_or(Error::OutOfMemory)?;
+    +                 s.processes[pid].map(addr, len);
+    +                 Ok(Return::Addr(addr))
+    +             }
+    +
+    + ## libs/rt/src/handle.rs ##
+    +@@
+    + //! a confusion. Handles are not closed on drop: a server keeps them in tables and hands out
+    + //! copies, and an implicit close would be an easy use-after-close. Close them with `close`.
+    + 
+    ++use core::sync::atomic::{AtomicBool, Ordering};
+    ++
+    + use redoubt_sys::{
+    +-    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, Hold, MAX_START_HANDLES, MemFlags,
+    +-    PAGE_SIZE, ResetKind, Return, USAGE_SLOTS, Usage, range_chunks,
+    ++    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, Hold, MAX_RANGE_PAGES, MAX_START_HANDLES,
+    ++    MemFlags, PAGE_SIZE, ResetKind, Return, USAGE_SLOTS, Usage, range_chunks,
+    + };
+    + 
+    + use crate::ipc::Buffer;
+    +@@ libs/rt/src/handle.rs: fn addr(result: Result<Return, Error>) -> Result<usize, Error> {
+    +     }
+    + }
+    + 
+    +-/// Maps `len` bytes (whole pages) of zeroed memory; returns its address.
+    ++/// The bytes one range call may name: `MAX_RANGE_PAGES` pages (kernel/memory.md, R22). A longer
+    ++/// range is the runtime's to split, a range at a time ([`range_chunks`]).
+    ++const RANGE: usize = MAX_RANGE_PAGES * PAGE_SIZE;
+    ++
+    ++/// Maps `len` bytes (whole pages) of zeroed memory; returns its address. One run, wherever its
+    ++/// length: the kernel's `map_anon` places a run of `len` where all of it is free, by its one
+    ++/// search, and maps its first range ([`RANGE`]); the ranges after it are mapped by `map_fixed`
+    ++/// (kernel/memory.md, R22). Nothing holds them free between the two: a page taken there meanwhile,
+    ++/// by a placement this lock does not cover (`map_device`, `dma_alloc`, a lend landing from another
+    ++/// thread), refuses the extension, which gives back what it mapped and asks again, the kernel's
+    ++/// next search starting where it placed the refused run, so it passes that page. The search ends
+    ++/// as the kernel's one pass does: once the runs placed have wrapped (one below the one before), one
+    ++/// at or past the first's means no gap holds the run, `OutOfMemory`, with nothing left mapped.
+    ++///
+    ++/// The process's every `map_anon` through the runtime takes one lock ([`Placing`]), the heap's and
+    ++/// a [`crate::ipc::Buffer`]'s alike, so no other placement of the runtime's lands in a run while it
+    ++/// is extended; a program on the runtime makes no `map_anon` of its own.
+    + pub fn map_anon(len: usize, flags: MemFlags) -> Result<usize, Error> {
+    +-    addr(syscall(&Call::MapAnon { len, flags }))
+    ++    let _placing = Placing::take();
+    ++    let (mut origin, mut last, mut wrapped) = (None, 0, false);
+    ++    loop {
+    ++        let first = addr(syscall(&Call::MapAnon { len, flags }))?;
+    ++        if len <= RANGE {
+    ++            return Ok(first);
+    ++        }
+    ++        wrapped |= origin.is_some() && first < last;
+    ++        if wrapped && origin.is_some_and(|o| first >= o) {
+    ++            let _ = unmap(first, RANGE);
+    ++            return Err(Error::OutOfMemory);
+    ++        }
+    ++        origin.get_or_insert(first);
+    ++        last = first;
+    ++        match map_fixed(first + RANGE, len - RANGE, flags) {
+    ++            Ok(()) => return Ok(first),
+    ++            Err(e) => {
+    ++                let _ = unmap(first, RANGE);
+    ++                if e != Error::InvalidArgument {
+    ++                    return Err(e);
+    ++                }
+    ++            }
+    ++        }
+    ++    }
+    ++}
+    ++
+    ++/// The lock every [`map_anon`] of the process holds for its whole placement.
+    ++struct Placing;
+    ++
+    ++static PLACING: AtomicBool = AtomicBool::new(false);
+    ++
+    ++impl Placing {
+    ++    fn take() -> Placing {
+    ++        while PLACING.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+    ++            core::hint::spin_loop();
+    ++        }
+    ++        Placing
+    ++    }
+    ++}
+    ++
+    ++impl Drop for Placing {
+    ++    fn drop(&mut self) { PLACING.store(false, Ordering::Release); }
+    + }
+    + 
+    + /// Maps `len` bytes (whole pages) of zeroed memory at exactly `addr`, which the kernel refuses
+    + /// (`InvalidArgument`, nothing mapped) if any page of the range is taken (kernel/memory.md,
+    + /// `map_fixed`). A range at a time ([`range_chunks`]): a refused range unmaps those before it, so
+    +-/// the call maps all of `len` or none of it. The runtime's own: only [`crate::thread::spawn`]
+    +-/// calls it, to place a thread's stack above its guard page, and the pages are adopted by a
+    +-/// [`Buffer`] at once. Public, it would let a program fill the thread-stack area under the
+    +-/// runtime's placement.
+    ++/// the call maps all of `len` or none of it. The runtime's own: [`crate::thread::spawn`] calls it
+    ++/// to place a thread's stack above its guard page, and [`map_anon`] to extend a run, and the pages
+    ++/// are adopted by a [`Buffer`] at once. Public, it would let a program fill the thread-stack area
+    ++/// under the runtime's placement.
+    + pub(crate) fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+    +     for (at, n) in range_chunks(addr, len) {
+    +         if let Err(e) = nothing(syscall(&Call::MapFixed { addr: at, len: n, flags })) {
+    +
+    + ## libs/rt/tests/ranges.rs (new) ##
+    +@@
+    ++//! A range call names at most `MAX_RANGE_PAGES` pages (kernel/memory.md, R22), and the runtime
+    ++//! splits a longer one: `map_anon` of a long run asks the kernel's `map_anon` to place the whole
+    ++//! run, of which the kernel maps the first range, and maps the rest with `map_fixed`; a refused
+    ++//! extension gives back what it mapped and searches again. Unmapping gives a run back a range at a
+    ++//! time. The fake kernel places as the kernel does, in each process's own area, and refuses a
+    ++//! longer range elsewhere; raw `map_fixed` calls, which leave the search's start where it was, make
+    ++//! the gaps, and its scripted refusals stand in for a page another mapping takes meanwhile.
+    ++
+    ++use redoubt_fake_kernel::{AREA_PAGES, Fake, fake};
+    ++use redoubt_rt::Transport;
+    ++use redoubt_rt::abi::{Call, Error, MAX_RANGE_PAGES, MemFlags, PAGE_SIZE};
+    ++use redoubt_rt::handle::map_anon;
+    ++use redoubt_rt::ipc::Buffer;
+    ++
+    ++const RANGE: usize = MAX_RANGE_PAGES * PAGE_SIZE;
+    ++
+    ++/// Pages of a run longer than two ranges: two whole ranges and part of a third.
+    ++const RUN: usize = 2 * MAX_RANGE_PAGES + 8;
+    ++
+    ++fn rw() -> MemFlags { MemFlags::READ | MemFlags::WRITE }
+    ++
+    ++fn pages(n: usize) -> usize { n * PAGE_SIZE }
+    ++
+    ++/// `(address, length)` of the ranges a run of `n` pages at `at` is mapped as.
+    ++fn ranges(at: usize, n: usize) -> Vec<(usize, usize)> {
+    ++    (0..pages(n)).step_by(RANGE).map(|done| (at + done, (pages(n) - done).min(RANGE))).collect()
+    ++}
+    ++
+    ++/// A raw `map_fixed` of `n` pages at `at`, as the running process, a range at most.
+    ++fn pin(f: &Fake, at: usize, n: usize) {
+    ++    f.call(&Call::MapFixed { addr: at, len: pages(n), flags: rw() }).unwrap();
+    ++}
+    ++
+    ++fn unpin(f: &Fake, at: usize, n: usize) { f.call(&Call::Unmap { addr: at, len: pages(n) }).unwrap(); }
+    ++
+    ++/// The process's area, its first page mapped (the search's start there), and every page from
+    ++/// `from` to `to` pinned a range at a time; the area's start.
+    ++fn area(f: &Fake, from: usize, to: usize) -> usize {
+    ++    let base = map_anon(PAGE_SIZE, rw()).unwrap();
+    ++    for at in (from..to).step_by(MAX_RANGE_PAGES) {
+    ++        pin(f, base + pages(at), MAX_RANGE_PAGES.min(to - at));
+    ++    }
+    ++    base
+    ++}
+    ++
+    ++/// The calls `pid` made from its `skip`th call on.
+    ++fn calls_since(f: &Fake, pid: usize, skip: usize) -> Vec<&'static str> { f.calls(pid)[skip..].to_vec() }
+    ++
+    ++#[test]
+    ++fn a_long_run_is_one_run_mapped_a_range_at_a_time() {
+    ++    let f = fake();
+    ++    let pid = f.process(1001, &[]);
+    ++    f.as_process(pid, || {
+    ++        let mut run = Buffer::new(RUN).unwrap();
+    ++        let at = run.as_ptr() as usize;
+    ++        assert_eq!(f.mappings(pid), ranges(at, RUN));
+    ++        assert_eq!(f.calls(pid), ["map_anon", "map_fixed", "map_fixed"]);
+    ++        assert!(run.iter().all(|b| *b == 0), "every page zeroed");
+    ++        run[pages(RUN) - 1] = 7;
+    ++        drop(run);
+    ++        assert_eq!(f.mappings(pid), [], "unmapped whole");
+    ++        assert_eq!(&f.calls(pid)[3..], ["unmap", "unmap", "unmap"]);
+    ++    });
+    ++}
+    ++
+    ++#[test]
+    ++fn a_run_is_placed_by_one_search_past_every_gap_too_short_for_it() {
+    ++    let f = fake();
+    ++    let pid = f.process(1002, &[]);
+    ++    f.as_process(pid, || {
+    ++        // A gap of 39 pages after the first, two ranges and more but short of the run, then the
+    ++        // rest of the area free: the one search passes the gap, and nothing is mapped in it.
+    ++        let base = area(f, 40, 41);
+    ++        let (held, calls) = (f.held(pid).1, f.calls(pid).len());
+    ++        f.held_peak(pid);
+    ++        let at = map_anon(pages(RUN), rw()).unwrap();
+    ++        assert_eq!(at, base + pages(41), "past the short gap");
+    ++        assert_eq!(calls_since(f, pid, calls), ["map_anon", "map_fixed", "map_fixed"]);
+    ++        assert_eq!(
+    ++            f.mappings(pid).into_iter().filter(|(a, _)| *a >= at).collect::<Vec<_>>(),
+    ++            ranges(at, RUN)
+    ++        );
+    ++        assert_eq!(f.held_peak(pid), held + RUN, "the run alone, never a page of the gap");
+    ++    });
+    ++}
+    ++
+    ++#[test]
+    ++fn a_run_before_the_search_s_start_is_found_after_the_wrap() {
+    ++    let f = fake();
+    ++    let pid = f.process(1003, &[]);
+    ++    f.as_process(pid, || {
+    ++        // All but the area's last 20 pages pinned, a page placed there (the search's start now),
+    ++        // then the first three ranges after the area's first page given back: the only gap that
+    ++        // holds the run lies before the search's start, and the one after it is too short.
+    ++        let base = area(f, 1, AREA_PAGES - 20);
+    ++        let late = map_anon(PAGE_SIZE, rw()).unwrap();
+    ++        assert_eq!(late, base + pages(AREA_PAGES - 20));
+    ++        for at in [1, 17, 33] {
+    ++            unpin(f, base + pages(at), MAX_RANGE_PAGES);
+    ++        }
+    ++        let calls = f.calls(pid).len();
+    ++        assert_eq!(map_anon(pages(RUN), rw()), Ok(base + pages(1)));
+    ++        assert_eq!(calls_since(f, pid, calls), ["map_anon", "map_fixed", "map_fixed"]);
+    ++    });
+    ++}
+    ++
+    ++#[test]
+    ++fn a_run_no_gap_holds_is_out_of_memory_with_nothing_mapped() {
+    ++    let f = fake();
+    ++    let pid = f.process(1004, &[]);
+    ++    f.as_process(pid, || {
+    ++        // As above, but the gap before the search's start holds one range only: the kernel's one
+    ++        // search finds no gap for the run.
+    ++        let base = area(f, 1, AREA_PAGES - 20);
+    ++        map_anon(PAGE_SIZE, rw()).unwrap();
+    ++        unpin(f, base + pages(1), MAX_RANGE_PAGES);
+    ++        let before = f.mappings(pid);
+    ++        let calls = f.calls(pid).len();
+    ++        assert_eq!(map_anon(pages(RUN), rw()), Err(Error::OutOfMemory));
+    ++        assert_eq!(f.mappings(pid), before, "nothing left mapped");
+    ++        assert_eq!(calls_since(f, pid, calls), ["map_anon"]);
+    ++    });
+    ++}
+    ++
+    ++#[test]
+    ++fn a_refused_extension_gives_back_its_ranges_and_searches_again() {
+    ++    let f = fake();
+    ++    let pid = f.process(1005, &[]);
+    ++    // The run's third range finds a page taken, as a mapping made in the moment would: the two
+    ++    // ranges mapped are given back, and the search starts again from where it placed the run.
+    ++    f.refuse_after(pid, "map_fixed", 1, Error::InvalidArgument);
+    ++    f.as_process(pid, || {
+    ++        let at = map_anon(pages(RUN), rw()).unwrap();
+    ++        assert_eq!(f.mappings(pid), ranges(at, RUN), "one run, nothing of the refused one left");
+    ++        assert_eq!(
+    ++            f.calls(pid),
+    ++            ["map_anon", "map_fixed", "map_fixed", "unmap", "unmap", "map_anon", "map_fixed", "map_fixed"]
+    ++        );
+    ++    });
+    ++}
+    ++
+    ++#[test]
+    ++fn a_run_the_budget_cannot_hold_leaves_nothing_mapped() {
+    ++    let f = fake();
+    ++    let pid = f.process(1006, &[]);
+    ++    f.refuse_after(pid, "map_fixed", 1, Error::OutOfMemory);
+    ++    f.as_process(pid, || {
+    ++        assert_eq!(map_anon(pages(RUN), rw()), Err(Error::OutOfMemory));
+    ++        assert_eq!(f.mappings(pid), []);
+    ++        assert_eq!(f.calls(pid).iter().filter(|c| **c == "map_anon").count(), 1, "no search again");
+    ++    });
+    ++}
+    ++
+    ++#[test]
+    ++fn a_run_of_one_range_is_one_call() {
+    ++    let f = fake();
+    ++    let pid = f.process(1007, &[]);
+    ++    f.as_process(pid, || {
+    ++        let one = map_anon(RANGE, rw()).unwrap();
+    ++        assert_eq!(f.mappings(pid), [(one, RANGE)]);
+    ++        assert_eq!(f.calls(pid), ["map_anon"]);
+    ++    });
+    ++}
+    +
+      ## libs/sys/src/error.rs ##
+     @@ libs/sys/src/error.rs: const ADDS_HANDLE: Errors = set(&[OutOfMemory]).with(HANDLE_LIMIT);
+      /// out of pages.
+      const HANDLE_LIMIT: Errors = set(&[TooLarge]);
+      
+     +/// A call that takes a range refuses one of more than `MAX_RANGE_PAGES` pages with `TooLarge`
+    -+/// (kernel/memory.md, R22), as a lend past `MAX_LEND_PAGES` is.
+    ++/// (kernel/memory.md, R22), as a lend past `MAX_LEND_PAGES` is; `map_anon`'s length is a run's,
+    ++/// placed whole and mapped a range at most, and is not refused for its size.
+     +const RANGE_LIMIT: Errors = set(&[TooLarge]);
+     +
+      impl Number {
+          /// Whether this call can return `error`: the errors of its row in kernel/abi.md's error
+          /// table (in what order they are checked is the spec's), plus decoding's general
+     @@ libs/sys/src/error.rs: impl Number {
+    - 
+          fn errors(self) -> Errors {
+              let row = match self {
+    --            Number::MapAnon => set(&[InvalidArgument, OutOfMemory]),
+    +             Number::MapAnon => set(&[InvalidArgument, OutOfMemory]),
+     -            Number::Unmap | Number::SetFlags => set(&[InvalidArgument]),
+    -+            Number::MapAnon => set(&[InvalidArgument, OutOfMemory]).with(RANGE_LIMIT),
+     +            Number::Unmap | Number::SetFlags => set(&[InvalidArgument]).with(RANGE_LIMIT),
+                  Number::MapDevice => set(&[BadHandle, WrongObject, OutOfMemory]),
+                  Number::DmaAlloc => set(&[BadHandle, WrongObject, InvalidArgument, NotPermitted, OutOfMemory]),
+    @@ libs/sys/src/error.rs: impl Number {
+                  // `WrongObject`: not the console's MMIO device. `Busy`: another process holds it.
+                  Number::ConsoleHold => set(&[BadHandle, WrongObject, Busy]),
+     
+    + ## libs/sys/src/lib.rs ##
+    +@@ libs/sys/src/lib.rs: pub const WORDS: usize = 4;
+    + pub const MAX_MSG_HANDLES: usize = 4;
+    + /// Pages in one lend (= the 9P `msize`, 64 KiB; servers/wire.md).
+    + pub const MAX_LEND_PAGES: usize = 16;
+    +-/// Pages one range call may name (`map_anon`, `map_fixed`, `unmap`, `set_flags`, `process_map`):
+    +-/// the most whose worst kernel section fits one slice (kernel/memory.md, R22).
+    ++/// Pages one range call may name (`map_fixed`, `unmap`, `set_flags`, `process_map`), and the most
+    ++/// `map_anon` maps of the run it places: the most whose worst kernel section fits one slice
+    ++/// (kernel/memory.md, R22).
+    + pub const MAX_RANGE_PAGES: usize = 16;
+    + 
+    + /// The ranges of at most `MAX_RANGE_PAGES` pages that cover `[addr, addr + len)`, in order, as
+    +
+      ## tests/irq-boot-hart-only.toml ##
+     @@
+     -description = "self-check of IRQ1's gate: `sched-lock-contention` at two harts on a kernel whose boot hart alone takes device interrupts (`irq-boot-hart-only`, as before every hart's PLIC context was enabled); the RTC's interrupt waits for the hammer's search on the boot hart and the woken hart then draws behind its next one, so the post-check must fail the driver wake's targets (kernel/scheduling.md, R78) (virtual time, checked build)"
+    @@ tests/irq-boot-hart-only.toml
+      ## tests/map-anon-search-bound.toml ##
+     @@
+     -description = "map_anon's placement search: a whole-area request in an empty area succeeds, a run that fits only at the area's end is placed there, a run that does not fit after a high placement is refused rather than placed past the area's end, a refused search stays under 12 ms, past one middle page and with every page table of the area present, and a timer wake meanwhile under 15 ms, and every run placed lies inside the area (checked build, virtual time)"
+    -+description = "map_anon's placement search: a request over the range cap is refused by its length, a range in an empty area is placed at its start, a run that fits only at the area's end is placed there, a run that does not fit after a high placement is refused rather than placed past the area's end, and with a page in every range-long window, the densest shape the budget affords (every page table present, 4,096 starts to try), a refused search stays under 45 ms and a timer wake meanwhile under 45 ms, twice the worst measured; every run placed lies inside the area (checked build, virtual time)"
+    ++description = "map_anon's placement search: a run over the range cap is placed at the empty area's start with its first range alone mapped, a range in an empty area is placed at its start, a run that fits only at the area's end is placed there, a run that does not fit after a high placement is refused rather than placed past the area's end, and with a page in every range-long window, the densest shape the budget affords (every page table present, 4,096 starts to try), a refused search stays under 45 ms and a timer wake meanwhile under 45 ms, twice the worst measured; every run placed lies inside the area (checked build, virtual time)"
+      arch = ["rv64", "rv32"]
+      kind = "boot"
+      debug_assertions = true
+    @@ tests/map-anon-search-bound.toml: debug_assertions = true
+      expect = [
+     -    '^\[pid 3\] \[search\] ok: a request for the whole empty area is placed at its start$',
+     +    '^\[pid 3\] \[search\] ok: its budget affords a page in every range-long window, not in every half: \d+ pages$',
+    -+    '^\[pid 3\] \[search\] ok: a request over the range cap is refused by its length$',
+    ++    '^\[pid 3\] \[search\] ok: a run over the range cap is placed at the start of the area, its first range alone mapped$',
+     +    '^\[pid 3\] \[search\] ok: a range in the empty area is placed at its start$',
+          '^\[pid 3\] \[search\] ok: a run that fits only at the area.s end is placed there$',
+          '^\[pid 3\] \[search\] ok: after a high placement, a run that does not fit is refused$',
+    @@ tests/programs/src/bin/log-server.rs: fn launch(budget: u32, exit: u32, image: &
+              .image(IMAGE_AT, image.len())
+              .finish()
+     
+    - ## tests/programs/src/bin/map-anon-placement.rs ##
+    -@@
+    - //! Where the kernel places pages (kernel/memory.md, "Where `map_anon` puts pages"): a `map_anon`
+    --//! request larger than its 256 MiB area is `OutOfMemory` with nothing charged, even when the
+    --//! budget could pay for it, and a lend or a transfer a process receives lands inside the 4 MiB
+    --//! message area. The search's worst case is `map-anon-search-bound`'s.
+    -+//! request larger than its 256 MiB area is refused with nothing charged, even when the budget
+    -+//! could pay for it (`TooLarge`, by its length, R22), and a lend or a transfer a process receives
+    -+//! lands inside the 4 MiB message area. The search's worst case is `map-anon-search-bound`'s.
+    - //!
+    - //! It runs as the bundle's first program, alone, and judges the kernel itself (docs/testbench.md,
+    - //! "Rule F (trusted verdicts)"): every `ok:` line is an error, a usage or an address the kernel
+    -@@ tests/programs/src/bin/map-anon-placement.rs: pub extern "C" fn _start(_: usize) -> ! {
+    -     check(rd::free(rd::SYSTEM) > AREA_PAGES as u64 + 1, "the budget could pay for more than the area");
+    -     let before = usage_pages();
+    -     let r = rd::map_anon((AREA_PAGES + 1) * rd::PAGE_SIZE, rd::rw());
+    --    check(r == Err(Error::OutOfMemory), "a request larger than the area is refused");
+    -+    check(r == Err(Error::TooLarge), "a request larger than the area is refused");
+    -     check(usage_pages() == before, "nothing charged");
+    - 
+    -     // The message area.
+    -
+      ## tests/programs/src/bin/map-anon-search-bound.rs ##
+     @@
+      //! `map_anon`'s placement search (kernel/memory.md; memory-layout.md, "Regions"): every run it
+      //! returns lies inside the `map_anon` area, a run that fits only at the area's end is found, a
+     -//! request for the whole of an empty area succeeds, and a refusal costs a scan of the area, not
+     -//! the area times the request, so a timer wake meanwhile stays prompt (R12, kernel/scheduling.md).
+    -+//! request over `MAX_RANGE_PAGES` is refused by arithmetic, and a refusal costs a scan of the area,
+    ++//! run over `MAX_RANGE_PAGES` is placed whole with its first range alone mapped, and a refusal
+    ++//! costs a scan of the area,
+     +//! not the area times the request, so a timer wake meanwhile stays prompt (R12 and R22,
+     +//! kernel/scheduling.md).
+      //!
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: extern "C" fn sleeper(_: usize)
+     -    whole: Result<usize, Error>,
+     +    free: u64,
+     +    over: Result<usize, Error>,
+    ++    /// Whether the page after the long run's first range was free once it was placed.
+    ++    rest_free: bool,
+     +    first: Result<usize, Error>,
+          end_fit: Result<usize, Error>,
+          wrapped: Result<usize, Error>,
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: extern "C" fn sleeper(_: usize)
+     -    if let Ok(at) = whole {
+     -        rd::unmap(at, pages(AREA_PAGES)).unwrap();
+     +    let free = rd::free(rd::OWN);
+    -+    // More than a request may name, in an empty area: refused by its length alone.
+    ++    // A run over a range, in the empty area: placed at its start, its first range alone mapped.
+     +    let over = rd::map_anon(pages(MAX_RANGE_PAGES + 1), rd::rw());
+    -+    // A range in the empty area: at its start.
+    -+    let first = rd::map_anon(pages(MAX_RANGE_PAGES), rd::rw());
+    -+    if let Ok(at) = first {
+    ++    let rest = over.map(|at| at + pages(MAX_RANGE_PAGES));
+    ++    let rest_free = rest.is_ok_and(|at| rd::map_fixed(at, rd::PAGE_SIZE, rd::rw()).is_ok());
+    ++    if let (Ok(at), Ok(after)) = (over, rest) {
+     +        rd::unmap(at, pages(MAX_RANGE_PAGES)).unwrap();
+    ++        if rest_free {
+    ++            rd::unmap(after, rd::PAGE_SIZE).unwrap();
+    ++        }
+          }
+     -    // A run of half the area that fits only at its very end: one page pinned just below it
+     -    // leaves half less a page below.
+     -    let pinned = AREA_END - pages(HALF + 1);
+     -    pin(pinned);
+     -    let end_fit = rd::map_anon(pages(HALF), rd::rw());
+    ++    // A range in the empty area: at its start.
+    ++    let first = rd::map_anon(pages(MAX_RANGE_PAGES), rd::rw());
+    ++    if let Ok(at) = first {
+    ++        rd::unmap(at, pages(MAX_RANGE_PAGES)).unwrap();
+    ++    }
+     +    // A range that fits only at the area's very end: every window before it pinned.
+     +    pins().for_each(pin);
+     +    let end_fit = rd::map_anon(pages(MAX_RANGE_PAGES), rd::rw());
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: extern "C" fn sleeper(_: usize)
+          }
+     -    rd::unmap(last_start, rd::PAGE_SIZE).unwrap();
+     -    Placement { whole, end_fit, wrapped }
+    -+    Placement { free, over, first, end_fit, wrapped }
+    ++    Placement { free, over, rest_free, first, end_fit, wrapped }
+      }
+      
+      #[no_mangle]
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: pub extern "C" fn _start() -> !
+     +        "[search] ok: its budget affords a page in every range-long window, not in every half: {} pages",
+     +        p.free
+     +    );
+    -+    assert_eq!(p.over, Err(Error::TooLarge), "a request over the range cap");
+    -+    log!(out, "[search] ok: a request over the range cap is refused by its length");
+    ++    assert_eq!((p.over, p.rest_free), (Ok(AREA), true), "a run over the range cap");
+    ++    log!(
+    ++        out,
+    ++        "[search] ok: a run over the range cap is placed at the start of the area, its first range alone mapped"
+    ++    );
+     +    assert_eq!(p.first, Ok(AREA), "a range in an empty area");
+     +    log!(out, "[search] ok: a range in the empty area is placed at its start");
+     +    assert_eq!(p.end_fit, Ok(AREA_END - pages(MAX_RANGE_PAGES)), "a range that fits only at the end");
+    @@ tests/programs/src/rd.rs: pub fn set_flags(addr: usize, len: usize, flags: MemFl
+     +    redoubt_sys::range_chunks(0, len).try_for_each(call)
+     +}
+     +
+    -+/// One run of `len` bytes at an address the kernel chooses, however long: its first range by
+    -+/// `map_anon`, the rest by `map_fixed` after it. Setup only: a page taken after the first range
+    -+/// refuses the run (`InvalidArgument`), with its ranges given back, rather than searching on.
+    ++/// One run of `len` bytes at an address the kernel chooses, however long: placed whole and its
+    ++/// first range mapped by `map_anon`, the rest by `map_fixed` after it. Setup only: a page taken
+    ++/// there meanwhile refuses the run (`InvalidArgument`), with its ranges given back, rather than
+    ++/// searching on.
+     +pub fn map_anon_run(len: usize, flags: MemFlags) -> Result<usize, Error> {
+    -+    let first = map_anon(len.min(MAX_RANGE_PAGES * PAGE_SIZE), flags)?;
+    ++    let first = map_anon(len, flags)?;
+     +    let mut mapped = 0;
+     +    let made = each_range(len, |(at, n)| {
+     +        if at != 0 {
+    @@ tests/size-budget.toml: kind = "size-budget"
+      name = "kernel"
+      paths = ["kernel/src"]
+     -max_lines = 10889
+    -+max_lines = 10897
+    ++max_lines = 10911
+      
+      [[crate]]
+      name = "loader"
+    @@ tests/size-budget.toml: max_lines = 364
+      
+      [[crate]]
+      name = "libs/layout"
+    +@@ tests/size-budget.toml: max_lines = 1142
+    + [[crate]]
+    + name = "libs/rt"
+    + paths = ["libs/rt/src"]
+    +-max_lines = 4144
+    ++max_lines = 4182
+    + 
+    + [[crate]]
+    + name = "libs/wire"
+     
+      ## tests/steward-latency.toml ##
+     @@ tests/steward-latency.toml: programs = [

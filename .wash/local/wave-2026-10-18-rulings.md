@@ -2018,3 +2018,155 @@ send with `Dead`; the queued-copy rule unchanged. processes.md: `process_start`'
 the destroy rule is `Dead`; the lock's paragraph goes. The VM's served-children text (B106's pages)
 loses "gone, never closed". No owner choice: nothing here weakens a guarantee; derived from I1/I2,
 R10 and tenet 1. K36's body (active) needs no edit: its survey clause is answered here.
+
+### SCHED5: a long run is placed by the kernel's search and mapped a range at a time (architect-oct21)
+
+Finding (.wash/local/SCHED5-heap-allocation-identification.md): under the cap the rt's `place()`
+finds a too-short gap only by mapping it (allocate, zero, unmap), so beamlet-heap-allocation rv64
+went from 15 s to 47-64 s: 190,637 `map_fixed` and 196,212 `unmap` where the kernel's search read
+page-table entries. **Ruling: option (1).**
+
+1. **Shape.** `map_anon(len, flags)` keeps its signature; `len` is the run's length and is the one
+   range argument that may exceed `MAX_RANGE_PAGES`. The kernel searches for a run of `len` pages
+   as it did before the cap (the first free run, from where it placed last, one pass) and **maps
+   the first `min(len, MAX_RANGE_PAGES)` pages** at the start it found, returning that address.
+   The caller extends with `map_fixed`, a range at a time. No reservation of the tail, no new
+   state: the tail is placement, not a promise, and "nothing may depend on the address" stands.
+2. **R13 (one outcome per call)** holds: the call maps exactly `min(len, 16)` pages at `addr`, or
+   nothing (`OutOfMemory` when no run of `len` fits, as before). The run's later ranges are later
+   calls, each with its own outcome.
+3. **The per-call bound** holds without a new number. The search is the exception SCHED5 already
+   states beside R22 (one walk per candidate start; worst measured 114 ms at n = 2); a longer run
+   has no more candidate starts than a shorter one (at most 65,536 - len + 1), so a whole-run
+   search adds no new worst, and K34 bounds it by construction. The mapping is at most a range.
+   `map-anon-search-bound` keeps its shape and target.
+4. **The rt.** The extension runs under `Placing`. A refused extension (a page taken meanwhile by
+   a placement the lock does not cover: `map_device`, `dma_alloc`, a lend landing from another
+   thread) unmaps what it mapped and searches again from the refusal; **the filler goes** (the
+   kernel's search skips short gaps itself, which is what the filler bought); the one-pass
+   termination (the first-range address wrapped to the first attempt's) stays, as ruled on
+   "the heap's termination". handle.rs:75-95's doc is rewritten to this.
+5. **Model and fake.** The model's `map_anon` lifts the cap for `len`, places over the whole run
+   and maps `min(len, 16)`; one contract: at the call's completion the pages of the run past the
+   mapped range are free; one mutation, the kernel searching for a range only (SCHED5's current
+   behaviour), fails it. The fake the same. No new RNG draws (gen.rs picks from values drawn).
+6. **Refused.** (2) keeps a second record of what the page tables already hold, not authoritative,
+   and keeps the probing fallback it was meant to remove: more state and the same worst (tenet 1:
+   deleting code beats adding). (3) lowers a cost it does not bound.
+
+**Pages:** memory.md's call table (`map_anon`'s row: `len` may exceed the cap; the first
+`MAX_RANGE_PAGES` pages of a run of `len` are mapped), the range rule at line 42 and `TooLarge` at
+54 (the exception named), "Where `map_anon` puts pages", R22 (mapping at most a range; the
+search's exception unchanged); model.md's row; `libs/sys`'s doc. **Witness:** the implementer's
+own: beamlet-heap-allocation rv64 x5 alone near main's 15 s and its rv32; the rt placement host
+tests (filler tests deleted, the refused-extension re-search tested); the sets already run,
+re-run. In SCHED5, not a node: the cap without this is the regression.
+
+### K35 stage 2: a thread readied where its waker blocks runs on that hart; no spin; stage 3 is later nodes (architect-oct21)
+
+Measurement: `.wash/local/K35-report.md` (28.0 interrupts, 34.6 SBI calls, 14.9 user ecalls a
+probe on rv64; every probe touches all four harts; 17.3 lock hand-offs, 7.6 of them chain threads
+on different harts entering back to back). Stage 1 (exact timeout caches) has the orchestrator's go.
+
+1. **(c), a bounded spin before the lock halt, is refused: settled.** R78 measured the spin (300
+   turns took back most of the halt's cost on rv32, little on rv64, and cost 7.5 % under `icount`)
+   and says "so there is none"; K31's Ruling A judges two-hart shares where the harts run at once
+   precisely because where a hart gives up or spends its turn moves QEMU's turn boundary and swings
+   `sched-capped`'s icount shares about 60/1000. A spin reopens both. No.
+2. **(a) is the rule, written on scheduling.md.** A thread readied in a kernel entry whose runner
+   blocks in that same entry is this hart's own pick: no idle wake is sent for it. Constraints:
+   the pick is the queue's pick, unchanged (lowest pass, the same thread an idle hart would have
+   picked; if a lower-pass budget is runnable it is picked and the readied thread still gets its
+   idle wake as today); the rule changes who picks, never what. It deschedules nobody: the
+   waker's slice ended for its own reason (a block), so `sched-wake-no-preempt(-harts)` and their
+   floors stand. R78 is unchanged: hand-offs are the consequence it prices, not its mechanism;
+   the immediate idle wake for every other readied thread stands (the (ii) lesson,
+   `timer-flood-at-rest`), and **no wake is deferred past the entry that made it**: the placement
+   text ("the woken thread first runs at a pick, an idle hart's or one after a runner left") is a
+   latency bound, and a deferral to the runner's next entry would add up to a slice to every
+   cross-budget wake, which `sched-latency` and `sched-irq-wake` judge. The residual "No rule
+   keeps a woken thread on its waker's hart" is rewritten to state the rule and what it leaves: a
+   waker that continues to user still hands off. `sched::leave`'s `unrun` term already does part of
+   this; the report says what the rule adds (the `beside` term, or a readied thread of a budget
+   another hart runs) and the per-hop count it removes.
+3. **(b) is netd's ordering, accepted, with its reach stated honestly.** `send` to a waiting
+   receiver and `reply` both leave the sender running, so their `leave` wakes an idle hart before
+   netd's `wait_irq` or a server's `receive` blocks: (a) reaches a hop only where the ready and
+   the block are one entry (`call`). The implementer names each of the 7.6 collision hand-offs by
+   the entry that made it (call-shaped or send/reply-shaped) and reports what (a)+(b) remove. If
+   the send-shaped hop dominates, the remedy (a combined call, or a `receive`/`wait_irq` that
+   sends first) is an ABI question back to me with the count; none is built unasked in K35.
+4. **Stage 3 is not K35.** The rx page as a kept lend changes how frames move between netd and
+   ipd (netd's lib.rs rule that each received frame's page is transferred): its own node, its own
+   review, after K35's figure is known. One-context IRQ routing was weighed on scheduling.md's
+   residual with a measurement ("so it is not routed ... the remedy if it comes to matter");
+   about 2 events a probe is not the evidence that reopens it. Not a node unless stages 1-2
+   leave it the largest named cost.
+5. **The bound.** The acceptance is the derivation, not the number: after stages 1-2 the report
+   lists the probe's remaining named events (its own timer, ipd's call and netd's reply, the
+   card's interrupt on the harts whose contexts take it, netd's rx entries, the hand-offs left)
+   and their sum is the target stated on ipd.md beside the keep-alive rule. 12 interrupts and 15
+   SBI calls is the implementer's estimate of that sum; if the derivation lands there it is the
+   target, if elsewhere that number is, and nothing moves to pass a run. The case's bound follows
+   the bench's practice: twice the measured worst, rounded up, alone and under load, with the
+   probe count checked by the card's frame count as the report does. User ecalls are asserted at
+   15 (±1) as the check that nothing changed at the sockets. Idle ceilings do not move.
+
+### K35 after the measurement: lands as a named cost and a stale-timeout fix; the levers are K37 and K38 (architect-oct21)
+
+Result (.wash/local/K35-report.md from "What was built"; head 2d199eff5): stage 1 takes
+sched-timer-flood's stale-wait interrupts to 0 (main 73 rv64, 19-20 rv32); (b) moved netd's
+send-shaped hops onto ipd's receive, net zero; (a) needed no code (sched::leave already discounts
+this hart's own pick; ipd's call readies 1.0 a probe with 0 wakes). Per probe head against main:
+27.0/33.1 against 26.6/33.5 (rv64), 31.3/37.3 against 28.8/35.3 (rv32): inside the window spread.
+The 10-11 hand-offs name as ~5 send/reply/receive-shaped and ~5 interrupt-shaped, 0 call-shaped.
+
+1. **K35 lands, restated.** Title: one keep-alive probe costs an idle 4-hart box about 27
+   interrupts and 34 SBI calls, named by the entry that makes each; a wait answered early no longer
+   leaves a stale timer interrupt. What lands: stage 1 with its oracle (`no_stale_waits_in`,
+   requiring 0: the design's "at most one early interrupt" now true, a fix with the case that
+   would have caught it); the (a) rule on scheduling.md stating the behaviour that exists; the
+   launch-idle-probes case and ipd's test-only feature (plain ipd byte-identical to main, checked);
+   ipd.md stating the per-probe cost measured, the naming (5 + 5 + the probe's own), and that it
+   is K37's and K38's to remove. **(b) is dropped from K35**: a behaviour change (the last frame
+   held until the queue is drained) with no measured gain and a purpose it does not reach is not
+   carried; it goes to K37, where a send that blocks in one entry makes it pay (tenet 1: deleting
+   beats carrying). The residual "No rule keeps a woken thread on its waker's hart" is rewritten
+   honestly: a server's reply and its receive are two entries, so every server turn hands off
+   (K37), and a device interrupt is taken on every hart's context (K38).
+2. **The case's ceiling is a guard, said so.** launch-idle-probes asserts per-probe interrupts and
+   SBI calls at twice the measured worst alone, rounded up, per width, and user ecalls at 15
+   (±1). Its comment and testbench.md say it is a regression guard that passes on main, kept
+   because it is K37's and K38's witness (each must turn it red on main for its own hops) and so
+   the idle ceilings are not the only reading of the chain. A guard that passes on main is a
+   ceiling case, like the machine at rest's; it is not offered as a bug-fix case.
+3. **Nodes, both added (todo, need K35), neither blocks K35.** K37: a server's turn is one entry
+   (reply-and-receive; a receive or wait_irq that sends first); R13 whole-result constraint; the
+   rt serving loop the one consumer; acceptance: the ~5 send/reply-shaped hops gone on the probes
+   case (red on main), ipc-client's two-hart round trips within 1 % of one hart (the residual
+   rewritten), sched-latency/sched-irq-wake/wake-no-preempt counts kept. K38: a device interrupt
+   taken on one hart by threshold (the residual's own named remedy, reopened on cost at rest, not
+   latency: new evidence of a new kind); acceptance: claimed-nothing externals 0 a frame, the ~5
+   interrupt-shaped hops gone, latency stated against the residual's numbers, irq-boot-hart-only
+   stays the negative control. Order: K37 first (a general per-call gain, every server), K38
+   after; both after K34 unless the orchestrator or owner ranks otherwise. No owner choice: an
+   ABI addition and a PLIC routing rule change no guarantee or wall; each has its stated reason.
+4. **rv32's 31.3 against 28.8 is not yet a finding.** The report's own slot notes put 3 SCHED5
+   host jobs beside hprobe rv32 2 (77 s), the high outlier, and main's figure is one window. With
+   (b) dropped, head's netd path is main's; what could differ is stage 1's hart for a timer.
+   Witness: three alternating rounds a width, head and main, alone (starts.txt showing no
+   company), probes case and launch-idle; a regression only if head's lowest round exceeds
+   main's highest; otherwise the spread is recorded on the case and the guard derives from the
+   worst across both. The relaunch does this before the restated acceptance is judged.
+
+#### K35 guard, the orchestrator's option A (architect-oct21)
+
+Item 2 above as built: one case cannot measure a probe (27/34/15 is (probes - launch-idle)/26), so
+launch-idle-probes judges per answer frame, background included: interrupts and SBI calls at twice
+the worst per-frame figure alone, per width, worst of head and main; user ecalls at the measured
+worst + 1 (about 33-34, stated as 15 a probe plus about 17 of background); ipd.md states the
+differential and its method as the named cost. Agreed, no overrule. Condition: the worst for the
++1 comes from item 4's alone rounds (three a width, head and main), and if they spread by more than
+1 the bound is worst + spread, rounded up, said so on the case. B (subtracting the other case's
+background) and C (span counting in the judge) rejected: a second measurement inside a verdict,
+and a judge proving a negative.
