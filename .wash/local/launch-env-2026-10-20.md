@@ -1,6 +1,6 @@
 # Environment and rules for every member launched 2026-10-20
 
-Main is 78664b727 (train 100: K39 slice is the thread's own time, B109 n4/n16 twins). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
+Main is f977dd514 (train 101: B112 slice end leaves the timer armed, B111). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
 
 ## Shell
 

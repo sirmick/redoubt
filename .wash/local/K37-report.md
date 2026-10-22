@@ -49,3 +49,27 @@ Measured in a scratch tree at main with the counter, ipc-turns and OFF applied: 
 - kernel/README.md, model/README.md: one-line crate descriptions; no change.
 - docs/kernel/ipc.md, abi.md, model.md, scheduling.md (residual), SECURITY.md (R13 row = section set), servers/serving.md, servers/netd.md, testbench.md counts: updated.
 - docs/testbench.md launch-idle-probes passage, docs/servers/ipd.md "What a probe costs" and "Probes scale" residual, scheduling.md device-interrupt residual: updated from the slot.
+
+
+# Round 1 fold and rebase (2026-10-22)
+
+Head 38134865d on main f977dd514 (train 101: K39, B109, B112, B111). Commits: fb0cd5804 kernel (turns), 63eb8621f rt (held replies, probe ceilings, ipd.md), 38134865d kernel+tests (hop count, ipc-turns).
+
+Folded: rt receive_after one fallback path (simplifier P2); kernel CheckedReply struct (P3); netd/logsrv reply-side fallback not changed (netd's loop already uses rt's; logsrv is raw rd with no rt); ipc.md: a receive handle closed or revoked during the send does not end the turn (red P3); history words out of scheduling.md, ipd.md, testbench.md (editor P2); testbench.md: the power-off hop count line and the tester's OFF (editor P3); serving.md residual wording. Rebase: mutation count 185 (model.md, Mutation::ALL), K39's R12 row kept, testbench.md counts per C14 (191 of 362 under icount, 184 at shift=3,sleep=off), preemption-points sentence folded into K39's rule (a) paragraph, ceilings summed: kernel 11452, model 11997, libs/sys 1157, libs/rt 4305, servers/netd 1653 (each equal to its count at the head).
+
+model-mutations (set CASES=model-mutations, at 84c583767 on train 100's main): 185 PASS, 0 FAIL; slowest R2NoWaitCap 20.8 s (wall 21.4) of the 25 s deadline; TurnReplyLost and TurnSendDispositionLies 0.0 s. Fusion: R2NoWaitCap alone on one core, three runs each: head 15.26/14.89/15.02 s, main 14.15/14.20/14.21 s: +0.8 s (6 %). The case comment's 18.7 s restated (15.0 alone, 20.8 in the case); the 25 s deadline is not widened (a fifth of margin now, not a third: a ruling's to change).
+
+Quiet slot 2 (.tmp/K37/idle2, slot2.sh + slot2b.sh): 16 boots one at a time on the quiet cores, all PASS; general cores carried other jobs (my gate sets, other members' shell tests) during most of them. hprobe rv64 round 1's console log was pruned by the concurrent gate runs, so rv64 took a fourth round (rounds 2-4 used).
+Per frame, head: rv64 ints 22.4/25.9/24.9, SBI 31.3/34.5/33.6, ecalls 30.1/30.1/29.9; rv32 20.1/25.7/21.1, 29.4/34.4/30.1, 30.1/30.1/30.0. Main (train 101) one window a width: 34.6/46.1/32.1 rv64, 39.8/51.0/32.1 rv32 (B112's main rounds: 33.9-38.8 / 45.2-50.3 / 31.1-32.1).
+Ceilings, most + spread of the wider width, rounded up: interrupts 25.7+5.6 -> 32, SBI 34.4+5.0 -> 40, user ecalls 30.1+0.2 = 30.3. Note: the Architect's ruling for the ecall bound was worst+1 (31.1) when the rounds spread by under 1; B112's main reads as low as 31.1, which worst+1 would pass, so worst+spread (as instructed for all three) is what keeps it red on main. All three are red on main.
+Per probe (probe less base / 30): rv64 12.8/16.4/11.2, 11.8/15.6/11.2, 14.6/17.8/11.2; rv32 10.0/13.8/11.2, 15.6/18.8/11.2, 12.0/15.4/11.2 -> ipd.md: 10 to 16 interrupts, 14 to 19 SBI calls, 11 user ecalls.
+Not run after the last fold: launch-idle-probes with the new ceilings (needs a prebuild and the quiet set; every measured window is inside them), whole bench.
+
+Gates at 5748208b7 (train 101 rebase, before the slot's text): formatting, unsafe-budget, ipc-turns, turn-outcomes, ipc-outcomes, ipc, rt-host-tests, netd-host-tests, verity-host-tests, blkd-host-tests, sched-latency, sched-wake-no-preempt-harts: all rc=0; docs and size-budget rc=0. docs rc=0 again at the final text.
+
+# Round 2 fold (2026-10-22)
+
+Head 206d3422d on main f977dd514: d46925b68 kernel (turns), 1bb6c6b78 rt, 7e12c59ff kernel+tests (hops, ipc-turns), 206d3422d testbench: launch-idle-probes judges a fixed span of 30 answer frames.
+- Red P2: idle judge `frames` key (exact span: first frame's first trap to the first trap of frame N+1; window without it fails; per-frame ceiling needs it), replaces min_frames; case idle step 64 s; frame rule: a new frame needs a user ecall since the last s_external (fixed a double count in a main window, 29.9 -> its true 29 frames). Slot logs over a 29-frame span (.tmp/K37/bin/span.py logic): head ints 20.2-26.1, SBI 29.6-34.8, ecalls 29.9-30.0; main 34.8-40.2, 46.2-51.3, 31.8-32.0. Ceilings 32/40/30.1. Confirm (quiet set, .tmp/K37/confirm): rv64 32 frames, over 30: 20.0/29.4/29.8 PASS; rv32 24.2/33.0/29.8 PASS.
+- Red note: model-mutations comment states a fifth of margin. Editor P3s done.
+- Gates: docs 0, formatting 0, host-tests 0, launch-idle-probes rv64/rv32 0.
