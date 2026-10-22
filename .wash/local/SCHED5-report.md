@@ -361,3 +361,27 @@ image contains.
   count above). Logs: `.tmp/SCHED5/witness/`.
 - At 08de6f1e5, rc 0 each: model-host-tests, host-tests, docs, formatting.
 - Not run: model-mutations, whose mutation list grew by one (B106's and SCHED5's together).
+
+## Rebased on B106 62a42ae10, on K36 (head 597330e9f)
+
+`git rebase --onto 62a42ae10 31daa6c64 wp-SCHED5`. The pre-rebase head is kept as the local
+branch `sched5-pre-k36` (08de6f1e5).
+
+**Resolved:**
+- `Mutation::ALL` and docs/kernel/model.md: 180 (B106's 179, plus one).
+- Ceilings, each set in the commit that raises it:
+  - commit 1: libs/sys 1054, libs/rt 4202;
+  - commit 2: stub 364;
+  - commit 3: model 11522;
+  - commit 4: kernel 10897, libs/sys 1057.
+- docs/SECURITY.md's R78 row: main's tests column (adds smp-lock-wait-4-mttcg and the two
+  redoubt-ticket tests) with SCHED5's residual sentence. The other columns were identical.
+
+**Host gates,** pinned with `taskset -c 8-23 nice -n 10`, no boots, rc 0 each:
+- size-budget, docs, formatting, unsafe-budget;
+- host-tests, model-host-tests, beamlet-lookup-host, rt-miri;
+- `cargo test -p redoubt-client` (launch 12/12: the 16-page split holds);
+- `cargo test -p redoubt-rt -p redoubt-sys -p stub`.
+
+Still to run after train 95: the prebuild, the witness (pipe-sixty-four rv32 x10 alone) and the
+load run.

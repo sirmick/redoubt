@@ -148,3 +148,43 @@ pinned run; 5/5 alone and green in the full rerun; libs/client untouched; log
 .tmp/B106/p3-host-fail.log.
 Pending: rebase onto K36's fixed head; then the load run (boot set, docs, size-budget,
 model-host-tests, model-mutations) after train 94's rerun.
+
+## Round 4 (on K36's final head 4b99cf396; train 95 candidate)
+
+Head `62a42ae10` (kernel `8b28db764`). Rebase clean. Load run (`make -j4 -k set`, ≤4 cores a job,
+prebuilt via q --cores 4, 0 failed both widths): PASS both widths userland-boot, init-boot,
+bench-net-peer, ipc-outcomes, sum-clear, lend-untouched-page, pipe-carries, pipe-eight,
+pipe-sixty-four, process-lifecycle, beamlet-launch, beamlet-serve; rv64 host: docs, formatting,
+size-budget (summed ceilings hold), unsafe-budget, no-cruft, model-host-tests, model-mutations.
+Failed, fixed: budget-syscall-attack both widths. Under I17 the receive right a destruction leaves
+is a dead entry, so `close` after the destroy succeeds; the case now mints from it (`Dead`, the
+system's evidence the endpoint died with the budget named) and then closes it (`None`). Expected
+line: `[NotPermitted, BadHandle, WrongObject, None, Dead, None]`. Rerun on the head: PASS both.
+Failed under load, not B106's, green alone: beamlet-lookup-host, twice, two different tests:
+`a_give_up_on_a_walked_fid_answers_its_asker_before_the_clunk` (system.rs:705, in the -j4 run;
+5/5 alone) and `a_vm_busy_past_the_session_bound_keeps_its_console` (console.rs:241, beside the
+attack's boots; case PASS 2/2 alone, 68.9 s and 69.0 s). Neither launches with serve or destroys a
+served budget. Logs: .tmp/B106/rv64-beamlet-lookup-host.log, .tmp/B106/lookup-host-2.log.
+
+## Residuals (added at acceptance)
+
+- Two beamlet-lookup-host host tests failed under load and passed alone, not B106's (neither
+  launches with serve or destroys a served budget):
+  - `a_give_up_on_a_walked_fid_answers_its_asker_before_the_clunk` (userland/otp/redoubt/tests/
+    system.rs:705, "the read's asker was not answered"), in the -j4 load run; 5/5 alone.
+  - `a_vm_busy_past_the_session_bound_keeps_its_console` (tests/console.rs:241, "the console ended
+    while the VM was busy"), beside budget-syscall-attack's boots; the case 2/2 alone.
+- The redoubt-client flake `an_admission_refusal_of_the_moment_is_tried_again` (Round 3), 5/5 alone.
+
+## Round 5 (train 95: pipe-stage-handle)
+
+pipe-stage-handle's premise (a stage served in a carved budget hands back a receive right that
+outlives that budget) is false under B106. The case now launches the hand stage with serve in the
+session's own budget, so its endpoint is the session's and outlives every carved budget; the rest
+of the case is unchanged (its `{:handed, ...}` step reads the own budget's usage instead of
+destroying b0). Description and comment restated; beamlet.md's line about the case still holds.
+Folded into the platform commit; head `ac723c3f5` (kernel `8b28db764`) on 4b99cf396.
+Run (prebuilt 0 failed; ≤4 cores a job), PASS both widths: pipe-stage-handle, pipe-interrupted,
+pipe-never-reads, pipe-hostile-output, pipe-no-authority, job-interrupt-ssh, job-kill,
+job-interrupt-native, steward-sub-agent-dies-with-agent, session-hostile-launch (cases launching
+with serve or running piped pipelines; pipe-eight/carries/sixty-four passed in Round 4).
