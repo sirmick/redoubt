@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 254
+revision = 270
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -3033,8 +3033,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["K35"]
   body = "Ruled by the Architect on arch-k35-after-measure (rulings file 'K35 after the measurement'). K35's naming: about 5 of a probe's 10-11 lock hand-offs are interrupt-shaped: the card's answer is taken on two harts (s_external claimed 1.0, claimed nothing 0.85 a frame), the second takes the lock for nothing, and the idle hart's leave wakes another. boot.md: every hart's context takes the source. scheduling.md's residual weighed routing against latency (at most three alarms ahead of a wake, 0.15 ms of a p99 of 4-12 ms) and declined it, naming the remedy 'sending each source to one idle hart (a busy hart's threshold above the sources' priority while one idles)'. The new evidence is cost at rest, paid by every packet of every idle session: reopened. Design, the Architect's, on boot.md and scheduling.md: a source is enabled in the contexts of idle harts and masked by threshold on busy ones, so one hart takes it; the rule says how the threshold moves at a pick and at idle, and what happens when no hart idles (every hart takes it, as today). Constraints: R78 unchanged; sched-irq-wake's proof (each device interrupt against the runner's slice that follows) and sched-lock-contention-4's counts keep; irq-boot-hart-only stays the negative control; latency stated against the residual's numbers, no target moves. Acceptance: claimed-nothing external interrupts per frame 0 (from 0.85) on launch-idle-probes, hand-offs per probe down by the named ~5, re-derived bounds asserted at 2x the measured worst alone; the idle ceilings do not move; bench-net classes and sched-irq-wake pass both widths. Tier A (kernel), size M; kernel-red + simplifier + editor."
-  state = "todo"
-  revision = 197
+  state = "active"
+  revision = 257
 
 [[node]]
   id = "B107"
@@ -3082,3 +3082,32 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Ruled by the Architect on arch-k35-expiry-starvation (rulings file 'K35 round 2: the expiry's time and the interrupted slice'). Found by K35's timeout-hint-exit on main (.wash/local/K35-report.md 'Red P2'): a waiter ran 19 us a turn and never progressed, 6,128 of 6,128 slice decisions over, because the timer interrupt's expiry (1,327 us median on main, reading all 253 of a sibling's timed waits) ran inside its slice and sched::slice_over compares now after the expiry with the slice's end. Billing is as designed (K20/R12: the interrupted budget pays none of it), but the slice is time, and the page is silent on kernel work in an interrupt inside a slice; K24 already excludes the pick's exit work. K35 bounds the expiry to the due waits plus the next (5 us median, 537 us max there), so the window narrows but stays: a deadline ending many waits at once (worst-walk: 250 due, about 8 ms) still takes the interrupted thread's slice, self-limited only by the attacker's share for re-arming. Rule: a slice is the thread's own time, its user time and its own calls; kernel work inside it billed to another payer extends the slice's end by that work (slice_end moves by the interval billed elsewhere), so the interrupted thread resumes with what it had; only a deadline due now preempts (R12 unchanged); nothing is charged twice. Pages: scheduling.md preemption points and the slice paragraph (K24's), R12 status, timer.md's expiry residual; the model if it holds slices as ticks (implementer states). Acceptance: a case, red on main and on K35's head: a sibling process with many timed waits due each slice beside a victim thread polling at 1 ms, the victim's progress count bounded below by its share; sched-* and smp-* counts kept; nobody-share figures re-recorded if they move, no target moves. Tier A (kernel), size S-M; kernel-red + simplifier + editor. After K35; rank against K37/K38 the orchestrator's."
   state = "done"
   revision = 251
+
+[[node]]
+  id = "B111"
+  title = "nscr-interrupt rv64 waits its full 450 s for {:ctrl_c, nil} under a whole bench's load, twice in five trains (96, 100), and passes alone in 7 s"
+  template = "package"
+  parent = "AGENTS"
+  body = "Seen in train 96 (merge d60987ae1) and train 100 (merge 86bb32238), rv64 only, both times 'timed out waiting for /\\{:ctrl_c, nil\\}$/' at 450.2 s, the full deadline: a hang, not slowness. Alone it passes 3/3 on both widths in about 7.5 s each time, and 10/10 concurrent rv64 in train 96. Train 100's job log is .tmp/train-100/rv64-nscr-interrupt.log; the console logs were pruned. The case types Ctrl+C at a native program's screen and expects the program to see the interrupt and the session to print {:ctrl_c, nil}. Under load a step is lost: the interrupt never reaches the program, the program's answer never reaches the session, or the expect misses a line. Investigation-first: reproduce under a whole-bench-like load (the case beside a parallel load of boot cases, several dozen runs, the console kept with --keep-failed into .tmp), name the lost step, then fix it in the interrupt path or make the case order on events if it is the case's own. Witness: 50 runs under that load, 0 failures. Tier B, size S-M."
+  state = "done"
+  revision = 264
+
+[[node]]
+  id = "B112"
+  title = "K39's pause re-arms the hart timer at every interrupt's return: launch-idle-probes reads 70-71 SBI calls a frame on main against 48-53 before; a return re-arms only when its armed target changes"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["K39"]
+  body = "Ruled by the Architect on arch-k39-rearm-finding (rulings file 'K39's re-arm per interrupt return'). Found by K38's implementer on main 78664b727 (train 100), quiet cores: launch-idle-probes SBI calls a frame 71.0 rv64 / 70.3 rv32 against the case's recorded 48.1-53.0 / 48.9-52.2 before K39 (+18, about a third); interrupts 35.4 / 34.8; 1,242 of an rv64 window's SBI calls are time::rearm (.tmp/K38/main-r1/int, .tmp/K38/r1). Cause to confirm by trace: K39's resume at an interrupt's return sets slice_end = now + left and re-arms the hart timer for the moved end, an SBI call per interrupted slice. This is against the settled direction (IDLE2: the timer is re-armed only when its target changes; K31: no set_timer before the pick) and the idle cost K35 named. Rule: a return re-arms only when the hart's armed target changes. The moved slice end does not re-arm: the timer armed for the old end fires once, the decision (end <= at) finds the slice not over, and the resume re-arms then; so an interrupt inside a slice costs at most one early slice interrupt, and only if the thread runs to its old end (rare at rest, where it blocks first). Stated on scheduling.md's slice paragraph and timer.md's re-arm rule with the measured figures. Acceptance: launch-idle-probes' SBI and interrupt per-frame ceilings become idle ceilings at the measured worst + spread of three alone rounds a width on the fixed kernel (as launch-idle's are, not 2x guards), red on main at 70-71; sched-slice-own-time still passes (the fairness rule holds with the lazy re-arm); sched-timer-flood, timeouts, budget-deadline, launch-idle unchanged; the K35 per-probe cost on ipd.md re-measured and restated. Tier A (kernel), size S; kernel-red + editor. Lands before K38's probe ceilings are derived."
+  state = "reported"
+  revision = 270
+
+[[node]]
+  id = "B113"
+  title = "An interrupt discards the input queued when it is taken: the rest of its read and what is buffered unread, so a paste that carries Ctrl+\\ leaves no tail for the next prompt; a later read is new input"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["B111"]
+  body = "Ruled by the Architect on arch-b111-typeahead (rulings file 'B111 review P2: what survives an interrupt'). Found by B111 (nscr-interrupt's hang under load) and servers-red's P2: the shell's driver drops bytes after an interrupt in the same read but gives bytes in a later read to the next line, so what survives an interrupt depends on how the console split the reads, which no person can predict; a paste holding Ctrl+\\ may leave its tail, bracketed-paste end marker included, in the next line, and a tail with a newline runs at the next prompt (the hostile-text family; bracketed paste is not built, shell.md 'Open'). shell.md states no rule. Rule: an interrupt discards the input queued when it is taken: the remainder of the read it came in and everything buffered and not yet given to a line; what the console delivers after the interrupt is handled is the next line's. The tty rule (an interrupt flushes queued input), which a person already expects. Residual, stated: a long paste whose later chunks arrive after the interrupt is handled is new input; the gap closes when bracketed paste makes a paste one event (the existing Open item). Pages: shell.md 'Interrupting and killing jobs' gains the rule beside 'What a job cannot do'; the paste Open item gains the pointer. Tests: the driver's ExUnit suite (driver_test.exs): an interrupt mid-read with a same-read tail and with input buffered before it, both dropped; input read after it kept; on beamlet and the BEAM via ./test-shell; nscr-interrupt's and the job-interrupt cases' comments state the rule and the residual. Shell track: the shell branch, host gates, one reviewer, batched into main via the shell set. Size S. Does not block B111, which lands case-only with its comment corrected to read no more into shell.md than the page says."
+  state = "todo"
+  revision = 263
