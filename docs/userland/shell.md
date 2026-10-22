@@ -425,8 +425,11 @@ What a job cannot do:
 - **Take the session's memory on the heap.** Every Erlang process the session starts, the
   evaluator, what a line spawns and every screen program, runs with Erlang's `max_heap_size` flag
   (killing), set to a fixed share of the session's budget, so a runaway allocation kills that
-  process, as Ctrl+C would. A screen buffer counts toward its owner's limit. What lies off the heap,
-  a large binary, is bounded only by the session's own page limit
+  process, as Ctrl+C would. A screen buffer counts toward its owner's limit. The allocations
+  [beamlet](beamlet.md#limits-inside-one-vm) names as checked, a large binary's among them, are
+  checked against that limit and the pages the VM has left before they are made, and past either
+  kill the line's process alone. The rest that page names, and several processes' allocations
+  together, are bounded only by the session's own page limit
   ([R6 (charging)](../kernel/budgets.md#r6-charging)), which ends the session, not the box.
 
 Processes an expression spawned without a link are not killed by Ctrl+C; background work belongs

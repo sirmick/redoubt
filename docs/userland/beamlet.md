@@ -79,7 +79,7 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 
 ### Limits inside one VM
 
-<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (42)</summary>
+<details><summary>Status: built · partly tested: in a boot, only the process heap limit, one allocation a line asks for and the budget's backstop are attacked · tested (55)</summary>
 
 - host:beamlet-vm::full_mailbox_kills_the_receiver
 - host:beamlet-vm::a_term_equal_to_itself_is_not_scanned
@@ -123,6 +123,19 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 - host:beamlet-crypto::dh_generate_key_refuses_oversized_parameters_before_it_runs
 - host:beamlet-crypto::dh_compute_key_refuses_an_oversized_private_key_before_it_runs
 - host:beamlet-crypto::an_oversized_rsa_private_key_is_refused_before_it_is_built
+- host:beamlet-vm::a_flood_past_the_pages_left_kills_its_process
+- host:beamlet-vm::a_growth_is_never_a_sliver
+- host:beamlet-vm::a_heap_the_allocator_will_not_grow_kills_its_process
+- host:beamlet-vm::a_binary_built_past_the_allocator_kills_its_builder
+- host:beamlet-vm::a_binary_grown_in_place_past_the_allocator_kills_its_builder
+- host:beamlet-vm::a_tuple_past_the_allocator_kills_its_maker
+- host:beamlet-vm::a_list_copy_past_the_allocator_kills_its_maker
+- host:beamlet-vm::a_binarys_bytes_as_a_list_past_the_allocator_kill_its_maker
+- host:beamlet-vm::a_binary_copied_past_the_allocator_kills_its_maker
+- host:beamlet-vm::an_iolist_flattened_past_the_allocator_kills_its_maker
+- host:beamlet-vm::a_tuple_past_the_processs_own_limit_is_refused_before_it_is_made
+- host:beamlet-vm::an_allocation_past_the_limit_only_with_garbage_is_made_after_a_collection
+- bench:beamlet-heap-allocation
 
 </details>
 
@@ -147,6 +160,27 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   message not yet received counts toward nobody's: the screen buffer's limit of four a process
   and the mailbox's limit bound a buffer there, but an atomics array or a zlib stream sent and
   dropped by its sender is bounded only by the budget's page limit, below.
+- **One allocation** a process asks for is checked before it is made, as BEAM collects before
+  a large allocation: a binary's construction or growth (`<<...>>`, a comprehension's
+  accumulator grown in place, `binary:copy/2`, `list_to_binary/1` and `iolist_to_binary/1`), a
+  tuple of a size it names (`make_tuple`, `list_to_tuple/1`, `setelement/3`,
+  `append_element/2`, `insert_element/3`), a list's copy (`++`, `--`, `lists:reverse/2`,
+  `tuple_to_list/1`, a binary's bytes as a list) and its heap's own growth. The allocation counts
+  toward the process's limits with what it already holds, and the allocator is asked for it
+  with room to grow into: twice what is held, then a half, a quarter and an eighth more, never
+  past the limit and never less than an eighth more, since a heap grown by slivers is copied
+  whole at each, its copying growing with the square of its size. Past a limit or refused, the
+  process stops with nothing changed, its heap is collected
+  and the instruction runs again; refused again, the process is killed as `max_heap_size` kills
+  it (`killed`), its heap freed, and the VM serves on. A collection's copy is asked for too:
+  refused at its start the heap is untouched, and refused halfway the process holds nothing any
+  more and is killed. A heap keeps 64 cells free between instructions, so an instruction that
+  builds less asks nothing, and a request that small meets the limit at the slice's end with the
+  rest. A comprehension typed at the shell that builds a 65,534-byte binary doubles its
+  evaluator's heap into a 3 MiB request, under its limit but past the pages a session's VM has
+  left on rv64, and is answered or killed; a 3,000,000-byte binary, past the line's limit, is
+  refused; without the check the first ends rv64's VM and the second is answered on rv32
+  (`beamlet-heap-allocation`).
 - **ETS** (`max_ets_words`, 2^27 words for all tables together): an insert past it raises
   `system_limit`, as does an `update_counter` or `update_element` that would take it there. A
   table's heir data (`{heir, Pid, Data}`) is kept with the table and counts as an object does: an
@@ -180,8 +214,14 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   fun, so a loop typed at the prompt over a 256 KiB binary once cost a scan of it a step
   (`a_term_equal_to_itself_is_not_scanned`).
 
-These limits are measurements, not an allocator: one native that allocates a lot at once is caught
-afterwards. The hard backstop is the embedder's allocator, and on Redoubt the session budget's page
+Beyond those, the limits are measurements, not an allocator: a native's own allocation (a zlib
+codec's, `crypto`'s, `term_to_binary/1`'s encoding, a bignum's arithmetic within its 2^24 bits);
+a native not named above that builds a term of a size the process chose, such as
+`maps:to_list/1`, `maps:keys/1`, `maps:values/1` and `maps:from_list/1`, what an ETS lookup,
+`ets:tab2list/1` or a match copies out, `unicode:characters_to_list/1`, `binary_to_term/1`,
+`get_keys/1` and `erase/0`, `integer_to_list/1` of a large bignum, and the copy of a list a native
+holds aside, whose heap growth past the headroom asks the allocator in the same steps but whose
+last refusal is the allocator's; and a message's copy into its receiver are caught afterwards. The hard backstop is the embedder's allocator, and on Redoubt the session budget's page
 limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). The image also caps `beamlet`'s heap
 ([init](../servers/init.md#the-boot-manifest)), but at the budget's edge, where the budget binds
 first: that cap is there for the bench's measurement. On Redoubt the platform lowers
@@ -196,8 +236,8 @@ heap limit, the old heap, the collector's copy and its growth, so the budget mus
 what the VM uses with no Erlang process running; then one flooding process, the tables or
 `persistent_term` meets its limit while the VM still has pages. A session's sixteenth is 696
 pages, 2,850,816 bytes; the shell at its prompt holds 3,696 bytes in ETS and 36,112 counted in
-`persistent_term`, about a thousandth and a hundredth of it. Several flooding at once, or a native's single large allocation,
-reach the backstop instead, which ends the VM, and `init` restarts it. It is a server like any other
+`persistent_term`, about a thousandth and a hundredth of it. Several flooding at once, or one of the allocations caught
+afterwards, reach the backstop instead, which ends the VM, and `init` restarts it. It is a server like any other
 under `init`'s restart rule: a VM that cannot stay up (a start module that fails every time, a
 startup block that tells it no budget, exit code 4) is restarted until the limit, and then the machine reboots
 ([init](../servers/init.md#restarts-and-reboots)). CPU between VMs is the kernel's to share, by
@@ -285,13 +325,14 @@ on the stack before boxing it (on rv32 most times, not every time). Redoubt's pa
 boxes the code buffer under `with-alloc`, as the crate does on wasm32
 ([patched crates](../testbench.md#patched-crates)), so the state is a few hundred bytes wherever
 it is built and the frame is gone.
-Residual: a session that has compiled has spent its flood headroom on the compiler's code. The
-sixteenth limits are static, so one flooding process after a compile reaches the budget's
-backstop before its own limit, an allocation fails, the VM ends and `init` restarts it: a logout,
-within the session's own budget and no other principal's, where before the compile the process
-would have been killed alone (`beamlet-compile-flood`, both widths: the allocation that fails is
-about 1.2 MiB on rv64 and 2.4 MiB on rv32, from one run of each). The follow-up is the VM deriving its limits from
-the pages not held by loaded code, recomputed after a load, which keeps the guarantee at any
+A session that has compiled has spent its flood headroom on the compiler's code, and the
+sixteenth limits are static, so one flooding process after a compile meets the pages the VM has
+left before its own limit. The heap's growth is asked of the allocator before it is made
+([limits](#limits-inside-one-vm)), so the refusal kills the flooding process alone and the VM, the
+compiled module still loaded, serves on (`beamlet-compile-flood`, both widths). Residual: several processes growing at
+once after a compile, or a growth the check does not see, still reach the budget's backstop
+sooner than they would before it; the follow-up is the VM deriving its limits from the pages not
+held by loaded code, recomputed after a load, which keeps the limits below the pages at any
 footprint without resizing a session.
 
 Residual: QEMU's default 256 MiB is out of reach. Its `system` budget leaves the VM about 2,700

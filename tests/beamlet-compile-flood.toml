@@ -1,4 +1,4 @@
-description = "The attack after a compile: a session that has compiled a module has spent its flood headroom on the compiler's code (docs/userland/beamlet.md, \"Limits inside one VM\"): under beamlet-compile-footprint's image and manifest, the shell compiles a three-line defmodule at its prompt, then one process floods its heap as beamlet-heap-flood's does; the VM holds the compiler's modules, so the flood reaches the budget's backstop before the process's own limit, an allocation fails, the VM ends and init restarts it, a fresh shell at its prompt: a logout within the session's own budget. The verdict is init's: the exit and the restart on a new console"
+description = "The attack after a compile: a session that has compiled a module has spent its flood headroom on the compiler's code (docs/userland/beamlet.md, \"Limits inside one VM\"): under beamlet-compile-footprint's image and manifest, the shell compiles a three-line defmodule at its prompt, then one process floods its heap as beamlet-heap-flood's does; the VM holds the compiler's modules, so the flood meets the pages the VM has left before the process's own limit, and since the heap's growth is asked of the allocator before it is made, the refusal kills the process alone: the shell answers {:flood, :killed}, then calls the compiled module, in the same VM. The verdict is the shell's answers and init's silence: the VM never exits and is never restarted"
 arch = ["rv64", "rv32"]
 kind = "boot"
 programs = [
@@ -20,18 +20,15 @@ expect = [
     '^init: started beamlet, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
     '\{:module, Compiled,',
-    # A failed allocation panics (101); a fault would be the kernel's ending.
-    '^init: beamlet \(PID [0-9]+\) (exited, code 101|faulted, code [0-9]+, .*)$',
-    '^init: restarted beamlet, console [0-9a-f]{16}$',
-    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] \{:flood, :killed\}',
+    '^\[con [0-9a-f]{16}\] \{:after, \{:compiled, 42\}\}',
 ]
-# The restarted beamlet's console is a new one: nothing of the old instance is left.
-distinct = ['^init: (?:started|restarted) beamlet, console ([0-9a-f]{16})$']
 forbid = [
     'init: refused the boot',
     '^init: (keyd|consoled|bootfsd|blkd|verityd|netd|ipd|walfsd|erofsd) .*(exited|faulted|was killed)',
+    '^init: beamlet .*(exited|faulted|was killed)',
+    'init: restarted',
     'init: rebooting',
-    '^\[con [0-9a-f]{16}\] \{:flood, ',
 ]
 
 # The block's lines are typed ahead at once: the shell keeps them, each after the one before.
@@ -40,11 +37,15 @@ after = 'Redoubt shell, on Elixir '
 send = "defmodule Compiled do\n  def v, do: {:compiled, 41 + 1}\nend\n"
 
 # beamlet-heap-flood's flood, from the prompt: a process that keeps every list it makes, watched
-# until it ends. Killed alone, the shell would answer {:flood, :killed}, which is forbidden here:
-# the VM ends first.
+# until it ends, killed alone.
 [[input]]
 after = '\{:module, Compiled,'
 send = "{:flood, (fn -> {pid, ref} = spawn_monitor(fn -> Stream.iterate([], &[Enum.to_list(1..1000) | &1]) |> Stream.run() end); receive do {:DOWN, ^ref, :process, ^pid, reason} -> reason end end).()}\n"
+
+# The same VM, its compiled module still loaded, answers the next line.
+[[input]]
+after = '\{:flood, :killed\}'
+send = "{:after, Compiled.v()}\n"
 
 [[file]]
 name = "manifest"

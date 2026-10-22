@@ -8,7 +8,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crate::atom::{Atom, Atoms};
-use crate::process::{Exception, Process};
+use crate::process::{Ask, Exception, Process};
 use crate::sched::{Sched, SysGuard};
 use crate::term::{Bits, Heap, OwnedTerm, Term};
 
@@ -791,9 +791,53 @@ impl Ctx<'_> {
         Some(Held { r: r.clone(), _t: core::marker::PhantomData })
     }
 
+    /// Room for `cells` more heap cells, asked for before a native builds an object of a size
+    /// its caller chose (a tuple, a list), so the object grows nothing ([`Process::ask`]). On
+    /// `Err` the native returns it at once, having changed nothing: it is called again after a
+    /// collection, or the process is killed, as `max_heap_size` kills it.
+    pub fn room(&mut self, cells: usize) -> Result<(), Exception> {
+        let ask = self.p.ask_cells(self.sched.limits.max_heap_words, cells);
+        self.answer(ask)
+    }
+
+    /// An empty buffer holding room for the `bytes` bytes of a binary a native builds, asked for
+    /// as [`Ctx::room`] asks for cells: a refusal ends the process, not the VM.
+    pub fn buffer(&mut self, bytes: usize) -> Result<Vec<u8>, Exception> {
+        let mut buf = Vec::new();
+        let words = bytes.div_ceil(8) as u64;
+        let ask =
+            self.p.ask(self.sched.limits.max_heap_words, words, |_, _| buf.try_reserve_exact(bytes).is_ok());
+        self.answer(ask).map(|()| buf)
+    }
+
+    /// Room in `out` for `bits` more, asked for only when it must grow, as [`Ctx::buffer`] asks:
+    /// for a binary a native builds without knowing its size first.
+    pub fn grow_bits(&mut self, out: &mut crate::bits::Builder, bits: usize) -> Result<(), Exception> {
+        if out.spare_bits() >= bits {
+            return Ok(());
+        }
+        let words = out.bit_len().saturating_add(bits).div_ceil(64) as u64;
+        let limit = self.sched.limits.max_heap_words;
+        let ask = self.p.ask(limit, words, |_, most| out.try_reserve(bits, most.saturating_mul(16)));
+        self.answer(ask)
+    }
+
+    /// What a native does with the answer to an allocation it asked for. The error is never
+    /// raised: the native's caller acts on the process's [`crate::process::Room`] first.
+    fn answer(&mut self, ask: Ask) -> Result<(), Exception> {
+        match ask {
+            Ask::Granted => Ok(()),
+            Ask::Collect => {
+                self.p.retry = true;
+                Err(Exception::error(Term::Atom(self.atoms.system_limit)))
+            }
+            Ask::Refused => Err(Exception::error(Term::Atom(self.atoms.system_limit))),
+        }
+    }
+
     /// Finish this call later: the process yields and the native is called again, with the
     /// same arguments, when it next runs. For a native that needs a process another scheduler
-    /// is running just now. Only for natives called as functions (not guard BIFs).
+    /// is running just now.
     pub fn retry(&mut self) -> Result<Term, Exception> {
         self.p.retry = true;
         Ok(Term::Nil)
@@ -847,6 +891,16 @@ impl Ctx<'_> {
 
     /// A copy of `t` to keep outside the process.
     pub fn own(&self, t: Term) -> OwnedTerm { OwnedTerm::new(&self.p.heap, t) }
+
+    /// The length of proper list `t` (`badarg` for anything else), counted without copying it.
+    pub fn list_len(&self, t: Term) -> Result<usize, Exception> {
+        let mut n = 0;
+        for item in self.p.heap.list_iter(t) {
+            item.map_err(|_| self.badarg())?;
+            n += 1;
+        }
+        Ok(n)
+    }
 
     /// The elements of a proper list, or `badarg`.
     pub fn list_arg(&self, t: Term) -> Result<Vec<Term>, Exception> {

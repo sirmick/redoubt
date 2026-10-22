@@ -8,10 +8,13 @@ type R = Result<Term, Exception>;
 
 /// `lists:reverse(List, Tail)`.
 pub fn reverse(c: &mut Ctx, a: &[Term]) -> R {
-    let items = c.list_arg(a[0])?;
+    let n = c.list_len(a[0])?;
+    c.room(2 * n)?;
     let mut acc = a[1];
-    for item in items {
+    let mut rest = a[0];
+    while let Some((item, tail)) = c.heap().as_cons(rest) {
         acc = c.cons(item, acc);
+        rest = tail;
     }
     Ok(acc)
 }

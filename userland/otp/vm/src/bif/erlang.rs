@@ -45,6 +45,11 @@ pub fn is_tuple(c: &mut Ctx, a: &[Term]) -> R { Ok(c.bool(matches!(a[0], Term::T
 
 fn tuple(c: &Ctx, t: &Term) -> Result<Vec<Term>, Exception> { c.tuple_elems(*t).ok_or_else(|| c.badarg()) }
 
+/// The size of tuple `t`, for asking room before copying it.
+fn tuple_len(c: &Ctx, t: &Term) -> Result<usize, Exception> {
+    c.heap().as_tuple(*t).map(<[Term]>::len).ok_or_else(|| c.badarg())
+}
+
 /// A 1-based position within `len`.
 fn position(c: &Ctx, t: &Term, len: usize) -> Result<usize, Exception> {
     match t.as_usize() {
@@ -59,6 +64,8 @@ pub fn element(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn setelement(c: &mut Ctx, a: &[Term]) -> R {
+    let n = tuple_len(c, &a[1])?;
+    c.room(n + 1)?;
     let mut v = tuple(c, &a[1])?;
     let i = position(c, &a[0], v.len())?;
     v[i] = a[2];
@@ -79,7 +86,10 @@ pub fn size(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn make_tuple(c: &mut Ctx, a: &[Term]) -> R {
     match a[0].as_usize() {
-        Some(n) if n <= MAX_TUPLE => Ok(c.tuple(&alloc::vec![a[1]; n])),
+        Some(n) if n <= MAX_TUPLE => {
+            c.room(n + 1)?;
+            Ok(c.heap_mut().tuple_filled(n, a[1]))
+        }
         Some(_) => Err(c.system_limit()),
         None => Err(c.badarg()),
     }
@@ -92,31 +102,44 @@ pub fn make_tuple3(c: &mut Ctx, a: &[Term]) -> R {
         Some(_) => return Err(c.system_limit()),
         None => return Err(c.badarg()),
     };
-    let mut elems = alloc::vec![a[1]; n];
-    for init in c.list_arg(a[2])? {
+    let inits = c.list_arg(a[2])?;
+    let mut set = Vec::with_capacity(inits.len());
+    for init in inits {
         match c.heap().as_tuple(init) {
             Some(&[pos, v]) => match pos.as_usize() {
-                Some(p) if p >= 1 && p <= elems.len() => elems[p - 1] = v,
+                Some(p) if p >= 1 && p <= n => set.push((p - 1, v)),
                 _ => return Err(c.badarg()),
             },
             _ => return Err(c.badarg()),
         }
     }
-    Ok(c.tuple(&elems))
+    c.room(n + 1)?;
+    let t = c.heap_mut().tuple_filled(n, a[1]);
+    let elems = c.heap_mut().fresh_tuple_mut(t).expect("just built");
+    for (i, v) in set {
+        elems[i] = v;
+    }
+    Ok(t)
 }
 
 pub fn append_element(c: &mut Ctx, a: &[Term]) -> R {
+    let n = tuple_len(c, &a[0])?;
+    c.room(n + 2)?;
     let mut v = tuple(c, &a[0])?;
     v.push(a[1]);
     Ok(c.tuple(&v))
 }
 
 pub fn tuple_to_list(c: &mut Ctx, a: &[Term]) -> R {
+    let n = tuple_len(c, &a[0])?;
+    c.room(2 * n)?;
     let v = tuple(c, &a[0])?;
     Ok(c.list(v))
 }
 
 pub fn list_to_tuple(c: &mut Ctx, a: &[Term]) -> R {
+    let n = c.list_len(a[0])?;
+    c.room(n + 1)?;
     let v = c.list_arg(a[0])?;
     Ok(c.tuple(&v))
 }
@@ -138,12 +161,15 @@ pub fn length(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn append(c: &mut Ctx, a: &[Term]) -> R {
     // The left side must be a proper list; the right side can be anything.
-    let left = c.list_arg(a[0])?;
-    Ok(c.list_with_tail(left, a[1]))
+    let n = c.list_len(a[0])?;
+    c.room(2 * n)?;
+    Ok(c.heap_mut().copy_list(a[0], n, a[1]))
 }
 
 /// `A -- B`: remove the first occurrence in `A` of each element of `B`.
 pub fn subtract(c: &mut Ctx, a: &[Term]) -> R {
+    let n = c.list_len(a[0])?;
+    c.room(2 * n)?;
     let mut left = c.list_arg(a[0])?;
     let right = c.list_arg(a[1])?;
     let h = c.heap();
@@ -440,18 +466,20 @@ pub fn float_to_binary(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn binary_to_list(c: &mut Ctx, a: &[Term]) -> R {
     let b = binary(c, &a[0])?;
-    let v: Vec<Term> = b.to_bytes().iter().map(|&x| Term::Int(x as i64)).collect();
-    Ok(c.list(v))
+    byte_list(c, &b, 0, b.len / 8, Term::Nil)
+}
+
+/// Bytes `lo..hi` of `b` as a list ending in `tail`, built back to front with no copy held aside.
+fn byte_list(c: &mut Ctx, b: &Bits, lo: usize, hi: usize, tail: Term) -> R {
+    c.room(2 * (hi - lo))?;
+    Ok((lo..hi).rev().fold(tail, |acc, i| c.cons(Term::Int(b.byte(i) as i64), acc)))
 }
 
 pub fn binary_to_list3(c: &mut Ctx, a: &[Term]) -> R {
     let b = binary(c, &a[0])?;
     let size = b.len / 8;
     match (a[1].as_usize(), a[2].as_usize()) {
-        (Some(s), Some(e)) if s >= 1 && s <= e && e <= size => {
-            let v: Vec<Term> = b.to_bytes()[s - 1..e].iter().map(|&x| Term::Int(x as i64)).collect();
-            Ok(c.list(v))
-        }
+        (Some(s), Some(e)) if s >= 1 && s <= e && e <= size => byte_list(c, &b, s - 1, e, Term::Nil),
         _ => Err(c.badarg()),
     }
 }
@@ -459,18 +487,21 @@ pub fn binary_to_list3(c: &mut Ctx, a: &[Term]) -> R {
 pub fn bitstring_to_list(c: &mut Ctx, a: &[Term]) -> R {
     let b = bits(c, &a[0])?;
     let whole = b.len / 8;
-    let mut items: Vec<Term> = (0..whole).map(|i| Term::Int(b.byte(i) as i64)).collect();
     // Leftover bits are the last element of a proper list: [1, 2, <<3:4>>].
-    if b.len % 8 != 0 {
-        items.push(c.bits(b.slice(whole * 8, b.len % 8)));
-    }
-    Ok(c.list(items))
+    let tail = if b.len % 8 != 0 {
+        c.room(2 * whole + 6)?;
+        let rest = c.bits(b.slice(whole * 8, b.len % 8));
+        c.cons(rest, Term::Nil)
+    } else {
+        Term::Nil
+    };
+    byte_list(c, &b, 0, whole, tail)
 }
 
 /// Flatten an iolist (bytes 0..255, binaries and nested iolists; a binary may end a list) into
-/// bytes, or a bitstring if `bits_ok` and the last element is one.
-fn flatten_iolist(c: &Ctx, t: &Term, bits_ok: bool) -> Result<crate::bits::Builder, Exception> {
-    let h = c.heap();
+/// bytes, or a bitstring if `bits_ok` and the last element is one. The bytes are asked for as
+/// they grow ([`Ctx::grow_bits`]).
+fn flatten_iolist(c: &mut Ctx, t: &Term, bits_ok: bool) -> Result<crate::bits::Builder, Exception> {
     let mut out = crate::bits::Builder::new();
     // An explicit work stack: iolists can nest arbitrarily deep.
     let mut stack: Vec<Term> = alloc::vec![*t];
@@ -478,17 +509,21 @@ fn flatten_iolist(c: &Ctx, t: &Term, bits_ok: bool) -> Result<crate::bits::Build
         match t {
             Term::Nil => {}
             Term::Bits(_) => {
-                let b = h.as_bits(t).expect("bits");
+                let b = c.heap().as_bits(t).expect("bits");
                 if !b.is_binary() && !bits_ok {
                     return Err(c.badarg());
                 }
+                c.grow_bits(&mut out, b.len)?;
                 out.push_bits(&b);
             }
             Term::Cons(_) => {
-                let (head, tail) = h.as_cons(t).expect("a list cell");
+                let (head, tail) = c.heap().as_cons(t).expect("a list cell");
                 stack.push(tail);
                 match head {
-                    Term::Int(i) if (0..=255).contains(&i) => out.push_byte(i as u8),
+                    Term::Int(i) if (0..=255).contains(&i) => {
+                        c.grow_bits(&mut out, 8)?;
+                        out.push_byte(i as u8)
+                    }
                     Term::Cons(_) | Term::Nil | Term::Bits(_) => stack.push(head),
                     _ => return Err(c.badarg()),
                 }
@@ -563,6 +598,8 @@ pub fn is_record(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn insert_element(c: &mut Ctx, a: &[Term]) -> R {
+    let n = tuple_len(c, &a[1])?;
+    c.room(n + 2)?;
     let mut v = tuple(c, &a[1])?;
     let i = position(c, &a[0], v.len() + 1)?;
     v.insert(i, a[2]);
