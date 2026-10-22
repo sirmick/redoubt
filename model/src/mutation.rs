@@ -256,6 +256,9 @@ pub enum Mutation {
     R12SliceCountsExitWork,
     /// A timer interrupt's work for the timeouts it expires is billed to no budget.
     R12TimerWorkUnbilled,
+    /// A timer interrupt's work for the timeouts it expires comes out of the slice of the thread it
+    /// interrupted.
+    R12SliceCountsTimerWork,
     /// The pick and switch into a budget are billed to the budget that ran before it, not the
     /// one picked.
     R12SwitchBilledToPrevious,
@@ -451,7 +454,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 182] = {
+    pub const ALL: [Mutation; 183] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -558,6 +561,7 @@ impl Mutation {
             R12DeadlineWorkUnbilled,
             R12SliceCountsExitWork,
             R12TimerWorkUnbilled,
+            R12SliceCountsTimerWork,
             R12SwitchBilledToPrevious,
             R12CappedHoldsFloor,
             R12CapOnce,
@@ -739,6 +743,7 @@ impl Mutation {
             | R12DeadlineWorkUnbilled
             | R12SliceCountsExitWork
             | R12TimerWorkUnbilled
+            | R12SliceCountsTimerWork
             | R12SwitchBilledToPrevious
             | R12CappedHoldsFloor
             | R12CapOnce

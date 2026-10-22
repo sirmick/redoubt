@@ -321,7 +321,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 182 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 183 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -381,7 +381,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [R10 (destruction)](budgets.md#r10-destruction) | `R10KeepForeignHandles`, `R10KeepCarvedLimits`, `R10SpareDescendantProcesses`, `R10ExitNoticesOutlivePayer`, `R10RevokedMessageDelivered`, `R10RevokedCallAnswered`, `R10SweptHandlesDropped`, `R10CreatorDeathSparesProcess`, `R10HeldPidsDropped`, `R10ReapDestroysParent`, `R10ReapKeepsCarve`, `R10ReapSkipsGrandchildren`, `R10DeliveredMidDestruction`, `BudgetDeadlineIgnored` | everything a destruction reaches, nothing delivered before its end, a deadline destroying the budget, and a reap destroying one child and keeping the budget |
 | [R11 (memory)](memory.md#r11-memory) | `R11NoZeroing`, `R11SetFlagsAllowsWx`, `R11SetFlagsAllowsWriteOnly`, `R11LendStaysMapped`, `R11MapFixedSkipsOverlap`, `R11ExecOnDeviceMemory`, `R11ProcessMapSkipsFlags` | zeroing a frame free since boot, W^X per mapping and per frame, write without read, lends unmapped, `map_fixed` never replacing, `process_map`'s own flag check |
 | [R81 (frames in flight)](memory.md#r81-frames-in-flight) | `R81InFlightAllocatable`, `R81CommitUnzeroed` | no allocation of a frame in flight, caught by the frames' own check (a free frame not zero, or also in flight), not by a page read stale; a frame freed only zero |
-| [R12 (scheduling)](scheduling.md#r12-scheduling) | `R12PriorityById`, `R12IgnoreWeight`, `R12WakeBanksCredit`, `R12TieQueuedFirst`, `R12RequeueAhead`, `R12RequeueLifo`, `R12PreemptOnWake`, `R12TimeoutWakePreempts`, `R12NoFloorWhenIdle`, `R12ShortRunsFree`, `R12DropRemainder`, `R12ExitRunsFree`, `R12DestroyDropsDebt`, `R12CreateAtFloorOnly`, `R12LiftByMax`, `R12StrideWeightIsLimit`, `R12UnnormalizedLift`, `R12LiftCountsEntryWait`, `R12FoldAtNewWeight`, `R12NoMinimumCharge`, `R12DeadlineWorkUnbilled`, `R12RescaleOnlyOnReturn`, `R12SliceCountsExitWork`, `R12TimerWorkUnbilled`, `R12SwitchBilledToPrevious`, `R12CappedHoldsFloor`, `R12CapOnce`, `R12AllCappedHoldsFloor`, `R12UncapBanksCredit`, `R12UncapForfeitsWait`, `R12EmptyHoldsFloor`, `R12RequeueWaitsForCap`, `R12BlockLeavesAsRequeued`, `R12OneRunnerPerBudget`, `R12SpreadChargesOnce` | one flat queue, charging, the floor, ranks, preemption, the slice as user time, inheritance at create and destroy, the capped floor and the uncap lift across harts, a budget on several harts at once and each of its runners charged |
+| [R12 (scheduling)](scheduling.md#r12-scheduling) | `R12PriorityById`, `R12IgnoreWeight`, `R12WakeBanksCredit`, `R12TieQueuedFirst`, `R12RequeueAhead`, `R12RequeueLifo`, `R12PreemptOnWake`, `R12TimeoutWakePreempts`, `R12NoFloorWhenIdle`, `R12ShortRunsFree`, `R12DropRemainder`, `R12ExitRunsFree`, `R12DestroyDropsDebt`, `R12CreateAtFloorOnly`, `R12LiftByMax`, `R12StrideWeightIsLimit`, `R12UnnormalizedLift`, `R12LiftCountsEntryWait`, `R12FoldAtNewWeight`, `R12NoMinimumCharge`, `R12DeadlineWorkUnbilled`, `R12RescaleOnlyOnReturn`, `R12SliceCountsExitWork`, `R12TimerWorkUnbilled`, `R12SliceCountsTimerWork`, `R12SwitchBilledToPrevious`, `R12CappedHoldsFloor`, `R12CapOnce`, `R12AllCappedHoldsFloor`, `R12UncapBanksCredit`, `R12UncapForfeitsWait`, `R12EmptyHoldsFloor`, `R12RequeueWaitsForCap`, `R12BlockLeavesAsRequeued`, `R12OneRunnerPerBudget`, `R12SpreadChargesOnce` | one flat queue, charging, the floor, ranks, preemption, the slice as the thread's own time, inheritance at create and destroy, the capped floor and the uncap lift across harts, a budget on several harts at once and each of its runners charged |
 | [R13 (one outcome per call)](ipc.md#r13-one-outcome-per-call) | `IpcWrongLend`, `IpcDropPartial`, `IpcFalseDelivery`, `IpcSkipOutputCheck`, `IpcLeakRollback` | the lend disposition, a partial reply, `delivered`, the completion-time record check, rollback |
 | [R14 (unforgeable sender)](ipc.md#r14-unforgeable-sender) | `MsgNoLabels`, `MsgBadgeZero`, `MsgAccountZero`, `MsgIdsGlobal` | the attached labels, badge and account; message ids per receiving process |
 | [R18 (device authority)](devices.md#r18-device-authority) | `R18DeviceByNumber`, `DeviceInfoWrongKind` | a device reached only through a handle to it; `device_info` naming the device the handle names |
@@ -605,13 +605,13 @@ slice ends and preemptions, each on a hart drawn at random. Over 3,000 seeds at 
 4 harts every pass, entry, remainder, tie, queue membership, the floor, the tie counters, the cap
 set and each hart's running thread must agree after every step; at 4 harts some 360,000 of the
 steps hold two capped budgets or more. `a_broken_model_disagrees` shows the comparison bites:
-with any of 30 of the 35 R12 variants planted in the model, some sequence disagrees (the ten of
+with any of 30 of the 36 R12 variants planted in the model, some sequence disagrees (the ten of
 several harts at 2 or 4 harts). It leaves out `R12TimeoutWakePreempts`, whose
 site is the kernel model's timer path, not the scheduler, and `R12SliceCountsExitWork`,
-`R12DeadlineWorkUnbilled`, `R12TimerWorkUnbilled` and `R12SwitchBilledToPrevious`, kernel work
-around a run (the exit work before a slice starts, a deadline's destruction, a timer's expiry, the
-switch into a budget), which the differential does not drive; the model's own checks catch
-all five. The bench case `stride-host-tests` runs both tests. This compares one kernel crate with the
+`R12DeadlineWorkUnbilled`, `R12TimerWorkUnbilled`, `R12SliceCountsTimerWork` and
+`R12SwitchBilledToPrevious`, kernel work around a run (the exit work before a slice starts, a
+deadline's destruction, a timer's expiry, its time inside a slice, the switch into a budget),
+which the differential does not drive; the model's own checks catch all six. The bench case `stride-host-tests` runs both tests. This compares one kernel crate with the
 model, on the host; the kernel's own use of it runs in boot cases
 ([scheduling](scheduling.md)).
 

@@ -74,7 +74,7 @@ no dependencies.
 
 ### Preemption points
 
-<details><summary>Status: built · tested (14)</summary>
+<details><summary>Status: built · tested (15)</summary>
 
 - bench:sched-wake-no-preempt
 - bench:sched-wake-no-preempt-harts
@@ -90,6 +90,7 @@ no dependencies.
 - mutation:R12PreemptOnWake
 - mutation:R12TimeoutWakePreempts
 - mutation:R12SliceCountsExitWork
+- mutation:R12SliceCountsTimerWork
 
 </details>
 
@@ -1331,7 +1332,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`), and for a `process_exit` ending 254 waits that each hold the timer's hint, within two slices of the same exit on an empty system (`bench:timeout-hint-exit`) · tested (70)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`), and for a `process_exit` ending 254 waits that each hold the timer's hint, within two slices of the same exit on an empty system (`bench:timeout-hint-exit`) · tested (71)</summary>
 
 - bench:sched-share
 - bench:steward-latency
@@ -1392,6 +1393,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - mutation:R12RescaleOnlyOnReturn
 - mutation:R12SliceCountsExitWork
 - mutation:R12TimerWorkUnbilled
+- mutation:R12SliceCountsTimerWork
 - mutation:R12SwitchBilledToPrevious
 - mutation:R12CappedHoldsFloor
 - mutation:R12CapOnce
