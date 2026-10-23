@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 282
+revision = 284
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -3033,8 +3033,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["K35"]
   body = "Ruled by the Architect on arch-k35-after-measure (rulings file 'K35 after the measurement'). K35's naming: about 5 of a probe's 10-11 lock hand-offs are interrupt-shaped: the card's answer is taken on two harts (s_external claimed 1.0, claimed nothing 0.85 a frame), the second takes the lock for nothing, and the idle hart's leave wakes another. boot.md: every hart's context takes the source. scheduling.md's residual weighed routing against latency (at most three alarms ahead of a wake, 0.15 ms of a p99 of 4-12 ms) and declined it, naming the remedy 'sending each source to one idle hart (a busy hart's threshold above the sources' priority while one idles)'. The new evidence is cost at rest, paid by every packet of every idle session: reopened. Design, the Architect's, on boot.md and scheduling.md: a source is enabled in the contexts of idle harts and masked by threshold on busy ones, so one hart takes it; the rule says how the threshold moves at a pick and at idle, and what happens when no hart idles (every hart takes it, as today). Constraints: R78 unchanged; sched-irq-wake's proof (each device interrupt against the runner's slice that follows) and sched-lock-contention-4's counts keep; irq-boot-hart-only stays the negative control; latency stated against the residual's numbers, no target moves. Acceptance: claimed-nothing external interrupts per frame 0 (from 0.85) on launch-idle-probes, hand-offs per probe down by the named ~5, re-derived bounds asserted at 2x the measured worst alone; the idle ceilings do not move; bench-net classes and sched-irq-wake pass both widths. Tier A (kernel), size M; kernel-red + simplifier + editor."
-  state = "active"
-  revision = 257
+  state = "done"
+  revision = 284
 
 [[node]]
   id = "B107"
