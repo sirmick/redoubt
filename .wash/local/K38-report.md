@@ -98,3 +98,49 @@ alone rounds (after K37's rebase and B112).
 Rebase on K37 when it lands; after B112: three alternating alone rounds a width (head vs main)
 for launch-idle-probes' interrupt/SBI ceilings and ipd.md's per-probe cost; launch-idle (ceilings
 unmoved); net class (load run, ask); -4-mttcg on the final head.
+
+# After K37 (rebase and quiet slot, 2026-10-22)
+
+Rebased onto 7492df71d (K37), then (by the fold's autosquash) onto bceaa54b9 (train 103, B113
+shell driver only). Head: 3f3471a10 kernel, 7afc61226 bench, c2dc8ce89 docs. Kernel ceiling
+11452 -> 11511. Conflicts: wake_idle keeps K37's hop(0); idle.rs span counts device interrupts too.
+
+Quiet slot, alone, one at a time (.tmp/K38/rounds/: summary.txt, consoles, job logs):
+launch-idle-probes over the 30-frame span, head / main (7492df71d + this bench), per frame:
+
+| round | width | head int / dev / SBI / ecalls | main int / dev / SBI / ecalls |
+| 1 | rv64 | 21.9 / 1.00 / 31.4 / 29.8 | 25.0 / 1.87 / 33.6 / 29.8 FAIL dev |
+| 1 | rv32 | 22.2 / 1.00 / 31.7 / 29.7 | 24.9 / 1.80 / 33.4 / 29.8 FAIL dev |
+| 2 | rv64 | 22.8 / 1.00 / 32.0 / 29.7 | 25.4 / 1.73 / 34.1 / 29.8 FAIL dev |
+| 2 | rv32 | 22.1 / 1.00 / 31.6 / 29.7 | 25.9 / 1.80 / 34.5 / 29.8 FAIL dev |
+| 3 | rv64 | 22.8 / 1.00 / 32.1 / 29.8 | 26.2 / 1.87 / 34.8 / 29.8 FAIL dev |
+| 3 | rv32 | 22.7 / 1.00 / 32.1 / 29.8 | 26.5 / 1.67 / 35.4 / 29.8 FAIL dev |
+
+Ceilings at worst + spread (wider width's), rounded up: interrupts 22.8 + 0.9 -> 24 (was 32), SBI
+32.1 + 0.7 -> 33 (was 40), user ecalls 29.8 + 0.1 -> 29.9 (was 30.1). Main's rounds exceed 24 and
+33 too (25.0-26.5, 33.4-35.4): red on main on three clauses.
+Per probe (window less one launch-idle window a width: background 7.7/s int, 10.1/s SBI rv64;
+6.7/s, 9.1/s rv32): head about 6-10 interrupts and 11-14 SBI calls; main's kernel 10-13 and
+13-17. ipd.md, testbench.md and the scaling residual restated.
+launch-idle head: busiest hart 2.3 (rv64), 3.0 (rv32) a second against 3.8: PASS both.
+sched-lock-contention-4-mttcg head: net p50/p99 1.17/1.68 rv64, 1.18/1.74 rv32: PASS; pages and
+tomls updated (also -4 rv32 9.4/10.3 post-K37).
+Gates after the fold: docs, formatting rc 0; earlier post-rebase set (size, unsafe, host-tests,
+ipc-turns, family, irq-wake, latency, smp-boot, irq-first-receive, both builds) rc 0.
+Remaining: the net class (load run).
+
+# Net class and round 1 fold (2026-10-22)
+
+Net class (71 cases x 2 widths, prebuilt on c2dc8ce89, detached, <= 4 cores a job): 141 rc 0, 1
+fail: rv64 steward-restart-context (smp 1) timed out at 1500 s waiting for init's steward line
+after 105 steward restarts in the log (log aside: .tmp/K38/net-fail/); rerun alone: PASS in 29.1 s.
+At one hart K38's routing does nothing (no taker, no moves), so not this package's; a load flake.
+Round 1 folded (editor P2/P3, red P3, simplifier): boot.md carries no number and lists
+launch-idle-probes in the Tested-by (8); history words gone from scheduling.md, testbench.md and
+ipd.md (comparisons with every context open stated in the present, main's readings in the commit
+messages and the toml comment); testbench.md (ceiling, the exact-witness sentence, the check, its
+host test) moved into the bench commit; check_irq_received's doc names the one-source condition
+and the checked build; timer.md:400 rewritten (where device interrupts are taken); testbench.md's
+launch-idle line checked (historical figures, still true as stated).
+Head: 2a26f67f8 kernel, eeb4d6775 bench, 55c22f6ae docs (base bceaa54b9).
+Gates: docs rc 0 at each commit; formatting, host-tests rc 0 at head.
