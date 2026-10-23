@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 284
+revision = 285
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -3099,8 +3099,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["K39"]
   body = "Ruled by the Architect on arch-k39-rearm-finding (rulings file 'K39's re-arm per interrupt return'). Found by K38's implementer on main 78664b727 (train 100), quiet cores: launch-idle-probes SBI calls a frame 71.0 rv64 / 70.3 rv32 against the case's recorded 48.1-53.0 / 48.9-52.2 before K39 (+18, about a third); interrupts 35.4 / 34.8; 1,242 of an rv64 window's SBI calls are time::rearm (.tmp/K38/main-r1/int, .tmp/K38/r1). Cause to confirm by trace: K39's resume at an interrupt's return sets slice_end = now + left and re-arms the hart timer for the moved end, an SBI call per interrupted slice. This is against the settled direction (IDLE2: the timer is re-armed only when its target changes; K31: no set_timer before the pick) and the idle cost K35 named. Rule: a return re-arms only when the hart's armed target changes. The moved slice end does not re-arm: the timer armed for the old end fires once, the decision (end <= at) finds the slice not over, and the resume re-arms then; so an interrupt inside a slice costs at most one early slice interrupt, and only if the thread runs to its old end (rare at rest, where it blocks first). Stated on scheduling.md's slice paragraph and timer.md's re-arm rule with the measured figures. Acceptance: launch-idle-probes' SBI and interrupt per-frame ceilings become idle ceilings at the measured worst + spread of three alone rounds a width on the fixed kernel (as launch-idle's are, not 2x guards), red on main at 70-71; sched-slice-own-time still passes (the fairness rule holds with the lazy re-arm); sched-timer-flood, timeouts, budget-deadline, launch-idle unchanged; the K35 per-probe cost on ipd.md re-measured and restated. Tier A (kernel), size S; kernel-red + editor. Lands before K38's probe ceilings are derived."
-  state = "reported"
-  revision = 270
+  state = "done"
+  revision = 285
 
 [[node]]
   id = "B113"
